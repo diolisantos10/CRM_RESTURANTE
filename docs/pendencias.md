@@ -2,6 +2,28 @@
 
 > Última atualização: 05/09/2026.
 
+## ⚠️ 05/09/2026 — O primeiro contato está construído e SEM MODELO APROVADO
+
+A fila que aborda quem preencheu o formulário e nunca escreveu subiu inteira
+(`src/services/salaDeVendas/primeiroContato/`, ver
+`docs/primeiro-contato-do-lead.md`). Ela não pode mandar nada, e o motivo não é
+uma chave desligada: **não existe modelo aprovado pela Meta declarado no
+repositório**.
+
+Quem preencheu o formulário e não escreveu nunca abriu a janela de 24 h da Meta.
+Para essa pessoa, texto livre não é uma mensagem pior — é uma mensagem
+**recusada**. Sem modelo aprovado, a fila barra todo mundo com
+`SEM_MODELO_APROVADO`, que é o comportamento correto e não o conserto.
+
+**Medido:** nenhuma variável de modelo em nenhum lugar do código. **Não medido, e
+está registrado como não medido:** o que já está aprovado *dentro* da conta da
+Meta — conferir exige o token de vendas, que é do `meta`.
+
+Conserto, em ordem: (1) o `meta` diz o que já está aprovado na conta; (2) se não
+houver, submeter um modelo de abertura e um de lembrete; (3) preencher
+`FOOCCI_SALES_TEMPLATE_ABERTURA` e `_LEMBRETE` no Railway. Só então faz sentido
+discutir ligar a chave.
+
 ## ⛔ 05/09/2026 — A cadeia de migrations NÃO reconstrói o banco do zero
 
 **Achado medido, não suposto**, durante a jornada de CI do Comercial P0: rodar

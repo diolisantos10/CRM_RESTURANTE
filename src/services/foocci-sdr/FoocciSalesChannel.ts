@@ -38,8 +38,14 @@
  */
 
 import { metaGraphUrl } from "@/services/whatsapp/metaFlag";
-import { buildMetaTextPayload, toMetaRecipient, maskGraphResponse } from "@/services/whatsapp/providers/metaPayload";
+import {
+  buildMetaTextPayload,
+  buildMetaTemplatePayload,
+  toMetaRecipient,
+  maskGraphResponse,
+} from "@/services/whatsapp/providers/metaPayload";
 import type { LeadSafetyDecision } from "./LeadContactSafety";
+import type { ModeloAprovado } from "./ModeloAprovado";
 
 // ─── Identidade do canal ────────────────────────────────────────────────────────
 
@@ -281,6 +287,78 @@ export async function enviarTextoDeVendas(
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify(buildMetaTextPayload(recipient, text)),
+    });
+    if (!res.ok) {
+      const json: unknown = await res.json().catch(() => ({}));
+      const err = (json as { error?: { message?: string } }).error ?? {};
+      return { ok: false, error: maskGraphResponse(err.message ?? `HTTP_${res.status}`) };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: maskGraphResponse(e instanceof Error ? e.message : String(e)) };
+  }
+}
+
+/**
+ * Envia um MODELO APROVADO pelo número de vendas. A única forma de a casa falar
+ * primeiro.
+ *
+ * ── POR QUE NÃO DEU PARA REUSAR `enviarTextoDeVendas` ───────────────────────
+ *
+ * Porque o corpo do pedido é outro (`type: "template"`), e porque as duas
+ * funções respondem a perguntas diferentes da Meta: texto livre só vale dentro
+ * da janela de 24 h que o CLIENTE abriu ao escrever; modelo vale fora dela, que
+ * é onde mora todo lead que preencheu formulário e nunca mandou mensagem.
+ *
+ * Mandar texto livre para quem nunca escreveu não é uma mensagem pior — é uma
+ * mensagem **recusada**, e o lead continua sem receber nada. Duas funções
+ * separadas fazem essa diferença aparecer no nome de quem chama.
+ *
+ * ⚠️ Mesma trava da irmã: **o primeiro parâmetro é a decisão do portão.** Não
+ * existe assinatura aqui que permita enviar sem ter avaliado o lead.
+ */
+export async function enviarModeloDeVendas(
+  decisao: LeadSafetyDecision,
+  toPhone: string,
+  modelo: ModeloAprovado,
+  parametros: string[],
+): Promise<EnvioDeVendasResult> {
+  if (!decisao.sendable) {
+    return { ok: false, error: `portão do lead reprovou: ${decisao.reason ?? "sem motivo declarado"}` };
+  }
+
+  if (!isFoocciSdrSendEnabled()) {
+    return { ok: false, error: "envio do SDR desligado (FOOCCI_SDR_SEND_ENABLED)" };
+  }
+
+  const provedor = resolverProvedorDeVendas();
+  if (provedor !== "META_CLOUD_API") {
+    return { ok: false, error: `provedor de vendas não suportado (FOOCCI_SALES_PROVIDER=${provedor})` };
+  }
+
+  const phoneNumberId = foocciSalesPhoneNumberId();
+  const token = foocciSalesAccessToken();
+  if (!phoneNumberId || !token) {
+    return { ok: false, error: "canal de vendas da Foocci não configurado" };
+  }
+
+  // Modelo sem nome é modelo que não existe. A Graph API responderia com um erro
+  // genérico de payload, e o diagnóstico se perderia — melhor recusar aqui, com
+  // a frase certa.
+  if (!modelo.nome.trim()) {
+    return { ok: false, error: "modelo aprovado sem nome" };
+  }
+
+  const recipient = toMetaRecipient(toPhone);
+  if (!recipient) return { ok: false, error: "telefone inválido" };
+
+  try {
+    const res = await fetch(metaGraphUrl(`${phoneNumberId}/messages`), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(
+        buildMetaTemplatePayload(recipient, modelo.nome, modelo.idioma, parametros),
+      ),
     });
     if (!res.ok) {
       const json: unknown = await res.json().catch(() => ({}));
