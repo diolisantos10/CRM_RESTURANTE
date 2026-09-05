@@ -92,6 +92,32 @@ describe("o cabeçalho: Entrar, Assinar e o convite de conversa", () => {
     }
   });
 
+  /**
+   * ── A TRAVA QUE FALTAVA EM 05/09 ──────────────────────────────────────────
+   *
+   * O convite subiu duas vezes errado no mesmo dia, e nenhum teste barrou:
+   * primeiro como TEXTO SOLTO sem borda, depois com o rótulo quebrando em DUAS
+   * LINHAS ao lado do Entrar, empurrando a fileira contra o logo. Portão que não
+   * pega o defeito que já aconteceu não é portão. Estes dois fecham o buraco.
+   */
+  it("é BOTÃO, com a mesma borda do Entrar — não texto solto", () => {
+    const codigo = semComentarios(ler(HEADER));
+    const linha = codigo.split("\n").find((l) => /DEMO_URL/.test(l) && /className/.test(l))
+      ?? codigo.split("\n").filter((l) => /className/.test(l))[0];
+    // a fileira do topo tem TRÊS botões; o convite é um deles, com moldura.
+    const bloco = codigo.slice(codigo.indexOf("DEMO_URL"), codigo.indexOf("LOGIN_URL"));
+    expect(bloco, "o convite do topo perdeu a borda e virou texto solto")
+      .toMatch(/border border-line2/);
+    expect(linha).toBeTruthy();
+  });
+
+  it("⛔ e o rótulo do convite NUNCA quebra em duas linhas", () => {
+    const codigo = semComentarios(ler(HEADER));
+    const bloco = codigo.slice(codigo.indexOf("DEMO_URL"), codigo.indexOf("LOGIN_URL"));
+    expect(bloco, "sem whitespace-nowrap o rótulo quebra e colide com o logo")
+      .toContain("whitespace-nowrap");
+  });
+
   it("o rótulo é uma palavra de compromisso, não de conversa", () => {
     expect(ASSINAR_CTA_LABEL).toBe("Assinar");
   });
