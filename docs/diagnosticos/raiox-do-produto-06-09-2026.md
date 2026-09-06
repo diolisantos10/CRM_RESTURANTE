@@ -42,6 +42,13 @@ Foi por isso que seis dias passaram sem ninguém ver.
 5. **Uma campanha mal criada num restaurante cala o CRM de todos os outros.** Medido: o restaurante saudável mandou zero. E a linha que causa isso pode ser criada pela tela, sem nenhuma checagem.
 6. **Existe um botão que dispara uma automação desligada.** A única coisa que impede é o botão estar cinza na tela — no servidor não há trava nenhuma.
 
+### E o mais caro de todos, que acontece toda noite cheia
+
+7. **O adicional que acabou sai de graça.** O lojista marca "acabou o bacon" às 20h. Quem abriu o cardápio às 19h55 pede bacon: **o sistema aceita, manda a cozinha fazer, imprime "Bacon" na comanda — e cobra zero por ele.** Medido: R$ 30 em vez de R$ 42. O lojista nunca vai desconfiar do sistema, porque a comanda está certa e o total parece certinho.
+8. **Cupom de uso único usado duas vezes.** Se duas pessoas usam ao mesmo tempo, as duas ganham o desconto. Numa campanha que dispara para 500 pessoas, isso não é exceção.
+9. **Promoção com hora marcada dispara três horas antes.** Happy hour de 18h às 20h roda das 15h às 17h.
+10. **Quem cancela ou deixa de pagar continua com a loja vendendo.** Medido nas três formas. E não temos como saber que alguém parou de pagar, a não ser que o Mercado Pago nos avise.
+
 ### O que precisa da sua decisão
 
 | | O que é | Se ficar parado |
@@ -65,13 +72,13 @@ O que muda isso não é escrever mais testes — é escrever testes que toquem o
 | # | Departamento | Estado | Onda |
 |---|---|---|---|
 | 1 | Pedido e checkout | 🔴 **VERMELHO** | 1 |
-| 2 | Cardápio, cupom e link do cliente | — | 2 |
+| 2 | Cardápio, cupom e link do cliente | 🔴 **VERMELHO** | 4 |
 | 3 | WhatsApp, agente e CRM | 🔴 **VERMELHO** | 3 |
-| 4 | SDR e prospecção | — | 3 |
-| 5 | Cobrança, assinatura e billing | — | 3 |
+| 4 | SDR e prospecção | — | 4 (em curso) |
+| 5 | Cobrança, assinatura e billing | 🔴 **VERMELHO** | 4 |
 | 6 | Site institucional e as portas de contato | 🟡 **AMARELO** | 1 (parcial) |
 | 7 | Painel e autenticação | 🔴 **VERMELHO** | 2 |
-| 8 | Banco, migrações e integridade | — | 3 |
+| 8 | Banco, migrações e integridade | — | 4 (em curso) |
 | 9 | Infra e publicação | 🔴 **VERMELHO** | 1 |
 | 10 | Esteira de testes e CI | 🔴 **VERMELHO** | 2 |
 
@@ -451,3 +458,102 @@ Pior: **`runSingleAutomation` nunca confere `isEnabled`.** A única trava contra
 | 21 | **Se já existe alguma campanha ACTIVE sem `weekdays`** — ou seja, se a bomba que cala o CRM de todos já está armada | `SELECT id FROM campaigns WHERE status IN ('ACTIVE','SCHEDULED') AND "scheduleConfig"->>'mode'='RECURRING' AND "scheduleConfig"->'weekdays' IS NULL` |
 | 22 | Fuso de `birthDate`: se as datas vieram como meia-noite UTC e o processo roda em `America/Sao_Paulo`, quem nasceu no dia 1 cai no mês anterior | valor de `TZ` no Railway |
 | 23 | ⚠️ **O histórico de migrations não é replayável.** `prisma migrate diff --from-migrations` falha em `20250506000000_saipos_integration`. **Não existe hoje um jeito automático de provar que o `schema.prisma` bate com o Postgres de produção** — que é exatamente a classe do defeito da comanda | um `pg_dump -s` de produção |
+
+---
+
+# Onda 4 (parcial, 04h UTC) — cardápio, cupom e billing
+
+Medido em cópia isolada, contra **Postgres 16 real**, dirigindo as rotas de verdade — sem dublê. Base: `4c254574`, **o mesmo commit que está no ar**.
+
+## Departamento 2 — Cardápio, cupom e link · 🔴 VERMELHO
+
+### 🔴 O adicional que a cozinha faz de graça — e é rotina, não ataque
+
+É o achado mais caro do dia, e ele acontece toda noite de pico:
+
+> O lojista marca *"acabou o bacon"* às 20h. Quem carregou o cardápio às 19h55 adiciona bacon e envia. O servidor procura o adicional **com filtro de disponível**, não acha — e `?? 0` (`finalize/route.ts:366`) transforma R$ 12 em zero. **Sem erro, sem 400, sem log.**
+>
+> O pedido entra. A comanda imprime "Bacon". A cozinha produz. A conta é **R$ 30 em vez de R$ 42**.
+
+Provado com sondas reais contra Postgres:
+
+| Sonda | Resultado |
+|---|---|
+| Extra de R$ 12 marcado indisponível | **200** · total R$ 30 em vez de R$ 38 · comanda com `"unitPrice": 0` |
+| Opcional de R$ 5 indisponível | **200** · total R$ 30 |
+| `extraId` **inexistente**: `"Costela 1kg" ×2` | **200** · gravado na comanda, **cobrado zero** |
+| Extra de **OUTRO restaurante** ("Gelo", R$ 0,50) aplicado ao X-Burger | **200** · total R$ 30,50 · comanda diz "Bacon" |
+
+A última é a mais grave e não é só dinheiro: `finalize/route.ts:271-274` busca o adicional **sem `restaurantId` e sem vínculo com o item**. Um id de outro inquilino é aceito e precificado.
+
+**E o lojista nunca vai atribuir a diferença ao sistema** — a comanda está certa e o total parece certinho.
+
+**O padrão, de novo:** todos esses buracos estão "cobertos" por teste, e todos os testes mockam o achado. `finalize/route.test.ts:34-35` dubla `menuItemExtra.findMany`, e o caso da suíte manda o dublê **devolver o extra encontrado**. **O ramo "não encontrou" nunca foi executado por ninguém.** Trocar o dublê por Postgres derrubou os cinco na primeira tentativa.
+
+### 🔴 O cupom de uso único, usado duas vezes
+
+`maxUses: 1`, dois pedidos em paralelo → **os dois com desconto, `usedCount = 2`**. A leitura está na rota (`:591`) e o incremento em outro arquivo (`CheckoutFinalizationService.ts:214`); entre um e outro cabe o mundo. `oneTimePerUser` tem o mesmo furo — sequencialmente barra certo, o que explica por que passa despercebido.
+
+**Numa campanha que dispara para 500 clientes ao mesmo tempo, "cupom de 1 uso" não é 1 uso.**
+
+### 🔴 O cupom com hora marcada que vale o dia inteiro
+
+O lojista cadastra "20% das 15h às 18h". **O campo existe na tela e nenhum dos dois validadores o lê** (`validate-coupon/route.ts:82-105`, `finalize/route.ts:574-578`). Provado: cupom com janela de **um minuto**, aplicado 55 minutos depois. Desconto de 20% em 100% do faturamento em vez de na faixa vazia da tarde.
+
+### 🔴 A promoção que dispara três horas antes
+
+`productPromotionResolver.ts:46` usa `now.getHours()`; o processo roda em UTC e a loja é `America/Sao_Paulo`. Medido: a janela `01:00–02:00` (a hora real da loja) ficou **inativa** e `04:00–05:00` ficou **ativa**. **Happy hour de 18h–20h roda das 15h às 17h.**
+
+É o **único** motor de horário do sistema que não converte para o fuso do restaurante — `business-hours.ts:192,209`, o recepcionista do WhatsApp, o runner de campanha e o cupom impresso todos convertem.
+
+### O que está verde, e merece registro
+
+Os guards de preço do **item base** e da **variante** funcionam: payload com `price:1` foi cobrado a 30. O `waToken` do link é HMAC com validade e comparação em tempo constante. O cupom de carteira, a validade e o cardápio (item indisponível não aparece) estão corretos.
+
+---
+
+## Departamento 5 — Cobrança, assinatura e billing · 🔴 VERMELHO
+
+### 🔴 Quem não paga continua vendendo — e nós só sabemos se o Mercado Pago contar
+
+Três sondas, três vezes o mesmo resultado:
+
+| Estado forçado | Pedido na loja |
+|---|---|
+| Assinatura `INADIMPLENTE` | **200 OK** |
+| Assinatura `CANCELADA` | **200 OK** |
+| `Restaurant.isActive = false` | **200 OK** |
+
+`markDelinquent` grava o status e **ninguém lê esse status** — a única outra ocorrência no código o usa para *proteger* o restaurante de ser apagado. E **o único interruptor manual que existe não interrompe nada**: nem `page.tsx` nem `finalize` sequer selecionam `isActive`.
+
+Pior: **não existe cron de cobrança**, e `PlanSubscription` **não tem** data de próxima cobrança. Uma assinatura `ATIVA` que parou de gerar fatura há três meses é, para o sistema, **indistinguível de uma em dia**. Só sabemos de inadimplência se o Mercado Pago avisar.
+
+### 🔴 O cliente que paga metade da mensalidade para sempre
+
+`PlanSubscriptionService.ts:286-323` eleva o valor do 1º mês para o cheio **só quando o webhook da primeira cobrança chega**. Se não chega, fica `fullAmountSyncedAt = null` **e** `priceSyncError = null` — e a sonda do raio-x só olha `priceSyncError not null`. **Erro nenhum em lugar nenhum, e a receita fica pela metade indefinidamente.**
+
+É a lei do domínio violada dentro do próprio billing: todo estado nasce com prazo e com quem o resgata.
+
+### 🔴 O teto de pedidos por plano: confirmado, nada mede, nada barra
+
+As três frases do site — *"até 300 / 1.200 / 4.000 pedidos por mês"* — são **texto solto** em `precos/page.tsx:169,238,313`. **Não existe contador**: nenhum campo no schema, nenhum `orderLimit` no repositório. O único gate de plano do sistema inteiro é o Garçom IA. Sonda: restaurante STARTER, cinco pedidos seguidos, cinco aceitos, nenhum aviso, nenhum registro.
+
+**Promessa publicada sem motor** — e esta linha já estava no `CLAUDE.md` como decisão pendente do CEO desde antes. Continua pendente.
+
+### O que está verde
+
+A tabela de preço tem **fonte única** e a página pública lê a mesma função — código e site não podem divergir. O checkout self-service nunca aceita preço do payload, exige aceite antes do link e tem idempotência no banco. A trava contra cobrança-zumbi funciona.
+
+---
+
+## CEGO — acréscimos da onda 4
+
+| # | O que ninguém sabe | O que destravaria |
+|---|---|---|
+| 24 | ⚠️ **Se o furo do adicional já custou dinheiro de verdade, e quanto.** Cada linha de `order_items` com `addonsJson->'extras'` contendo `unitPrice = 0` é um adicional entregue e não cobrado | uma consulta no banco de produção |
+| 25 | **O fuso do contêiner em produção.** Se for `America/Sao_Paulo`, o defeito da promoção fica invisível para lojas de SP — **e continua errado para Manaus e Noronha**, porque o motor ignora o fuso do restaurante de qualquer jeito | `railway variables` no serviço |
+| 26 | Se algum cupom em produção tem janela de horário preenchida — separa "latente" de "descontando fora de hora agora" | `SELECT count(*) FROM promotions WHERE "timeFrom" IS NOT NULL` |
+| 27 | Se alguma assinatura viva está com `fullAmountSyncedAt IS NULL` há mais de um ciclo — separa risco de desenho de **receita já perdida** | leitura do banco |
+| 28 | Se existe hoje algum lojista inadimplente com a loja no ar | `SELECT status, count(*) FROM plan_subscriptions GROUP BY 1` |
+| 29 | **O comportamento real do Mercado Pago na recusa de cartão.** Todo o nosso caminho de inadimplência depende de um aviso dele, e só lemos o nosso lado | painel do MP |
+| 30 | O caminho do QR/mesa e do WhatsApp têm **o mesmo `?? 0`** e a mesma falta de escopo — lido no código, **não dirigido contra banco**. Provável, não provado | rodar as sondas naquele caminho |
