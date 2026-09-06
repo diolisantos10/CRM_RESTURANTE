@@ -73,7 +73,13 @@ export interface AcessoDeclarado {
  * propósito: capacidade inventada num arquivo de configuração é permissão que
  * ninguém revisou, e passaria calada por não bater com nada.
  */
-export const CAPACIDADES = ["ler:quem-sou"] as const;
+export const CAPACIDADES = [
+  "ler:quem-sou",
+  "ler:leads",
+  "ler:lead-detalhe",
+  "ler:fila-de-contato",
+  "ler:funil",
+] as const;
 
 /**
  * A lista. Curta de propósito: só quem a companhia concedeu por decisão
@@ -92,12 +98,26 @@ export const ACESSOS_DECLARADOS: readonly AcessoDeclarado[] = [
     porque:
       "Acompanha a companhia inteira e a coerência entre produtos. Concedido pelo CEO em " +
       "06/09/2026, como Diretor e não como Auditoria, por decisão dele.",
-    // ⚠️ COMEÇA ESTREITO, e de propósito. `ler:quem-sou` não devolve dado de
-    // negócio nenhum: devolve a identidade e o próprio alcance. É o suficiente
-    // para PROVAR que a porta sem sessão atravessa a sala dele — que é a
-    // pergunta aberta — sem apostar dados de cliente numa hipótese não medida.
-    // Alargar é um commit, revisável, sob pedido dele.
-    alcance: ["ler:quem-sou"],
+    // ⚠️ Nasceu com `ler:quem-sou` sozinho, de propósito: só identidade, nenhum
+    // dado de negócio, o bastante para PROVAR que a porta sem sessão atravessa
+    // a sala dele sem apostar dado de cliente numa hipótese não medida. A prova
+    // veio — 200, sem cookie —, e o alargamento abaixo é o pedido DELE, item a
+    // item, no fio do Connect de 06/09/2026.
+    //
+    // ⛔ E o que ele RECUSOU, tendo `DIRETOR_FOOCCI` na conta, importa tanto
+    // quanto o que pediu: nada de escrita, nada de `/admin/restaurants`, nada
+    // de consumidor final do restaurante. *"Se um dia eu precisar mover um
+    // lead, isso é pedido novo, com carimbo — não herdado."*
+    //
+    // É por isso que alcance não pode sair do papel: o papel diria sim para
+    // tudo isso, e ninguém teria decidido.
+    alcance: [
+      "ler:quem-sou",
+      "ler:leads",
+      "ler:lead-detalhe",
+      "ler:fila-de-contato",
+      "ler:funil",
+    ],
   },
 ];
 
