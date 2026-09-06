@@ -194,6 +194,23 @@ export async function autenticarInterno(
   if (user.role === "AGENTE_IA") return null;
   if (!(await compare(senha, user.passwordHash))) return null;
 
+  // ⛔⛔ A SENHA PROVISÓRIA VENCE — e esta é a segunda metade da trava.
+  //
+  // A primeira é de PODER: quem deve trocar só abre a tela de trocar (o portão
+  // dos layouts). Esta é de TEMPO, e ela existe porque o aviso com a senha
+  // viaja pela caixa do Connect, que é **append-only**: o texto fica lá para
+  // sempre. Um segredo que fica escrito para sempre tem de deixar de valer
+  // sozinho — senão "provisória" é só um adjetivo.
+  //
+  // ⚠️ A recusa é a MESMA de senha errada: `null`. Dizer "sua provisória
+  // venceu" confirmaria, a quem estivesse testando senhas, que aquela senha um
+  // dia foi boa — e que aquele e-mail existe.
+  const venceu =
+    user.deveTrocarSenha &&
+    user.senhaProvisoriaExpiraEm !== null &&
+    user.senhaProvisoriaExpiraEm.getTime() < Date.now();
+  if (venceu) return null;
+
   return {
     userId: user.id,
     nome: user.nome,

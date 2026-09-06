@@ -5795,6 +5795,22 @@ model InternalUser {
   /// — ou seja, ainda está com a que recebeu de outra pessoa.
   senhaDefinidaEm DateTime?
 
+  /// ⛔ Até quando a senha provisória vale. Passou disso, ela não entra mais.
+  ///
+  /// Senha provisória que dura para sempre é senha definitiva com nome bonito —
+  /// e é ela que fica escrita na caixa postal, num histórico que não se apaga.
+  /// O prazo é o que fecha essa janela sozinho, sem ninguém precisar lembrar.
+  ///
+  /// Nulo quando a pessoa já definiu a própria: não há provisória para vencer.
+  senhaProvisoriaExpiraEm DateTime?
+
+  /// ⭐ O crachá desta pessoa no Dioli Connect, se ela tiver um.
+  ///
+  /// É por aqui que a senha provisória viaja: a plataforma posta na caixa do
+  /// crachá, de máquina para máquina. Nulo = não há para onde mandar, e a senha
+  /// só aparece na tela de quem criou o acesso, como antes.
+  crachaConnect String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
