@@ -5775,6 +5775,26 @@ model InternalUser {
   isActive    Boolean   @default(true)
   lastLoginAt DateTime?
 
+  /// ⛔ A senha atual foi definida por OUTRA PESSOA — troca obrigatória na entrada.
+  ///
+  /// Ordem do CEO em 05/09/2026: *"deveria haver uma forma de a pessoa receber
+  /// uma senha provisória e já trocar. Esse é o procedimento padrão em qualquer
+  /// empresa."* E ele tinha razão sobre um buraco real: a casa sorteava uma
+  /// senha, alguém a lia na tela, e ela valia **para sempre**. Quem criou o
+  /// acesso ficava sabendo a senha de quem entra — indefinidamente.
+  ///
+  /// Nasce `true` em toda criação e em toda troca feita pelo Admin, inclusive
+  /// quando a senha foi DIGITADA por quem criou: o que torna a senha provisória
+  /// não é ela ter sido sorteada, é ela ter passado por um terceiro.
+  ///
+  /// Só volta a `false` quando a própria pessoa define a dela em
+  /// `POST /api/interno/senha`.
+  deveTrocarSenha Boolean @default(false)
+
+  /// Quando a pessoa definiu a senha dela pela última vez. Nulo = nunca definiu
+  /// — ou seja, ainda está com a que recebeu de outra pessoa.
+  senhaDefinidaEm DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

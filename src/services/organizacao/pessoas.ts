@@ -225,8 +225,21 @@ export async function criarPessoa(
     // `isActive: true` no update é deliberado: recriar o acesso de alguém que
     // tinha sido desligado é como se readmite uma pessoa. Deixar `false` daria
     // uma senha nova que não entra — e o sintoma seria "criei e não funciona".
-    update: { nome, role: dados.papel, isActive: true, passwordHash },
-    create: { email, nome, role: dados.papel, passwordHash },
+    //
+    // ⛔⛔ `deveTrocarSenha: true` NOS DOIS CAMINHOS, e isso é o ponto.
+    //
+    // Ordem do CEO em 05/09/2026: *"deveria haver uma forma de a pessoa receber
+    // uma senha provisória e já trocar. Esse é o procedimento padrão em qualquer
+    // empresa."* Até aqui a casa sorteava, mostrava uma vez na tela de quem
+    // criava — e a senha valia PARA SEMPRE. Quem criou o acesso ficava sabendo a
+    // senha de quem entra, indefinidamente.
+    //
+    // ⚠️ Vale também quando a senha foi DIGITADA por quem cria. O que torna uma
+    // senha provisória não é ela ter sido sorteada: é ela ter passado por um
+    // terceiro. Marcar só o caminho do sorteio deixaria de fora exatamente o
+    // caso em que uma pessoa fala a senha da outra em voz alta.
+    update: { nome, role: dados.papel, isActive: true, passwordHash, deveTrocarSenha: true },
+    create: { email, nome, role: dados.papel, passwordHash, deveTrocarSenha: true },
   });
 
   for (const slug of dados.departamentos ?? []) {

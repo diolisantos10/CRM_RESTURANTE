@@ -32,9 +32,10 @@
 import { redirect } from "next/navigation";
 import { isAdminAuthenticated } from "@/lib/admin-auth";
 import { lerSessaoInterna } from "@/lib/internal-auth";
+import { precisaTrocarSenha, ROTA_DA_TROCA } from "@/lib/troca-de-senha";
 import { AdminSidebar } from "./AdminSidebar";
 
-export default function AdminAreaLayout({
+export default async function AdminAreaLayout({
   children,
 }: {
   children: React.ReactNode;
@@ -43,6 +44,17 @@ export default function AdminAreaLayout({
 
   if (!isAdminAuthenticated() && !sessao) {
     redirect("/admin/login");
+  }
+
+  // ── ⛔⛔ SENHA DE TERCEIRO NÃO ABRE A CASA ────────────────────────────────
+  //
+  // ⚠️ Só para quem entrou pela SESSÃO da pessoa. Quem entra pela senha antiga
+  // da casa (`ADMIN_SECRET`) não tem pessoa — não há de quem exigir troca, e
+  // mandar essa porta para a tela de trocar senha travaria a única entrada que
+  // existe quando ainda não há acesso nenhum criado. Essa porta tem prazo e
+  // rastro próprios (ADR-003); não é aqui que ela morre.
+  if (sessao && (await precisaTrocarSenha(sessao.userId))) {
+    redirect(ROTA_DA_TROCA);
   }
 
   return (
