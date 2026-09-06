@@ -36,7 +36,7 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server";
-import { autenticarAgente, segredoApresentado } from "@/lib/agente-auth";
+import { exigirAgente } from "@/lib/agente-req";
 
 export const dynamic = "force-dynamic";
 
@@ -44,42 +44,22 @@ export const dynamic = "force-dynamic";
 const CAPACIDADE = "ler:quem-sou";
 
 export async function GET(req: NextRequest) {
-  // ⛔ Recusa única, como na porta com sessão: crachá não declarado, chave
-  // ausente e segredo errado respondem igual. Separá-los diria quais agentes
-  // existem e quais já têm chave.
-  const naoConfere = NextResponse.json(
-    { ok: false, error: "credencial de agente não confere" },
-    { status: 401 },
-  );
-
-  const cracha = (req.headers.get("x-foocci-agente") ?? "").trim();
-  const conferido = autenticarAgente(cracha, segredoApresentado(req.headers.get("authorization")));
-  if (!conferido.ok) return naoConfere;
-
-  // ⛔ O ALCANCE É CONFERIDO, e a resposta diz o que faltou. Aqui a recusa PODE
-  // ser específica: quem chegou até este ponto já provou a credencial, então
-  // nomear a capacidade não entrega nada a quem está de fora — e economiza uma
-  // rodada de adivinhação a quem está de dentro.
-  if (!conferido.acesso.alcance.includes(CAPACIDADE)) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: `esta credencial não declara "${CAPACIDADE}"`,
-        alcance: conferido.acesso.alcance,
-      },
-      { status: 403 },
-    );
-  }
+  // ⚠️ O MESMO portão das outras rotas de agente, e não uma cópia dele. Duas
+  // conferências iguais divergem no primeiro conserto feito só de um lado — e
+  // num portão a divergência aparece como "esta rota deixa passar o que as
+  // outras barram", que ninguém procura até vazar.
+  const portao = exigirAgente(req, CAPACIDADE);
+  if (!portao.ok) return portao.resposta;
 
   // ⚠️ Nenhum `Set-Cookie`, e isso é a razão de existir da rota. Nada aqui
   // transforma quem chamou num usuário logado: a credencial vale por esta
   // chamada e acaba com ela.
   return NextResponse.json({
     ok: true,
-    cracha: conferido.acesso.crachaConnect,
-    nome: conferido.acesso.nome,
-    email: conferido.acesso.email,
-    alcance: conferido.acesso.alcance,
+    cracha: portao.acesso.crachaConnect,
+    nome: portao.acesso.nome,
+    email: portao.acesso.email,
+    alcance: portao.acesso.alcance,
     sessao: null,
     aviso:
       "sem sessão e sem cookie: a credencial é apresentada a cada chamada. Para alargar o " +
