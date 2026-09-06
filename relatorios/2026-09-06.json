@@ -1,0 +1,202 @@
+{
+  "produto": "Foocci",
+  "data": "2026-09-06",
+  "gerado_em_utc": "2026-09-06T11:20:00Z",
+  "assinado_por": "Diretor do Foocci",
+  "aviso": "null = NAO MEDIDO. 0 = medido e deu zero.",
+  "ficha_lida": false,
+
+  "o_dia": {
+    "titulo": "Raio-X do produto inteiro, por ordem do CEO",
+    "departamentos_medidos": 10,
+    "departamentos_vermelhos": 8,
+    "departamentos_amarelos": 0,
+    "departamentos_verdes": 0,
+    "ondas_entregues": 5,
+    "especialistas_despachados": 7,
+    "pr_do_relatorio": 191,
+    "documento": "docs/diagnosticos/raiox-do-produto-06-09-2026.md",
+    "observacao": "Nenhum departamento saiu verde. As cinco perguntas do dia estao respondidas."
+  },
+
+  "saude": {
+    "app_no_ar": true,
+    "origem": "GET https://foocci.com.br/api/health as 11:05 UTC",
+    "db_status": "ok",
+    "commit_em_producao": "4c254574",
+    "uptime_segundos": 29051,
+    "ultimo_start_utc": "2026-09-06T03:01:57Z",
+    "observacao_uptime": "o processo comecou as 03:01:57, que e o redeploy MANUAL que destravou a publicacao empacada. Ver secao publicacao.",
+    "requisicoes_24h": 45340,
+    "erros_5xx_24h": 19,
+    "erro_5xx_24h_pct": 0.0419,
+    "erros_4xx_24h": 219,
+    "origem_erros": "Railway http-error-rate, servico FOOCCI, 24h, 11 baldes",
+    "pior_balde": "05/09 12:00-14:24 UTC, 10 dos 19 erros",
+    "serie_erro_5xx_pct": {"2026-08-29": 0.0056, "2026-08-30": 0.0219, "2026-08-31": 0.0, "2026-09-02": 0.0875, "2026-09-03": 0.0, "2026-09-05": 0.0468, "2026-09-06": 0.0419},
+    "comparacao": "trafego dobrou de novo (21.470 -> 42.734 -> 45.340). Taxa praticamente igual a ontem."
+  },
+
+  "publicacao": {
+    "houve_publicacao_empacada": true,
+    "deploy": "c1edd2fa",
+    "build_terminou_utc": "2026-09-06T02:34:01Z",
+    "conteiner_subiu_utc": "2026-09-06T03:01:57Z",
+    "minutos_de_ar_parado": 28,
+    "linhas_de_erro_no_periodo": 0,
+    "destravou_como": "redeploy manual (bf34becd), mesmo commit",
+    "origem": "Railway list-deployments + get-logs dos dois deployments",
+    "e_o_nosso_codigo": false,
+    "observacao": "O build passou e o runtime subiu em 408ms assim que teve chance. E parada do lado do Railway. O defeito NOSSO e que nada vigia isso: /api/health devolve commitSha e ninguem o compara com a ponta da branch."
+  },
+
+  "cliente": {
+    "clientes_sem_resposta_hoje": null,
+    "motivo_null": "exige leitura do banco de producao; NONO dia em null",
+    "comandas_que_nao_entraram_na_fila_total_conhecido": 33,
+    "comandas_estado": "o conserto esta pronto no PR #189 e NAO foi mergeado. O caminho continua quebrado em producao.",
+    "saidas_mudas_no_whatsapp": 14,
+    "saidas_com_log": 11,
+    "saidas_sem_log": 3,
+    "correcao_ao_briefing": "a chamada diaria diz '8 sem log nenhum'. Medido: sao 3, e a pior delas (linha 324, free-form disabled) NAO cala o cliente — ela responde pelo recepcionista, mas sem deixar rastro. E o caminho padrao de quem nao esta na allowlist.",
+    "ai_return_policy_tem_chamador_automatico": false,
+    "instagram_token_valido": false,
+    "instagram_dias_vencido": 12.5,
+    "origem_instagram": "medido em 02/09; NAO reconferido hoje",
+    "agente_solto_1_em_21": null,
+    "motivo_null_agente": "registro estatico de 25/08. Nenhum dos 13 commits das ultimas 24h tocou o caminho do funil."
+  },
+
+  "achados_do_raiox": {
+    "provados_contra_postgres_real": [
+      "a comanda NUNCA imprimiu: 33 falhas, zero sucessos, seis dias, tres deploys",
+      "adicional indisponivel cobrado a R$ 0 e impresso na comanda (R$30 em vez de R$42)",
+      "extraId inexistente vira linha de comanda a R$ 0",
+      "adicional de OUTRO restaurante aceito e precificado",
+      "cupom maxUses:1 usado duas vezes em paralelo",
+      "janela de horario do cupom nunca lida pelos dois validadores",
+      "promocao roda no fuso do SERVIDOR: happy hour de 18h-20h dispara 15h-17h",
+      "numeracao da NFC-e colide: 20 reservas concorrentes, numero 104 nove vezes",
+      "assinatura INADIMPLENTE, CANCELADA e isActive=false: as tres deixam o pedido passar com 200",
+      "campanha de aniversario: de 40 mensagens, 6 vao para quem faz aniversario no dia",
+      "uma campanha malformada de UM restaurante cala o CRM de TODOS",
+      "a cadeia de migrations nao reconstroi o banco do zero",
+      "o robo do SDR responde quem mandou PARE: optOutAt continua nulo"
+    ],
+    "medidos_em_producao_de_fora": [
+      "webhook do Saipos aceita POST anonimo e devolve um oraculo enumeravel",
+      "/api/recover devolve o nome de um cliente pagante sem credencial nenhuma",
+      "as portas novas (#177 e #180) estao fechadas: 401 e 307 onde tem que ter"
+    ],
+    "medidos_em_navegador": [
+      "zero error.tsx no produto inteiro: banco fora = tela branca em ingles",
+      "/recover afirma 'conta ja existe' sem ter verificado, e oferece o botao que apaga todos os usuarios",
+      "em 1024px o cabecalho em producao quebra: 'IA' cai colado no logo, barra com 40px (duas linhas)",
+      "em /contratar/novo o botao de pagar fica habilitado quando a checagem do endereco falha"
+    ]
+  },
+
+  "produtividade": {
+    "commits_na_branch_de_deploy_24h": 13,
+    "prs_mergeados_24h": 1,
+    "lista_mergeados": ["#187 cabecalho"],
+    "mergeado_por_mim": 0,
+    "prs_meus_abertos": 3,
+    "lista_meus": ["#189 conserto da comanda", "#190 cabecalho medido", "#191 raio-X"],
+    "especialistas_despachados": 7,
+    "relatorios_de_departamento_recebidos": 7,
+    "origem": "git log e GitHub"
+  },
+
+  "qualidade": {
+    "suite_total": 7969,
+    "suite_passando": 7931,
+    "suite_pulados": 38,
+    "suite_falhando": 0,
+    "arquivos_de_teste": 584,
+    "tsc_limpo": true,
+    "origem": "medido pelo agente qualidade em arvore limpa, e por mim nos meus dois PRs",
+    "testes_pulados_que_nunca_rodaram": 38,
+    "pulados_de_seguranca_ou_concorrencia": 36,
+    "motivo_pulados": "condicionados a variaveis de banco (SALA_VENDAS_TEST_DB, HANDOFF_TEST_DB, INTERNAL_AUTH_TEST_DB) que NAO existem em lugar nenhum do repositorio",
+    "specs_playwright_existentes": 8,
+    "specs_playwright_que_rodam": 0,
+    "cobertura_medida": null,
+    "motivo_null_cobertura": "nunca foi medida. Sem pacote de cobertura, sem bloco no vitest.config, sem passo no CI.",
+    "bombas_relogio_achadas": 2,
+    "bombas_ja_desarmadas": 1,
+    "bomba_que_explode_amanha": "kitEspelho.test.ts:545 as 2026-09-07T05:56Z"
+  },
+
+  "dinheiro": {
+    "infra_railway_foocci_usd_mes": 20.65,
+    "confianca_infra": "ESTIMADO",
+    "origem_infra": "medido 2026-08-28, NAO reconferido em 9 dias",
+    "receita_mrr": null,
+    "assinantes_ativos": null,
+    "custo_ia_mes": null,
+    "saldo_openai": null,
+    "saldo_anthropic": null,
+    "receita_medida_em_pedidos_sem_comanda": 421.03,
+    "origem_receita_em_risco": "tres pedidos abertos no log; ha 30 nao lidos",
+    "teto_de_pedidos_por_plano_existe": false,
+    "origem_teto": "as tres frases do site sao texto solto em precos/page.tsx:169,238,313. Nenhum contador no schema, nenhum orderLimit no repositorio. Sonda: STARTER, 5 pedidos, 5 aceitos."
+  },
+
+  "risco": {
+    "cve_aplicado": true,
+    "dados_intactos": true,
+    "origem_dados": "disco 0,867950592 GB as 11:06 (min 24h 0,86441984 — cresceu); health db=ok",
+    "agendamento_de_copia_funcionando": true,
+    "copias_diarias_existentes": 5,
+    "copias_lista": [
+      "31/08 12:03 — 63 MB",
+      "01/09 12:03 — 56 MB",
+      "02/09 12:03 — 69 MB",
+      "03/09 12:03 — 75 MB",
+      "04/09 12:03 — 102 MB",
+      "06/09 00:43 — 40 MB"
+    ],
+    "copia_de_05_09_existe": false,
+    "anomalia_de_copia": "NAO existe copia de 05/09, e a de hoje saiu as 00:43 em vez das 12:03 de todas as anteriores. Nao sei por que. O agendamento e o mesmo (id 3f1544a7).",
+    "origem_backup": "workflow copia-de-seguranca acao=listar-copias, 06/09 11:06 UTC",
+    "pitr_ligado": null,
+    "motivo_null_pitr": "a acao listar-copias nao mostra. Ultima medicao: desligado, em 03/09.",
+    "copias_ficam_no_mesmo_volume": true,
+    "bancos_expostos_na_internet": 2,
+    "instagram_fora_do_ar": true,
+    "webhook_saipos_sem_autenticacao": true,
+    "produto_sem_tela_de_erro": true
+  },
+
+  "bloqueio_do_ceo": {
+    "itens": 5,
+    "lista": [
+      "autorizar o conserto da comanda (PR #189)",
+      "alguem precisa VER PAPEL SAIR numa loja de verdade",
+      "a mensagem de aniversario: no dia ou no mes?",
+      "saber se algum restaurante ja ligou a nota fiscal",
+      "o segredo DIOLI_BRAIN_KIT_TOKEN — e este tem hora: 07/09 05:56 UTC"
+    ],
+    "pagina_antiga": "https://claude.ai/code/artifact/3979d19f-795f-469a-9a6d-072da20ce210",
+    "observacao": "a pagina de decisoes esta desatualizada: ela tem os sete itens de 29/08 e nao tem os cinco de hoje."
+  },
+
+  "nao_medido": [
+    "Quantos clientes ficaram sem resposta hoje — NONO dia em null.",
+    "Todo o painel do lojista: 30+ telas atras de login, NENHUMA medida. E la que moram os enganos que deram origem a este tipo de auditoria.",
+    "O percurso 'fazer o primeiro pedido' — o teste mais importante do produto — ficou por fazer, porque a loja so respondeu com tela de erro.",
+    "Se algum papel ja saiu de alguma impressora, alguma vez.",
+    "Se a RLS esta de pe em producao. Se nao estiver, os testes que reprovariam estao pulados e ninguem saberia.",
+    "Se existe restaurante com Saipos ativa — decide se o webhook aberto e P0 hoje ou risco amanha.",
+    "Se algum restaurante ligou a emissao fiscal — decide se a numeracao duplicada e risco ou incendio.",
+    "Se o Postgres de producao e igual ao que as migrations constroem. Exige pg_dump -s, que eu pedi e nao puxei.",
+    "Por que nao houve copia de seguranca em 05/09.",
+    "Estado do PITR hoje.",
+    "As outras 68 chamadas com o bug do res.ok — duas provadas, o resto atras de login.",
+    "Cobertura de teste: nunca foi medida, por ninguem.",
+    "Receita, MRR, assinantes, custo de IA, saldo dos creditos — exigem banco.",
+    "O 1-em-21 de hoje.",
+    "O Postgres-76OG — 0,35 GB, exposto, conteudo desconhecido."
+  ]
+}
