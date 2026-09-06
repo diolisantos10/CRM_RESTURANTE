@@ -48,7 +48,32 @@ export interface AcessoDeclarado {
   crachaConnect: string;
   /** Por que esta pessoa tem acesso. Fica no repositório, não na memória. */
   porque: string;
+  /**
+   * ⭐⭐ O ALCANCE DA PORTA DE AGENTE — **declarado, nunca herdado do papel.**
+   *
+   * `papel` é o que a CONTA tem quando alguém entra com ela. `alcance` é o que
+   * a CREDENCIAL DE MÁQUINA pode ler. Não são a mesma coisa, e não podem ser:
+   * o CEO escolheu `DIRETOR_FOOCCI` para a conta em 06/09/2026, e a porta de
+   * agente **não existia** naquele momento. Herdar o papel aqui estenderia uma
+   * decisão a um objeto sobre o qual ela não foi tomada.
+   *
+   * Pedido do próprio Diretor Geral, no fio do Connect em 06/09: *"prefiro
+   * começar estreito e alargar sob pedido — o CEO decidiu a largura da CONTA,
+   * não a de uma porta que ainda não existia."*
+   *
+   * ⚠️ **Lista vazia = a porta de agente não lê nada.** Nunca "lê tudo". Sem
+   * esta regra, esquecer o campo viraria acesso total por omissão — e
+   * esquecimento não aparece em revisão, porque não há linha para ver.
+   */
+  alcance: readonly string[];
 }
+
+/**
+ * As capacidades que uma credencial de agente pode declarar. Lista fechada de
+ * propósito: capacidade inventada num arquivo de configuração é permissão que
+ * ninguém revisou, e passaria calada por não bater com nada.
+ */
+export const CAPACIDADES = ["ler:quem-sou"] as const;
 
 /**
  * A lista. Curta de propósito: só quem a companhia concedeu por decisão
@@ -67,6 +92,12 @@ export const ACESSOS_DECLARADOS: readonly AcessoDeclarado[] = [
     porque:
       "Acompanha a companhia inteira e a coerência entre produtos. Concedido pelo CEO em " +
       "06/09/2026, como Diretor e não como Auditoria, por decisão dele.",
+    // ⚠️ COMEÇA ESTREITO, e de propósito. `ler:quem-sou` não devolve dado de
+    // negócio nenhum: devolve a identidade e o próprio alcance. É o suficiente
+    // para PROVAR que a porta sem sessão atravessa a sala dele — que é a
+    // pergunta aberta — sem apostar dados de cliente numa hipótese não medida.
+    // Alargar é um commit, revisável, sob pedido dele.
+    alcance: ["ler:quem-sou"],
   },
 ];
 
