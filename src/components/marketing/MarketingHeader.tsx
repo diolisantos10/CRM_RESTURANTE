@@ -79,7 +79,7 @@ export function MarketingHeader() {
           />
         </Link>
 
-        <nav className="hidden items-center gap-8 lg:flex" aria-label="Navegação principal">
+        <nav className="hidden items-center gap-6 lg:flex" aria-label="Navegação principal">
           {NAV_LINKS.map((l) => (
             <Link
               key={l.href}
@@ -94,11 +94,17 @@ export function MarketingHeader() {
         <div className="hidden items-center gap-3 lg:flex">
           {/* Primeiro na ordem de leitura, e o mais discreto dos três: é a porta
               de quem ainda não sabe se quer — não pode competir com Assinar. */}
+          {/* ⚠️ É BOTÃO, não item de menu — correção do CEO em 05/09, depois de
+              eu ter errado duas vezes no mesmo dia: primeiro subiu como texto
+              solto sem borda, e o rótulo por extenso quebrou em DUAS LINHAS ao
+              lado do Entrar. A fileira do topo tem três botões, e este é um
+              deles. `whitespace-nowrap` é trava, não enfeite: sem ele o rótulo
+              quebra de novo assim que a janela aperta. */}
           <Link
             href={DEMO_URL}
-            className={`inline-flex items-center rounded-xl px-4 py-2 text-sm font-semibold text-ink2 transition-colors hover:text-ink ${FOCUS}`}
+            className={`inline-flex items-center whitespace-nowrap rounded-xl border border-line2 bg-paper px-4 py-2 text-sm font-semibold text-ink2 shadow-[0_1px_2px_rgba(11,11,11,.03)] transition-colors hover:bg-[#FAFAF8] hover:text-ink ${FOCUS}`}
           >
-            Fale com nossos consultores
+            Falar com consultor
           </Link>
           <Link
             href={LOGIN_URL}
