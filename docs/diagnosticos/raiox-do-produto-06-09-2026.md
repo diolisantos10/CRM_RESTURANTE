@@ -59,6 +59,14 @@ Foi por isso que seis dias passaram sem ninguém ver.
 | **4** | Saber se algum restaurante já ligou a nota fiscal | Decide se o defeito da numeração é risco ou incêndio |
 | **5** | Um segredo que só você alcança (`DIOLI_BRAIN_KIT_TOKEN`) | **Amanhã às 05h56 trava todo trabalho da casa** — inclusive o conserto da comanda |
 
+### E três coisas que o cliente vê, achadas na última onda
+
+11. **Quando o sistema tem qualquer problema, o cliente vê uma tela branca com texto em inglês.** Não existe tela de erro em lugar nenhum do produto — nem na loja, nem no painel, nem no site. E isso também acontece quando publicamos uma versão nova com alguém de página aberta.
+12. **Uma tela pública mente para o lojista e o empurra para o botão que apaga tudo.** Com o banco fora, ela afirma *"uma conta de proprietário já existe"* sem ter verificado nada — e logo abaixo oferece *"Recuperação forçada (apaga todos os usuários)"*. Quem está ali é um dono trancado para fora do próprio sistema.
+13. **No formulário de contratar, se a checagem do endereço da loja falhar, o botão de pagar continua ligado.** A pessoa pode pagar por um endereço que já é de outro restaurante.
+
+E o cabeçalho de ontem: **o conserto protegeu um botão e deixou os cinco links ao lado quebrarem** em telas de notebook comum.
+
 ### Por que ninguém viu, e é a melhor lição do dia
 
 O botão **"testar impressora"** do painel montava um texto simples, **sem os comandos que a impressora de verdade recebe**. Ou seja: o único instrumento que o lojista tinha para conferir se a impressão funcionava era exatamente o único caso que **não passava pelo defeito**. Ele testava a si mesmo.
@@ -84,7 +92,7 @@ O que muda isso não é escrever mais testes — é escrever testes que toquem o
 | 3 | WhatsApp, agente e CRM | 🔴 **VERMELHO** | 3 |
 | 4 | SDR e prospecção | 🔴 **VERMELHO** | 4 |
 | 5 | Cobrança, assinatura e billing | 🔴 **VERMELHO** | 4 |
-| 6 | Site institucional e as portas de contato | 🟡 **AMARELO** | 1 (parcial) |
+| 6 | Site e telas públicas | 🔴 **VERMELHO** | 5 |
 | 7 | Painel e autenticação | 🔴 **VERMELHO** | 2 |
 | 8 | Banco, migrações e integridade | 🔴 **VERMELHO** | 4 |
 | 9 | Infra e publicação | 🔴 **VERMELHO** | 1 |
@@ -693,3 +701,97 @@ O cabeçalho do próprio arquivo diz que pular calado *"faria a suíte verde afi
 | 36 | Se a RLS está de pé em produção. O banco de teste foi criado por `db push`, onde as políticas não entram. **Se a migration não estiver aplicada lá, os 4 testes que reprovaram aqui reprovariam lá — e como o arquivo está pulado, ninguém saberia** | a mesma consulta de esquema |
 
 > **Sobre o `pg_dump`:** o especialista registrou que **não** puxou credencial de produção por conta própria — existe acesso via Railway e o dump é leitura pura, mas ampliar o alcance da sessão é decisão de quem despacha, não dele. **Concordo, e endosso: o pedido sobe, a ação não.**
+
+---
+
+# Onda 5 (07h UTC) — as telas que o cliente vê
+
+## Departamento 6 — Site e telas públicas · 🔴 VERMELHO
+
+76 screenshots medidos **e olhados um a um**, em 375 / 768 / 1024.
+
+### 🔴 P0 · A loja do cliente não tem tela de erro — nenhuma tela tem
+
+Com o banco fora, `/pedido/[slug]` devolve **tela branca com texto em inglês**: *"Application error… see the server logs"*. Sem marca, sem título, sem "tentar de novo", sem saída.
+
+**`find src/app -name "error.tsx"` não devolve nada.** O produto inteiro — painel, loja e site — cai no texto cru do Next.js.
+
+E isso não é só "banco fora": **acontece quando um deploy entra no Railway com o cliente de janela aberta.** Os chunks trocam e a página quebra — o especialista reproduziu isso sem querer, com a página respondendo **HTTP 200**.
+
+### 🔴 P0 · Uma tela pública mente para o lojista e o empurra para o botão que apaga tudo
+
+`/recover` — sem login, aberta na internet.
+
+O servidor faz a coisa certa: devolve `503 {"error":"Could not reach the database"}`. **Quem mente é a tela.** Ela faz `fetch(...).then(r => r.json())` **sem olhar `r.ok`**; o 503 vira um objeto sem o campo esperado, o `if` cai no `else`, e a página anuncia:
+
+> **"Uma conta de proprietário ativa já existe"**
+
+Ela não verificou nada. E logo abaixo desse diagnóstico falso, oferece o remédio para ele:
+
+> **"Recuperação forçada (apaga todos os usuários)"**
+
+Quem está nessa tela é um dono de restaurante trancado para fora do próprio sistema. **O erro de leitura empurra a pessoa para o botão destrutivo.** É o guardrail 1 e o guardrail 5 no mesmo parágrafo.
+
+O estado honesto **existe escrito no código** (`db_error`) e é **inalcançável**: o único caminho até ele é um erro de rede, e um 503 com JSON nunca dispara `.catch`. **Alguém construiu o estado certo e ligou o fio de um jeito que ele nunca acende.**
+
+`/setup` tem o bug idêntico, linha por linha. E o especialista achou **70 chamadas com a mesma forma** espalhadas pelo app.
+
+### 🔴 P0 · O conserto do cabeçalho protegeu um rótulo e deixou cinco
+
+Em **1024px**, no commit que está no ar: *"Atendimento com IA"* quebra e **o "IA" cai colado no logo**. *"Ver funcionando"* e *"Planos e preços"* também quebram. A barra de navegação mede **40px de altura — duas linhas**.
+
+O commit `4c254574` pôs `whitespace-nowrap` em **um** elemento, e o comentário dele diz com todas as letras: *"`whitespace-nowrap` é trava, não enfeite: sem ele o rótulo quebra de novo assim que a janela aperta."* **Os cinco links ao lado não receberam trava nenhuma.**
+
+A janela quebrada é **1024–1099** — notebook comum e janela não maximizada. Em 1100 já sara.
+
+> **Isto corrige um ponto meu.** Eu medi a folga entre os blocos (zero) e não medi se os **rótulos dentro do menu** quebravam. Minha régua no **PR #190** confere linha única só nos três botões. **Vou estendê-la aos links do menu** — é exatamente a lição: trava aplicada a um rótulo não protege a fileira.
+
+### 🔴 P0 · O campo que falha em silêncio, com o pagamento habilitado
+
+Em `/contratar/novo`, quando a checagem do endereço da loja falha, o código volta ao **mesmo estado de "você ainda não digitou nada"**. A tela mostra a dica neutra *"Letras minúsculas, números e hífen."* — e o lojista lê silêncio como "está livre".
+
+Pior: a validação só barra o envio quando o estado é `taken`. Com o estado neutro, **o botão "Aceitar e pagar R$ 89,50" fica habilitado.** Se a verificação falhar num endereço que já é de outro restaurante, **a pessoa paga por um endereço que não vai poder ter.**
+
+Existem quatro estados e **não existe estado de erro**.
+
+### Os outros
+
+| # | Tela | Largura | Defeito | Medida |
+|---|---|---|---|---|
+| 5 | `/site/como-funciona` — o diagrama do ciclo | **768** | **Dois dos cinco passos estão amputados e não há rolagem para alcançá-los.** Lê-se "**ente**" no lugar de "Cliente" | fileira de 839px em 728px — **111px de excesso** |
+| 6 | Qualquer URL desconhecida | todas | `/precos`, `/contato`, `/blog` → **307 para o login**, não 404. O `not-found.tsx` da raiz é **código morto** | — |
+| 7 | "Agende uma demonstração" (3 páginas) | **375** | rótulo quebra em duas linhas, seta sozinha | h = 76px |
+| 8 | Rodapé | **375** | 11 links com **17px** de altura — o mínimo de toque é 44 | 17px |
+
+### Os três estados obrigatórios do `DESIGN.md`
+
+| Estado | Quantas telas têm |
+|---|---|
+| **Erro** | **0** |
+| **Carregando** | **1** |
+| **Vazio** | dois `not-found` — e nenhum trata *"não consegui verificar"* |
+
+### E uma observação de método que vale mais que a lista
+
+> **Uma tela quebrada que renderiza NADA passa em toda régua automática.** O robô do especialista deu "0 defeitos" para três páginas em branco, porque não havia elemento para medir. **Régua nenhuma pega isso; só olhar pega.**
+
+### O que passou limpo, e foi conferido de propósito
+
+A calculadora da home **não mente** (40.000 × 23% = 9.200, menos 429 = 8.771 — bateu nos três). `/contratar/novo` trata o erro de envio direito. O menu do celular tem alvos de 48px. **Nenhuma página rola de lado** em 60 medições. E os preços de primeiro mês pela metade estão rotulados, não contradizem a tabela.
+
+---
+
+## CEGO — onda 5
+
+| # | O que ninguém sabe | O que destravaria |
+|---|---|---|
+| 37 | ⚠️ **Todo o painel do lojista** — 30+ telas, todas atrás de login. **É lá que moram os enganos que deram origem a este tipo de auditoria**: o filtro que não filtrava, o "Total hoje" que mentia, o "Pausar pedidos" escondido. **Nenhum foi medido hoje** | um banco com dados de demonstração e uma sessão de lojista |
+| 38 | **A loja do cliente funcionando.** Só vimos a tela de erro. **O percurso "fazer o primeiro pedido" — o teste mais importante do produto — ficou por fazer** | banco real com a loja semeada |
+| 39 | As outras **68 chamadas** com o bug do `res.ok`. Duas provadas, nas telas públicas; as demais atrás de login. *É padrão, e padrão se pega com regra, não com olho* | o mesmo acesso |
+| 40 | **Produção de verdade.** Tudo foi medido no build local desta branch, não em `foocci.com.br` | rodar as mesmas medições contra o domínio |
+
+### A recomendação do especialista, que eu endosso
+
+Para as telas que afirmam o que não sabem, dois caminhos: **(a)** corrigir as três uma a uma — barato e **não impede a quarta de nascer amanhã**; **(b)** tratar como mecanismo: um helper único de fetch que trata `!res.ok` como erro por construção, mais `error.tsx` na raiz e em `/pedido` — o que mata a classe inteira, inclusive as 68 não medidas.
+
+**Recomendo (b), e o motivo é o guardrail 4:** (a) depende de alguém lembrar de não fazer, e este repositório já provou que não lembra — **o `/setup` é a cópia carbono do `/recover`.**
