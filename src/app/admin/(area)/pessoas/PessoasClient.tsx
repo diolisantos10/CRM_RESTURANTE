@@ -59,6 +59,11 @@ interface Criada {
   /** Digitada por quem criou, ou sorteada pela casa. Muda o texto do cartão. */
   foiEscolhida: boolean;
   trocouSenha: boolean;
+  /** Até quando a provisória entra. Depois disso, só outra. */
+  expiraEm?: string;
+  /** A senha foi entregue na caixa do Connect? Muda o que a tela pede. */
+  avisoEntregue?: boolean;
+  motivoDoAviso?: string | null;
 }
 
 type Fase =
@@ -82,6 +87,9 @@ export function PessoasClient() {
   // uma vez não quer inventar dez senhas, e senha inventada em série é a mais
   // fraca que existe ("Foocci1", "Foocci2"...).
   const [senha, setSenha] = useState("");
+  // ⚠️ Opcional de propósito: a maioria das pessoas desta casa não tem crachá
+  // no Connect, e exigir o campo travaria a criação de acesso de gente.
+  const [crachaConnect, setCrachaConnect] = useState("");
   const [verSenha, setVerSenha] = useState(false);
   const [copiou, setCopiou] = useState(false);
   const [mexendo, setMexendo] = useState<string | null>(null);
@@ -131,7 +139,7 @@ export function PessoasClient() {
       const r = await fetch(ROTA, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nome, email, papel, senha, departamentos: ["vendas"] }),
+        body: JSON.stringify({ nome, email, papel, senha, crachaConnect, departamentos: ["vendas"] }),
       });
       const j = (await r.json()) as { ok: boolean; data?: Criada; error?: string };
 
@@ -261,6 +269,33 @@ export function PessoasClient() {
               ? "Guardada só como código embaralhado — nem o sistema consegue lê-la de volta. Para trocar, é só cadastrar de novo com o mesmo e-mail."
               : "Não fica guardada em lugar nenhum. Passe para a pessoa agora. Se perder, crie de novo com o mesmo e-mail — a senha é trocada e a antiga para de valer."}
           </p>
+
+          {/* ── ⚠️ ESTA SENHA É PROVISÓRIA, E A TELA TEM DE DIZER ISSO ───────
+              Sem esta linha, quem cria acha que entregou o acesso final — e
+              depois estranha quando a pessoa cai numa tela de trocar senha,
+              achando que o sistema quebrou. */}
+          <p className="mt-3 max-w-[62ch] rounded-lg bg-gray-950/60 px-3 py-2 text-xs leading-relaxed text-emerald-200/80">
+            <strong>Ela é provisória.</strong> Só abre a tela onde a pessoa define a senha dela —
+            não entra em mais nada.
+            {criada.expiraEm !== undefined && (
+              <> Vale até <strong>{new Date(criada.expiraEm).toLocaleString("pt-BR")}</strong>.</>
+            )}
+          </p>
+
+          {/* ⭐ E se ela já foi entregue sozinha, quem criou não precisa fazer
+              mais nada. Se NÃO foi, a tela diz — e diz por quê, senão a pessoa
+              não sabe se está esperando um recado que nunca vai chegar. */}
+          {criada.avisoEntregue === true ? (
+            <p className="mt-2 max-w-[62ch] text-xs leading-relaxed text-emerald-300">
+              ✓ Já foi entregue na caixa do Dioli Connect dele. Você não precisa passar a senha.
+            </p>
+          ) : (
+            criada.motivoDoAviso != null && (
+              <p className="mt-2 max-w-[62ch] text-xs leading-relaxed text-amber-300/90">
+                ⚠️ Não foi entregue na caixa ({criada.motivoDoAviso}). Passe a senha você mesmo.
+              </p>
+            )
+          )}
         </div>
       )}
 
@@ -357,6 +392,27 @@ export function PessoasClient() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="marina@foocci.com.br"
+            className="mt-1 w-full rounded-xl border border-gray-800 bg-gray-950 px-3 py-2 text-sm text-white outline-none focus:border-gray-600"
+          />
+
+          {/* ── O CRACHÁ NO DIOLI CONNECT ────────────────────────────────────
+              Preenchido, a senha provisória vai DIRETO para a caixa da pessoa,
+              de máquina para máquina — sem passar pela tela de ninguém.
+
+              ⚠️ Opcional: a maior parte de quem trabalha aqui não tem crachá no
+              Connect, e exigir o campo travaria a criação de acesso de gente. */}
+          <label className="mt-3 block text-xs font-semibold text-gray-400" htmlFor="crachaConnect">
+            Crachá no Dioli Connect{" "}
+            <span className="font-normal text-gray-500">
+              — opcional. Preenchido, a senha vai direto para a caixa dele.
+            </span>
+          </label>
+          <input
+            id="crachaConnect"
+            type="text"
+            value={crachaConnect}
+            onChange={(e) => setCrachaConnect(e.target.value)}
+            placeholder="dioli.control-room.diretoria.diretor-geral"
             className="mt-1 w-full rounded-xl border border-gray-800 bg-gray-950 px-3 py-2 text-sm text-white outline-none focus:border-gray-600"
           />
 

@@ -130,11 +130,26 @@ describe("o contrato de leitura", () => {
   });
 
   it("o mais recente vem primeiro e o teto segura o crescimento", async () => {
+    // ⛔ AS DATAS SÃO RELATIVAS A AGORA, e isto foi uma bomba-relógio.
+    //
+    // A versão anterior cravava `Date.UTC(2026, 7, 23, ...)` — 23 de agosto. O
+    // teste passou verde por semanas e ficou VERMELHO SOZINHO em 06/09, sem
+    // ninguém tocar em uma linha: `lerDiario` lê numa janela de
+    // `JANELA_PADRAO_DIAS` (14), e nesse dia os lançamentos completaram 14 dias
+    // e caíram para fora. A contagem virou zero, e o teste acusou o teto de não
+    // segurar o crescimento — que era exatamente o que ele NÃO estava medindo.
+    //
+    // ⚠️ Data absoluta em teste é uma falha agendada: ela não quebra quando o
+    // código muda, quebra quando o CALENDÁRIO anda, e por isso o vermelho
+    // aparece sem relação nenhuma com quem estava trabalhando na hora. Foi o que
+    // aconteceu: ela travou o CI do produto inteiro para todo mundo.
+    const base = Date.now() - 3_600_000; // uma hora atrás, bem dentro da janela
     for (let i = 0; i < TETO_DE_TURNOS + 10; i++) {
       await registrarTurno({
         chave: `c${i}`, iaRespondeu: true, entendido: [],
         perguntasNoAr: 0, seguemSemResposta: 0, travou: false, cobertura: 0, podePropor: false,
-        agora: new Date(Date.UTC(2026, 7, 23, 0, 0, i)),
+        // Um segundo entre cada: a ordem ainda é o que a cena mede.
+        agora: new Date(base + i * 1_000),
       });
     }
     const d = (await lerDiario(5));
