@@ -27,6 +27,13 @@ import { vi, describe, it, expect, beforeEach } from "vitest";
 const db = vi.hoisted(() => ({
   order:             { count: vi.fn(), findFirst: vi.fn() },
   customer:          { findUnique: vi.fn(), findMany: vi.fn(async () => []) },
+  // O segmento de aniversário passou a ler o fuso do restaurante (conserto de
+  // 06/09: parabenizar no DIA, não no mês) e a filtrar dia/mês na consulta.
+  restaurant:        { findUnique: vi.fn(async () => ({ timezone: "America/Sao_Paulo" })) },
+  // Devolve UM aniversariante do dia de propósito: com a lista vazia o caminho
+  // retorna antes do findMany, e o teste abaixo — que exige a exclusão de
+  // cliente ocupado no segmento de aniversário — não teria o que conferir.
+  $queryRaw:         vi.fn(async () => [{ id: "aniversariante-de-hoje" }]),
   campaignExecution: { findMany: vi.fn(async () => []) },
   conversation:      { findUnique: vi.fn(), updateMany: vi.fn(async () => ({ count: 1 })) },
 }));

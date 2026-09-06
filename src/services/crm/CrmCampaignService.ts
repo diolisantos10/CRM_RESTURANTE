@@ -427,25 +427,66 @@ export async function resolveAudience(
       }) as Row[]);
 
     case "ANIVERSARIANTES": {
-      // Include only customers whose birth month matches the current calendar month.
-      // Prisma has no native month() filter, so we fetch candidates with birthDate set
-      // and filter in JS. The MAX_AUDIENCE take() is applied before the JS filter;
-      // this is acceptable for V1 (birthday lists are naturally small).
-      const currentMonth = now.getMonth(); // 0-indexed: 0=Jan … 11=Dec
-      const withBirthday = await prisma.customer.findMany({
-        where: {
-          ...baseWhere,
-          birthDate: { not: null },
-        },
-        orderBy: { birthDate: "asc" },
+      /**
+       * NO DIA DO ANIVERSÁRIO — decisão do CEO, 06/09/2026.
+       *
+       * ── O QUE ESTAVA ERRADO, medido contra Postgres real no raio-x ────────
+       *
+       * O filtro era do MÊS inteiro (`birthDate.getMonth() === currentMonth`), e
+       * ele rodava em JS DEPOIS do `take: MAX_AUDIENCE`. Base de 1.200 clientes,
+       * dia 9 de setembro:
+       *
+       *     fazem aniversário no mês ....... 100
+       *     fazem aniversário HOJE .......... 15
+       *     a campanha devolvia ............. 40
+       *     desses 40, faziam hoje ........... 6
+       *
+       * Ou seja: **34 de 40 mensagens diziam "Feliz aniversário" no dia errado**,
+       * cada uma queimando um cupom do orçamento mensal — e 60 dos 100
+       * aniversariantes do mês eram inalcançáveis, porque o corte vinha antes do
+       * filtro. Era a parede das 500 (PR #183) num lugar que aquele PR não tocou.
+       *
+       * O repositório tinha QUATRO respostas diferentes para a mesma pergunta, e
+       * a única certa estava no motor aposentado (`AutomationSchedulerService`).
+       *
+       * ── O QUE ENTRA ──────────────────────────────────────────────────────
+       *
+       * O dia e o mês entram na CONSULTA, antes de qualquer corte. `birthDate` é
+       * `timestamp` sem fuso, então `EXTRACT` sobre ele é estável — não depende
+       * do fuso da sessão do banco.
+       *
+       * E "hoje" é o hoje DO RESTAURANTE, não o do servidor. O servidor roda em
+       * UTC; sem isso, das 21h à meia-noite em Brasília o sistema já estaria
+       * parabenizando os aniversariantes de amanhã. É o mesmo defeito de fuso que
+       * o raio-x achou no motor de promoção.
+       */
+      const dono = await prisma.restaurant.findUnique({
+        where: { id: restaurantId },
+        select: { timezone: true },
+      });
+      const fuso = dono?.timezone || "America/Sao_Paulo";
+      const hojeNaLoja = new Intl.DateTimeFormat("en-CA", {
+        timeZone: fuso, year: "numeric", month: "2-digit", day: "2-digit",
+      }).format(now); // "AAAA-MM-DD"
+      const mes = Number(hojeNaLoja.slice(5, 7));
+      const dia = Number(hojeNaLoja.slice(8, 10));
+
+      const doDia = await prisma.$queryRaw<{ id: string }[]>`
+        SELECT id FROM customers
+        WHERE "restaurantId" = ${restaurantId}
+          AND "birthDate" IS NOT NULL
+          AND EXTRACT(MONTH FROM "birthDate") = ${mes}
+          AND EXTRACT(DAY   FROM "birthDate") = ${dia}
+      `;
+      if (doDia.length === 0) return serialize([]);
+
+      // O corte só acontece DEPOIS de o dia já ter filtrado — nunca antes.
+      return serialize(await prisma.customer.findMany({
+        where: { ...baseWhere, id: { in: doDia.map((r) => r.id) } },
+        orderBy: { totalOrders: "desc" },
         take: MAX_AUDIENCE,
-        select: { ...baseSelect, birthDate: true },
-      }) as (Row & { birthDate: Date | null })[];
-      return serialize(
-        withBirthday.filter(
-          (r) => r.birthDate !== null && r.birthDate.getMonth() === currentMonth
-        ) as Row[]
-      );
+        select: baseSelect,
+      }) as Row[]);
     }
 
     case "TODOS":

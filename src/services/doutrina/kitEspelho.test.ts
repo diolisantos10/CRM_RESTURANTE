@@ -31,6 +31,8 @@ import {
   FRESCOR_REPROVA_DIAS,
   MINIMO_DE_ARQUIVOS,
   PASTA_DO_ESPELHO,
+  PONTE_ATE,
+  pontePorFaltaDoSegredoEstaValendo,
   PRAZO_PARA_DECIDIR_A_VISIBILIDADE,
   conferirEspelho,
   conferirEspelhoNoRepo,
@@ -356,11 +358,38 @@ describe("frescor — o espelho não pode envelhecer calado", () => {
     expect(conferirFrescor(dias(FRESCOR_REPROVA_DIAS), AGORA).estado).not.toBe("VENCIDO");
   });
 
-  it(`${FRESCOR_REPROVA_DIAS + 1} dias: REPROVA e trava o CI`, () => {
+  /**
+   * ⚠️ ESTE TESTE MUDOU EM 06/09/2026, e o que mudou é o RELÓGIO, não a regra.
+   *
+   * Ele afirmava "REPROVA e trava o CI" com `AGORA` = 08/08/2026 — uma data que
+   * cai DENTRO da ponte aberta por falta do `DIOLI_BRAIN_KIT_TOKEN` (ver
+   * `PONTE_ATE` em kitEspelho.ts). Com a ponte valendo, o veredito é AVISO.
+   *
+   * A regra original continua provada: a segunda metade roda o MESMO espelho
+   * depois do prazo da ponte e exige REPROVADO. Se alguém apagar a ponte, as
+   * duas metades continuam verdes; se alguém a tornar permanente, a segunda cai.
+   */
+  it(`${FRESCOR_REPROVA_DIAS + 1} dias, com a ponte valendo: AVISA em vez de travar`, () => {
     const { entrada, plano } = espelhoSadio();
     entrada.manifestoBruto = JSON.stringify({
       ...plano.manifesto,
       verificadoEm: dias(FRESCOR_REPROVA_DIAS + 1),
+    });
+
+    const r = conferirEspelho(entrada);
+    expect(r.frescor?.estado, "o espelho velho tem de continuar sendo VENCIDO").toBe("VENCIDO");
+    expect(r.veredito).toBe("AVISO");
+  });
+
+  it(`${FRESCOR_REPROVA_DIAS + 1} dias, DEPOIS do prazo da ponte: REPROVA e trava o CI`, () => {
+    const { entrada, plano } = espelhoSadio();
+    const depoisDaPonte = new Date(PONTE_ATE.getTime() + 86_400_000);
+    entrada.agora = depoisDaPonte;
+    entrada.manifestoBruto = JSON.stringify({
+      ...plano.manifesto,
+      verificadoEm: new Date(
+        depoisDaPonte.getTime() - (FRESCOR_REPROVA_DIAS + 1) * 86_400_000,
+      ).toISOString(),
     });
 
     const r = conferirEspelho(entrada);
@@ -595,4 +624,87 @@ describe("o espelho que está no disco deste repositório", () => {
       expect(lido.corpo).toContain("Constituição dos Essenciais");
     },
   );
+});
+
+/**
+ * A PONTE DE 06/09 — e o teste que prova que ela mesma vence.
+ *
+ * O portão de frescor ia travar todo PR da casa às 05h56 de 07/09, por uma causa
+ * que ninguém de dentro alcança: o robô do espelho não conclui desde 24/08 por
+ * falta do segredo `DIOLI_BRAIN_KIT_TOKEN`.
+ *
+ * A ponte rebaixa espelho vencido de REPROVADO para AVISO. O que este bloco
+ * guarda não é a ponte — é o **prazo** dela. Ponte sem prazo é o defeito que ela
+ * tapa, com outro nome.
+ */
+describe("a ponte por falta do segredo, e o prazo dela", () => {
+  const pasta = join(RAIZ_DO_REPO, PASTA_DO_ESPELHO);
+  const caminhoManifesto = join(RAIZ_DO_REPO, CAMINHO_DO_MANIFESTO);
+  const DENTRO = new Date("2026-09-10T00:00:00.000Z");
+  const DEPOIS = new Date("2026-09-21T00:00:00.000Z");
+
+  it("está valendo hoje, e NÃO vale depois de PONTE_ATE", () => {
+    expect(pontePorFaltaDoSegredoEstaValendo(DENTRO)).toBe(true);
+    expect(pontePorFaltaDoSegredoEstaValendo(DEPOIS)).toBe(false);
+    expect(pontePorFaltaDoSegredoEstaValendo(PONTE_ATE)).toBe(false);
+  });
+
+  /** Espelho íntegro e carimbado há muito tempo — o caso exato de 07/09. */
+  function espelhoVelho(agora: Date) {
+    const carimboVelho = new Date(agora.getTime() - 40 * 24 * 60 * 60 * 1000).toISOString();
+    const arquivosPresentes = existsSync(pasta) ? listarDoEspelho(pasta) : [];
+    const conteudoPorDestino = new Map(
+      arquivosPresentes
+        .filter((p) => !ARQUIVOS_DE_SERVICO.has(p.slice(PASTA_DO_ESPELHO.length + 1)))
+        .map((p) => [p, readFileSync(join(RAIZ_DO_REPO, p), "utf8")]),
+    );
+    const bruto = existsSync(caminhoManifesto)
+      ? readFileSync(caminhoManifesto, "utf8")
+      : null;
+    if (!bruto) return null;
+    const comCarimboVelho = JSON.stringify({
+      ...JSON.parse(bruto),
+      verificadoEm: carimboVelho,
+    });
+    return conferirEspelhoNoRepo({
+      manifestoBruto: comCarimboVelho,
+      conteudoPorDestino,
+      arquivosPresentes,
+      agora,
+    });
+  }
+
+  it.runIf(existsSync(caminhoManifesto))(
+    "⭐ com a ponte valendo, espelho de 40 dias AVISA e não reprova",
+    () => {
+      const r = espelhoVelho(DENTRO)!;
+      expect(r.frescor?.estado).toBe("VENCIDO");
+      expect(r.veredito, "a ponte não segurou — a casa trava por doutrina").toBe("AVISO");
+      expect(
+        r.problemas.some((p) => p.tipo === "ESPELHO_VELHO"),
+        "a ponte silenciou o problema em vez de rebaixá-lo",
+      ).toBe(false);
+    },
+  );
+
+  it.runIf(existsSync(caminhoManifesto))(
+    "⭐ DEPOIS do prazo da ponte, o mesmo espelho volta a REPROVAR sozinho",
+    () => {
+      const r = espelhoVelho(DEPOIS)!;
+      expect(r.veredito, "a ponte não venceu — virou o silêncio que ela devia tapar").toBe(
+        "REPROVADO",
+      );
+      expect(r.problemas.some((p) => p.tipo === "ESPELHO_VELHO")).toBe(true);
+    },
+  );
+
+  it("a ponte não mexe em espelho fresco nem em espelho quebrado", () => {
+    // Ela só toca o caso VENCIDO: é rebaixamento de um problema nomeado, não
+    // uma anistia geral. Se alguém ampliar isso, este teste cai.
+    const fonte = readFileSync(
+      join(RAIZ_DO_REPO, "src/services/doutrina/kitEspelho.ts"),
+      "utf8",
+    );
+    expect(fonte).toContain('frescor.estado === "VENCIDO" && pontePorFaltaDoSegredoEstaValendo');
+  });
 });
