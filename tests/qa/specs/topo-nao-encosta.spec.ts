@@ -48,6 +48,22 @@ for (const largura of LARGURAS) {
       if (!nav || !acoes || !logo) throw new Error("blocos do topo não encontrados");
 
       const r = (el: Element) => el.getBoundingClientRect();
+      const linhasDe = (el: Element) => {
+        const cx = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        const lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2;
+        const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+        return Math.max(1, Math.round((cx.height - padY) / lh));
+      };
+
+      // Os LINKS DO MENU, não só os botões. O conserto de 05/09 pôs a trava de
+      // linha única em UM elemento e deixou os cinco vizinhos sem nenhuma — e
+      // foi lá que "Atendimento com IA" quebrou e o "IA" caiu colado no logo.
+      const links = [...nav.querySelectorAll("a")].map((el) => ({
+        texto: (el.textContent ?? "").trim(),
+        linhas: linhasDe(el),
+      }));
+
       const botoes = [...acoes.querySelectorAll("a,button")].map((el) => {
         const cx = el.getBoundingClientRect();
         const cs = getComputedStyle(el);
@@ -63,6 +79,8 @@ for (const largura of LARGURAS) {
         folgaLogoNav: Math.round(r(nav).x - r(logo).right),
         folgaNavAcoes: Math.round(r(acoes).x - r(nav).right),
         rolaDeLado: document.documentElement.scrollWidth > window.innerWidth,
+        alturaNav: Math.round(r(nav).height),
+        links,
         botoes,
       };
     });
@@ -83,6 +101,20 @@ for (const largura of LARGURAS) {
       expect(b.linhas, `o botão "${b.texto}" ocupa ${b.linhas} linhas em ${largura}px`).toBe(1);
     }
 
+    // ⭐ E os links do menu. Medir só os botões foi o furo da primeira versão
+    // desta régua: a folga entre os blocos dava zero E os rótulos do menu
+    // quebravam, e eu só tinha medido a folga.
+    for (const l of medida.links) {
+      expect(l.linhas, `o link "${l.texto}" ocupa ${l.linhas} linhas em ${largura}px`).toBe(1);
+    }
+
     expect(medida.rolaDeLado, `a página rola de lado em ${largura}px`).toBe(false);
+
+    // A barra inteira numa linha só. Se qualquer rótulo quebrar, a altura sobe —
+    // é a trava que pega o caso que nenhuma medida por elemento pegaria.
+    expect(
+      medida.alturaNav,
+      `a barra de navegação tem ${medida.alturaNav}px em ${largura}px — quebrou em mais de uma linha`,
+    ).toBeLessThanOrEqual(28);
   });
 }
