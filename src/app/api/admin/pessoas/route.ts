@@ -33,6 +33,18 @@ import {
   mudarAtivacao,
   TIPOS_DE_ACESSO,
 } from "@/services/organizacao/pessoas";
+import { avisarAcessoCriado } from "@/services/organizacao/avisoDeAcesso";
+import { ROTA_DA_TROCA } from "@/lib/troca-de-senha";
+
+/**
+ * Quem assina o recado na caixa do Connect.
+ *
+ * ⚠️ É o crachá do Diretor do produto, e não o de quem clicou: o recado é ato
+ * DA PLATAFORMA, não da pessoa. Assinar com o crachá de quem criou faria a
+ * trilha dizer que o CEO escreveu a senha de alguém na caixa — e não foi ele,
+ * foi o sistema.
+ */
+const CRACHA_QUE_AVISA = "dioli.foocci.direcao.diretor";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -109,12 +121,14 @@ export async function POST(req: NextRequest) {
   // dentro de `criarPessoa`, e não aqui: a tela também chama esse piso enquanto
   // a pessoa digita, e a regra tem de morar num lugar só.
   const senhaEscolhida = typeof corpo.senha === "string" ? corpo.senha : "";
+  const crachaConnect = typeof corpo.crachaConnect === "string" ? corpo.crachaConnect : "";
 
   const r = await criarPessoa(prisma, {
     nome,
     email,
     papel,
     senhaEscolhida,
+    crachaConnect,
     departamentos: Array.isArray(corpo.departamentos)
       ? corpo.departamentos.filter((d): d is string => typeof d === "string")
       : ["vendas"],
@@ -134,6 +148,37 @@ export async function POST(req: NextRequest) {
     { email, papel, jaExistia: r.jaExistia, senhaEscolhida: r.foiEscolhida },
   );
 
+  // ══════════════════════════════════════════════════════════════════════
+  // ⭐⭐ A SENHA VAI PARA A CAIXA DO CRACHÁ, DE MÁQUINA PARA MÁQUINA.
+  //
+  // Ordem do CEO, 05/09/2026: *"Você vai passar a senha pela caixa de entrada e
+  // avisar que essa senha é só para entrar, e fazer a senha dele."*
+  //
+  // ⛔ E o aviso NUNCA derruba a criação. Quando ele falha, o acesso já existe
+  // e a senha está na resposta desta rota — a tela mostra e quem criou entrega
+  // como puder. Trocar "não recebeu o recado" por "não tem acesso" seria
+  // resolver o problema pequeno criando o grande.
+  // ══════════════════════════════════════════════════════════════════════
+  const aviso =
+    r.crachaConnect === ""
+      ? { avisou: false as const, motivo: "sem crachá no Connect" }
+      : await avisarAcessoCriado({
+          crachaConnect: r.crachaConnect,
+          de: CRACHA_QUE_AVISA,
+          senha: r.senha,
+          urlDaTroca: `${req.nextUrl.origin}${ROTA_DA_TROCA}`,
+          expiraEm: r.expiraEm,
+        });
+
+  await registrar(
+    porta.sessao,
+    aviso.avisou ? "aviso_de_acesso_entregue" : "aviso_de_acesso_nao_entregue",
+    `internal_users/${r.id}`,
+    // ⚠️ Sem a senha, como em toda linha desta trilha. O que se registra é se o
+    // recado chegou — não o que ele dizia.
+    { crachaConnect: r.crachaConnect, motivo: aviso.avisou ? null : aviso.motivo },
+  );
+
   return NextResponse.json({
     ok: true,
     data: {
@@ -143,6 +188,10 @@ export async function POST(req: NextRequest) {
       senha: r.senha,
       trocouSenha: r.jaExistia,
       foiEscolhida: r.foiEscolhida,
+      expiraEm: r.expiraEm.toISOString(),
+      // A tela precisa saber se ainda tem de entregar a senha na mão.
+      avisoEntregue: aviso.avisou,
+      motivoDoAviso: aviso.avisou ? null : aviso.motivo,
     },
   });
 }

@@ -349,3 +349,58 @@ describe("⭐⭐ a senha escolhida — e a trava que precisa estar no servidor",
     expect(gravado, "não parece hash de bcrypt").toMatch(/^\$2[aby]\$/);
   });
 });
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * ⛔⛔ TODA SENHA QUE PASSOU POR TERCEIRO NASCE PROVISÓRIA
+ * ═════════════════════════════════════════════════════════════════════════ */
+
+describe("troca obrigatória no primeiro acesso", () => {
+  it("senha SORTEADA marca o acesso para troca", async () => {
+    const db = banco();
+    const r = await criarPessoa(db as never, {
+      nome: "Diretor Geral",
+      email: "diretor.geral@agentes.foocci.com.br",
+      papel: "DIRETOR_FOOCCI",
+    });
+    expect(r.ok).toBe(true);
+
+    const chamada = (db.internalUser.upsert as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(chamada.create.deveTrocarSenha).toBe(true);
+  });
+
+  it("⛔ senha DIGITADA por quem cria também marca — e é o caso mais fácil de esquecer", async () => {
+    const db = banco();
+    // O que torna uma senha provisória não é ela ter sido sorteada: é ela ter
+    // passado por um terceiro. Marcar só o sorteio deixaria de fora justamente
+    // o caso em que uma pessoa fala a senha da outra em voz alta.
+    const r = await criarPessoa(db as never, {
+      nome: "Marina",
+      email: "marina@foocci.com.br",
+      papel: "AGENTE_HUMANO",
+      senhaEscolhida: "trocaR-agora-2026",
+    });
+    expect(r.ok).toBe(true);
+
+    const chamada = (db.internalUser.upsert as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(
+      chamada.create.deveTrocarSenha,
+      "⛔ senha digitada por terceiro entrou como definitiva",
+    ).toBe(true);
+  });
+
+  it("⛔ RESET de quem já existe também marca — senão a troca some no caminho mais usado", async () => {
+    const db = banco({ existente: { id: "u1" } });
+    const r = await criarPessoa(db as never, {
+      nome: "Marina",
+      email: "marina@foocci.com.br",
+      papel: "AGENTE_HUMANO",
+    });
+    expect(r.ok).toBe(true);
+
+    const chamada = (db.internalUser.upsert as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(
+      chamada.update.deveTrocarSenha,
+      "⛔ 'esqueci a senha' devolveria uma senha de terceiro valendo para sempre",
+    ).toBe(true);
+  });
+});

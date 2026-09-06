@@ -32,6 +32,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { lerSessaoInterna } from "@/lib/internal-auth";
+import { precisaTrocarSenha, ROTA_DA_TROCA } from "@/lib/troca-de-senha";
 import { ENTRADA, abasDoComercial } from "@/lib/sala/rotas";
 import { SairDoComercial } from "./SairDoComercial";
 
@@ -39,7 +40,7 @@ export const metadata = {
   title: { default: "Comercial Foocci", template: "%s · Comercial Foocci" },
 };
 
-export default function ComercialLayout({ children }: { children: React.ReactNode }) {
+export default async function ComercialLayout({ children }: { children: React.ReactNode }) {
   const sessao = lerSessaoInterna();
 
   // ── ⚠️ UMA PORTA SÓ, E ELA TEM NOME ──────────────────────────────────────
@@ -61,6 +62,17 @@ export default function ComercialLayout({ children }: { children: React.ReactNod
   // primeiro acesso da vida não teria por onde nascer.
   if (!sessao) {
     redirect(ENTRADA);
+  }
+
+  // ── ⛔⛔ QUEM ESTÁ COM SENHA DE TERCEIRO NÃO ENTRA NA SALA ────────────────
+  //
+  // A trava mora no LAYOUT pelo mesmo motivo estrutural da porta acima: é ele
+  // quem renderiza `children`. Enquanto a troca não acontecer, a página nem
+  // executa e nenhuma consulta dela toca o banco. Tela nova nasce protegida sem
+  // ninguém lembrar de proteger — o oposto de uma guarda copiada arquivo a
+  // arquivo, que só falta onde ninguém olhou.
+  if (await precisaTrocarSenha(sessao.userId)) {
+    redirect(ROTA_DA_TROCA);
   }
 
   const abas = abasDoComercial(sessao.role);

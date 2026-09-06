@@ -156,7 +156,17 @@ export async function listarPessoas(db: Cliente): Promise<PessoaNaLista[]> {
 }
 
 export type ResultadoDeCriacao =
-  | { ok: true; senha: string; jaExistia: boolean; id: string; foiEscolhida: boolean }
+  | {
+      ok: true;
+      senha: string;
+      jaExistia: boolean;
+      id: string;
+      foiEscolhida: boolean;
+      /** Até quando a senha provisória entra. Depois disso, só outra. */
+      expiraEm: Date;
+      /** O crachá para onde o aviso pode ir. Vazio = não há para onde mandar. */
+      crachaConnect: string;
+    }
   | { ok: false; erro: string };
 
 /**
@@ -186,6 +196,8 @@ export async function criarPessoa(
      * seria trocar um problema por outro.
      */
     senhaEscolhida?: string;
+    /** O crachá desta pessoa no Dioli Connect, se ela tiver. Vazio = não tem. */
+    crachaConnect?: string;
   },
 ): Promise<ResultadoDeCriacao> {
   const nome = dados.nome.trim();
@@ -206,6 +218,7 @@ export async function criarPessoa(
   // consegue chamar esta rota por fora dela, e uma trava que só existe na tela
   // não é trava — é decoração.
   const escolhida = (dados.senhaEscolhida ?? "").trim() ? dados.senhaEscolhida! : null;
+  const cracha = (dados.crachaConnect ?? "").trim().toLowerCase();
 
   if (escolhida !== null) {
     const problema = problemaComASenha(escolhida, { nome, email });
@@ -214,6 +227,17 @@ export async function criarPessoa(
 
   const senha = escolhida ?? randomBytes(9).toString("base64url");
   const passwordHash = await hash(senha, 10);
+
+  // ⛔ O PRAZO DA PROVISÓRIA — 48 horas, e ele é a segunda metade da trava.
+  //
+  // A primeira é de PODER (a provisória só abre a tela de trocar). Esta é de
+  // TEMPO. Sem ela, "provisória" é só um adjetivo: a senha que um terceiro leu
+  // continuaria entrando daqui a um ano.
+  //
+  // ⚠️ E ela importa mais agora que o aviso viaja pela caixa do Connect, que é
+  // append-only: o texto com a senha fica lá para sempre, então o que ele
+  // descreve tem de deixar de valer sozinho.
+  const expiraEm = new Date(Date.now() + 48 * 3_600_000);
 
   const jaExistia = await db.internalUser.findUnique({
     where: { email },
@@ -225,8 +249,37 @@ export async function criarPessoa(
     // `isActive: true` no update é deliberado: recriar o acesso de alguém que
     // tinha sido desligado é como se readmite uma pessoa. Deixar `false` daria
     // uma senha nova que não entra — e o sintoma seria "criei e não funciona".
-    update: { nome, role: dados.papel, isActive: true, passwordHash },
-    create: { email, nome, role: dados.papel, passwordHash },
+    //
+    // ⛔⛔ `deveTrocarSenha: true` NOS DOIS CAMINHOS, e isso é o ponto.
+    //
+    // Ordem do CEO em 05/09/2026: *"deveria haver uma forma de a pessoa receber
+    // uma senha provisória e já trocar. Esse é o procedimento padrão em qualquer
+    // empresa."* Até aqui a casa sorteava, mostrava uma vez na tela de quem
+    // criava — e a senha valia PARA SEMPRE. Quem criou o acesso ficava sabendo a
+    // senha de quem entra, indefinidamente.
+    //
+    // ⚠️ Vale também quando a senha foi DIGITADA por quem cria. O que torna uma
+    // senha provisória não é ela ter sido sorteada: é ela ter passado por um
+    // terceiro. Marcar só o caminho do sorteio deixaria de fora exatamente o
+    // caso em que uma pessoa fala a senha da outra em voz alta.
+    update: {
+      nome,
+      role: dados.papel,
+      isActive: true,
+      passwordHash,
+      deveTrocarSenha: true,
+      senhaProvisoriaExpiraEm: expiraEm,
+      ...(cracha === "" ? {} : { crachaConnect: cracha }),
+    },
+    create: {
+      email,
+      nome,
+      role: dados.papel,
+      passwordHash,
+      deveTrocarSenha: true,
+      senhaProvisoriaExpiraEm: expiraEm,
+      ...(cracha === "" ? {} : { crachaConnect: cracha }),
+    },
   });
 
   for (const slug of dados.departamentos ?? []) {
@@ -245,6 +298,8 @@ export async function criarPessoa(
     jaExistia: Boolean(jaExistia),
     id: user.id,
     foiEscolhida: escolhida !== null,
+    expiraEm,
+    crachaConnect: cracha,
   };
 }
 
