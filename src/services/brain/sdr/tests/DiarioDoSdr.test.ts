@@ -129,6 +129,18 @@ describe("o contrato de leitura", () => {
     expect(d.primeiroTurnoEm).toBeNull();
   });
 
+  /**
+   * ⚠️ A DATA E RELATIVA A HOJE, e isso nao e detalhe de estilo.
+   *
+   * Este teste nasceu com `Date.UTC(2026, 7, 23, ...)` cravado — 23 de agosto —
+   * e `lerDiario(5)` so enxerga os ultimos 5 dias. Ele passou verde por duas
+   * semanas e comecou a reprovar sozinho em 06/09, sem ninguem tocar no codigo:
+   * a janela andou e deixou os turnos para tras. Reprovou o cabecalho do site,
+   * que nao tem relacao nenhuma com o diario do SDR.
+   *
+   * Teste que depende da data de hoje e bomba-relogio: ele nao acusa defeito,
+   * ele INVENTA um, no dia em que ninguem esta esperando. Ancorar em "agora".
+   */
   it("o mais recente vem primeiro e o teto segura o crescimento", async () => {
     // ⛔ AS DATAS SÃO RELATIVAS A AGORA, e isto foi uma bomba-relógio.
     //
