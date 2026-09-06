@@ -90,6 +90,24 @@ describe("o aniversário sai no dia, e não no mês", () => {
     // A lista do dia inteira chega ao `where`; o `take` corta depois dela.
     expect(chamada.where.id?.in).toHaveLength(700);
     expect(chamada.take).toBe(500);
+
+    /**
+     * ⭐ E A CONSULTA DO DIA NÃO PODE TER TETO NENHUM.
+     *
+     * Esta asserção nasceu de uma MUTAÇÃO QUE SOBREVIVEU: pus um `LIMIT 500`
+     * dentro do SQL — repondo exatamente a parede que este conserto derruba — e
+     * as duas asserções acima continuaram verdes. Elas não podiam ver: o dublê
+     * devolve o que o teste manda, independente do que o SQL pede.
+     *
+     * Enquanto `prisma` for dublê, o SQL é o único artefato real que sobra. A
+     * prova de ponta a ponta continua sendo contra Postgres de verdade, e está
+     * no raio-x de 06/09 — esta aqui é a rede que impede a regressão silenciosa.
+     */
+    const { sql } = sqlEnviado();
+    expect(
+      /\blimit\b/i.test(sql),
+      "a consulta do dia ganhou um teto — a parede das 500 voltou por outra porta",
+    ).toBe(false);
     vi.useRealTimers();
   });
 
