@@ -215,3 +215,122 @@ Esta seção é a mais importante do documento. É onde os defeitos de hoje esta
 Rodei os especialistas em paralelo **no mesmo diretório de trabalho**, e dois deles se atropelaram: um `npm run build` meu falhou com `ENOENT: .next/server/pages-manifest.json` porque outro agente reconstruía ao mesmo tempo.
 
 Não é anedota — é a mesma classe de defeito que o raio-X está caçando: **duas coisas escrevendo no mesmo lugar sem ninguém medir a colisão.** A partir da onda 2, cada especialista trabalha em cópia isolada.
+
+---
+
+# Onda 2 (05h UTC) — segurança e esteira de testes
+
+## ⏰ URGENTE E COM HORA: uma bomba explode às 05:56 UTC de amanhã
+
+`src/services/doutrina/kitEspelho.test.ts:545` confere se `docs/kit/_ESPELHO.json` foi carimbado há menos de **14 dias**. O carimbo atual é de **24/08 05:56** — hoje já são 12,9 dias. **Amanhã, 07/09 às 05:56 UTC, todo PR da casa passa a reprovar** com uma mensagem sobre doutrina, sem relação nenhuma com o que a pessoa mudou.
+
+Provado, não deduzido: o `qualidade` rodou a suíte com o relógio deslocado em onze pontos (+1 a +900 dias). Em `+2` já sai `FAIL … ESPELHO_VELHO — não é conferido há 14.9 dias (limite: 14)`.
+
+**É o mesmo defeito do diário do SDR, três dias depois.** O portão não acusa um defeito: **inventa um**, no dia em que ninguém espera.
+
+**E a raiz é pior que a bomba:** o carimbo está parado porque `.github/workflows/kit-espelho.yml` (cron diário) **não conclui há 13 dias** — ele faz `exit 1` sem o segredo `DIOLI_BRAIN_KIT_TOKEN` (`:95,106`). Treze dias de vermelho diário, todo dia, e ninguém viu.
+
+**Duas saídas, e eu preciso da sua palavra antes das 05:56:**
+- **(a)** repor o segredo `DIOLI_BRAIN_KIT_TOKEN` no repositório e deixar o cron carimbar sozinho. Conserta a causa. **Só você ou o CEO alcançam esse segredo — eu não.**
+- **(b)** eu afrouxo o prazo de 14 dias enquanto (a) não acontece. Destrava a casa em cinco minutos e **esconde** o cron morto.
+
+**Recomendo (a), com (b) como ponte se (a) não couber nas próximas duas horas** — porque amanhã de manhã isso trava inclusive o merge do conserto da comanda.
+
+> ⚠️ Não fiz nem um nem outro. A ordem é "só conserte o que for P0", e isto não é dinheiro nem porta aberta — é um freio de mão que vai travar a casa inteira. Estou pedindo a palavra, não a autorização genérica.
+
+---
+
+## Departamento 7 — Painel, autenticação e superfície exposta · 🔴 VERMELHO
+
+**Antes dos achados, o que mais importa:** `docs/pendencias.md:1195-1210` já lista **quatro destes vermelhos** desde **05/08**, sob o título *"Dívida de segurança ainda aberta"*, com a frase escrita **"nenhuma foi corrigida"**. Um mês depois, nenhuma foi corrigida — e duas obras grandes (#177 e #180) passaram por cima da lista sem tocá-la.
+
+**As portas novas estão boas. O buraco é o estoque antigo.** Medido de fora, em produção:
+- Dioli Connect (#177): `GET /api/connect/cadastro` sem cabeçalho → **401**, não 503 — fail-closed e com o segredo configurado.
+- Prospecção (#180): `GET` sem sessão → **401**.
+- `/comercial` e `/admin`: as seis páginas → **307** para a tela de entrada.
+- `src/middleware.ts` (#180): só desvia a raiz quando o host é o da Comercial. **Não deixa passar nada que antes não passasse.**
+
+### Os quatro vermelhos antigos
+
+| # | O quê | Evidência | P0? |
+|---|---|---|---|
+| 1 | **Webhook Saipos sem autenticação nenhuma** | `api/integrations/saipos/webhook/route.ts:37-61`. **Medido em produção:** POST anônimo → `{"ok":true,"handled":false,"detail":"cod_store not found: …"}` `[200]` | **P0 condicional** |
+| 2 | **`/api/recover` — "o primeiro restaurante ativo"** | `api/recover/route.ts:30-33`, `findFirst` sem `orderBy`. **Medido:** `GET` anônimo devolve `{"recoveryAllowed":false,"reason":"owner_exists","restaurantName":"Sushi Cazza"}` | vaza nome de cliente **hoje** |
+| 3 | **Stone: segredo ausente = passe livre** | `api/payments/stone/webhook/route.ts:27-40` segue sem o segredo, e `:83-90` grava `Payment=PAID` + `Order=CONFIRMED` | latente |
+| 4 | **`repeat-order` aceita telefone sem prova de posse** | `api/pedido/[slug]/repeat-order/route.ts:36-38,58` — sem `rateLimit`, sem identidade | não |
+
+**Sobre o Saipos, e por que "condicional".** O handler roda para qualquer chamador. A resposta é um **oráculo**: `cod_store not found` e `Order not found` são frases diferentes e não há limite de tentativas, então o código de qualquer loja integrada é enumerável. Com um código válido e um `order_id`, o mapa de transições (`:930-940`) permite `AWAITING_PAYMENT → CONFIRMED` — **o pedido não pago vira confirmado, imprime na cozinha e entra no faturamento. E o cliente tem o próprio `order_id` na mão.** Comida de graça, em auto-serviço. Também permite cancelar pedido alheio.
+
+O dano exige que exista ao menos um restaurante com Saipos ativa. **Isso é uma linha do banco que eu não li, e não vou enumerar códigos de loja para descobrir — enumerar é o ataque.** Se a resposta for "sim, tem", isto vira P0 imediato. **É a primeira pergunta que eu levaria ao banco.**
+
+**Sobre a Stone**, uma diferença que importa: Mercado Pago, SumUp e o billing **reconsultam o provedor** antes de confirmar — é a reconsulta, não a assinatura, que os sustenta. A Stone confia no corpo do POST. **É o único caminho de pagamento do repositório em que o corpo de uma requisição, sozinho, vira dinheiro reconhecido.**
+
+**Sobre o `/api/recover`**, o detalhe que o torna pior que "latente": o `GET` **anuncia o estado publicamente**, sem credencial. Um atacante consulta em laço e toma a loja no minuto em que o estado virar. E o caminho para virar existe no par ao lado: `/api/admin/reset-owner` apaga **todos** os usuários do "primeiro restaurante ativo" — o mesmo seletor errado. Um operador que rodar isso mirando a loja X pode zerar a loja Y e, no mesmo ato, abrir a porta da frente dela.
+
+### E uma régua que exige o defeito
+
+`src/services/instagram/tests/InstagramChannel.test.ts:96` **exige** que `verifyInstagramSignature(raw, null, null)` devolva `true` — ou seja, **a suíte exige o fail-open**. E `webhooks/instagram/route.test.ts:24` mocka a função para `true`. **A verificação de assinatura do Instagram não tem uma linha de cobertura real.** Quem amanhã mexer no filtro abre o webhook para o mundo, e o CI fica verde confirmando o novo comportamento.
+
+---
+
+## Departamento 10 — Esteira de testes e CI · 🔴 VERMELHO
+
+Suíte medida em árvore limpa: **584 arquivos, 7.969 testes, 7.931 passam, 38 pulados, 0 falham.**
+
+### O CI barra duas coisas. Só.
+
+`.github/workflows/ci.yml` tem **um job e quatro passos**: instalar → gerar Prisma → `type-check` → `test:unit`.
+
+**Deixa passar:** tela quebrada, checkout quebrado, Pix quebrado, comanda não enfileirada, erro de tipo em teste, erro de tipo em script, `next build` quebrado, lint, e qualquer regressão de cobertura — **porque cobertura nunca foi medida.**
+
+| Portão | Estado |
+|---|---|
+| Type-check de produção | 🟡 exclui testes, `scripts/`, `secretario` |
+| Type-check de testes (`type-check:tests`) | 🔴 **existe e o CI não chama** — o próprio `tsconfig.tests.json` admite ~750 erros |
+| Playwright | ⚫ **8 specs existem, zero rodam** — `checkout-flow`, `pix-payment-flow`, `cart-behavior`, `finalize-upsell`, `incomplete-address`… **o caminho do dinheiro inteiro** |
+| Cobertura | ⚫ **nunca foi medida** |
+| `next build` | ⚫ não roda no CI |
+| 38 testes pulados | 🔴 **verde por ausência** |
+| `quality-audit-cron.yml` | 🟡 lê só o status HTTP e **descarta o `globalStatus`** — auditoria noturna com P0 devolve 200 e pinta ✅ |
+| `kit-espelho.yml` | 🔴 **morto há 13 dias** |
+| Os outros 16 workflows agendados | ⚫ **cegos, por decisão escrita** |
+
+### Os 38 pulados são a violação mais grave
+
+Todos condicionados a variáveis de banco que **não existem em lugar nenhum** — nem no CI, nem no `package.json`. **Nunca rodaram**, e nada avisa que foram pulados:
+
+- **11** — `identidadeNoBanco.rls.test.ts`: *"sem identidade declarada, NADA é visível"*, *"dois SDRs veem conjuntos diferentes"*, *"recusa id com aspas — o caminho da injeção"*. **O isolamento entre inquilinos no nível do banco é 100% não verificado.**
+- **9 + 6** — corridas de dono de lead e de handoff (*"a trava é do banco, não do código"*).
+- **6** — login interno: senha errada, conta desativada, *"AGENTE_IA não faz login nem com hash gravado"*.
+- **4** — atomicidade de ordem de serviço.
+
+**Trinta e seis dos 38 são segurança, autenticação e concorrência.** Esquecer o portão está significando "aprovado" — o guardrail 2 desta casa, violado 38 vezes por execução.
+
+### Réguas verdes no lugar errado — a lista, por estrago
+
+| # | Onde | Afirma provar | De fato prova |
+|---|---|---|---|
+| 1 | `raiox/collect/RaioXCollector.ts:262-296` | que a impressão está saudável | que **entre as comandas que existem** nenhuma travou. Zero comandas = saúde perfeita. **É o mecanismo do incidente** |
+| 2 | `marketing/tests/topoEntrarEAssinar.test.ts:124,131` | que o convite "é botão" e "não quebra em duas linhas" | que duas substrings existem no `.tsx`. **Verdes enquanto a fileira encostava** |
+| 3 | `simulation/automation.test.ts:16-48` | que o simulador do Garçom derruba o job | que o **YAML contém as strings das mensagens de erro**. Nunca executa uma linha do shell |
+| 4 | `security/tests/alertasQueNaoMentem.test.ts:98-100` | que o simulador do Garçom continua existindo | **lê o arquivo errado.** Apagar `waiter-simulation-run.yml` amanhã não deixa este teste vermelho |
+| 5 | `security/routeGuards.test.ts:200-209` | que toda rota de admin tem guarda | que um regex casa **em algum ponto do texto** — inclusive num comentário. *(O `seguranca` tentou refutar: auditou os 10 candidatos e os 10 são falsos positivos. Frágil por construção, sem violador vivo.)* |
+| 7 | **64 arquivos** usam `readFileSync` para assertar sobre texto de código | comportamento | presença de substring |
+
+**Nota justa:** vários desses 64 declaram no cabeçalho *por que* são teste de texto (o vitest roda sem DOM) e trazem as duas metades. Não é desleixo. **Continua sendo texto** — e o item 2 é a prova de que a metade "reprova quando deve" pode estar escrita e ainda assim medir a coisa errada.
+
+---
+
+## CEGO — acréscimos da onda 2
+
+| # | O que ninguém sabe | O que destravaria |
+|---|---|---|
+| 10 | **Se existe algum restaurante com Saipos ativa.** Decide se o webhook aberto é P0 hoje ou risco amanhã | `SELECT * FROM integration_configs WHERE provider='saipos' AND "isActive"=true` |
+| 11 | Se `STONE_WEBHOOK_SECRET` existe em produção. **Com ou sem segredo a rota responde 200** — é o pior formato de defeito, invisível dos dois lados | Ler as variáveis do serviço no Railway |
+| 12 | Quantos restaurantes existem e quantos têm dono ativo — decide o tamanho do `/api/recover` | Leitura do banco |
+| 13 | Se `ADMIN_SECRET` e `INTERNAL_SESSION_SECRET` já rotacionaram alguma vez | Não há registro de rotação em lugar nenhum do repositório |
+| 14 | Se o token do Carteiro de alguma loja já vazou. É durável, em texto puro no banco, **nunca expira**, e não há trilha de uso | Nenhum sinal existe. Precisa ser construído |
+| 15 | Se o `rateLimit` tem efeito em produção — `lib/rate-limit.ts:16` é um `Map` de processo, morre a cada deploy e não atravessa réplica | Saber quantas réplicas o Railway roda |
+| 16 | **A borda do Railway é hoje quem impede um open redirect** (medido). Essa proteção não está no repositório, não tem teste, e ninguém foi avisado de que dependemos dela | Trocar de proxy devolve o furo, e nada no código sinaliza |
+| 17 | Se os 8 specs de Playwright ainda passam | Nunca foram executados por máquina nenhuma |
+| 18 | Que fração das 7.931 asserções toca código que um cliente executa | Cobertura nunca foi medida |
