@@ -10,6 +10,7 @@
  */
 
 import { prisma } from "@/lib/prisma";
+import { escapeNulForPg } from "@/lib/pg-text";
 import { uploadToS3 } from "@/lib/s3";
 import type { FiscalDocument } from "@prisma/client";
 
@@ -58,7 +59,10 @@ export async function enqueueDanfcePrint(restaurantId: string, doc: FiscalDocume
       stationKey: station.key,
       printerName: station.printerName,
       title: `NFC-e ${doc.numero ?? ""}`.trim(),
-      body: renderDanfceBody(doc),
+      // Mesmo defeito da comanda, mesma cura: o corpo é ESC/POS e carrega 0x00,
+      // que o Postgres recusa em texto. Guardado escapado; a rota do Carteiro
+      // (api/print-agent/poll) desfaz. Ver src/lib/pg-text.ts.
+      body: escapeNulForPg(renderDanfceBody(doc)),
     },
   });
 }
