@@ -4,8 +4,9 @@
 > fechado entra aqui e é anunciado no PR. O que ainda não foi medido está
 > nomeado como tal — nunca em branco por conveniência.
 >
-> **Onda 1 (03h20 UTC):** pedido e checkout · infra e publicação · as duas
-> perguntas do CEO que já têm resposta.
+> **Onda 1 (03h20):** pedido e checkout · infra e publicação · duas perguntas respondidas.
+> **Onda 2 (05h):** segurança e superfície exposta · esteira de testes e CI.
+> **Onda 3 (06h):** WhatsApp, agente e CRM.
 
 ---
 
@@ -35,13 +36,27 @@ Esta é a parte que interessa mais que os defeitos: **as réguas estavam verdes*
 
 Foi por isso que seis dias passaram sem ninguém ver.
 
+### Mais três coisas que o dia encontrou
+
+4. **A campanha de aniversário parabeniza no dia errado.** Medido: de 40 mensagens, **6** vão para quem faz aniversário naquele dia. As outras 34 dizem "Feliz aniversário" para quem não está fazendo — e cada uma gasta um cupom. **A mensagem é sua: ou o cartão passa a dizer "no mês do aniversário", ou o sistema passa a mandar só no dia. Recomendo o dia.**
+5. **Uma campanha mal criada num restaurante cala o CRM de todos os outros.** Medido: o restaurante saudável mandou zero. E a linha que causa isso pode ser criada pela tela, sem nenhuma checagem.
+6. **Existe um botão que dispara uma automação desligada.** A única coisa que impede é o botão estar cinza na tela — no servidor não há trava nenhuma.
+
 ### O que precisa da sua decisão
 
 | | O que é | Se ficar parado |
 |---|---|---|
 | **1** | Autorizar o conserto da comanda (PR #189) | A cozinha segue sem papel, todo dia |
 | **2** | Alguém precisa **ver papel sair** numa loja de verdade | Sem isso, "consertado" é só o que o código diz |
-| **3** | Saber se algum restaurante já ligou a nota fiscal | Decide se o defeito da numeração é risco ou incêndio |
+| **3** | A mensagem de aniversário: **no dia**, ou **no mês**? | Hoje 85% sai no dia errado, gastando cupom |
+| **4** | Saber se algum restaurante já ligou a nota fiscal | Decide se o defeito da numeração é risco ou incêndio |
+| **5** | Um segredo que só você alcança (`DIOLI_BRAIN_KIT_TOKEN`) | **Amanhã às 05h56 trava todo trabalho da casa** — inclusive o conserto da comanda |
+
+### E uma coisa que eu preciso dizer sem enfeite
+
+Nenhum dos seis defeitos deste dia foi encontrado por um teste. **Todos foram encontrados quando alguém foi olhar.** A suíte tem 7.931 verificações verdes; o caminho do dinheiro tem 293 verdes; o CRM tem 1.301 verdes. Os defeitos passaram por baixo de todas elas.
+
+O que muda isso não é escrever mais testes — é escrever testes que toquem o que o cliente toca. Está tudo listado aqui dentro, com nome e endereço.
 
 ---
 
@@ -51,14 +66,14 @@ Foi por isso que seis dias passaram sem ninguém ver.
 |---|---|---|---|
 | 1 | Pedido e checkout | 🔴 **VERMELHO** | 1 |
 | 2 | Cardápio, cupom e link do cliente | — | 2 |
-| 3 | WhatsApp, agente e CRM | — | 2 |
+| 3 | WhatsApp, agente e CRM | 🔴 **VERMELHO** | 3 |
 | 4 | SDR e prospecção | — | 3 |
 | 5 | Cobrança, assinatura e billing | — | 3 |
 | 6 | Site institucional e as portas de contato | 🟡 **AMARELO** | 1 (parcial) |
-| 7 | Painel e autenticação | — | 2 |
+| 7 | Painel e autenticação | 🔴 **VERMELHO** | 2 |
 | 8 | Banco, migrações e integridade | — | 3 |
 | 9 | Infra e publicação | 🔴 **VERMELHO** | 1 |
-| 10 | Esteira de testes e CI | — | 2 |
+| 10 | Esteira de testes e CI | 🔴 **VERMELHO** | 2 |
 
 ---
 
@@ -334,3 +349,105 @@ Todos condicionados a variáveis de banco que **não existem em lugar nenhum** �
 | 16 | **A borda do Railway é hoje quem impede um open redirect** (medido). Essa proteção não está no repositório, não tem teste, e ninguém foi avisado de que dependemos dela | Trocar de proxy devolve o furo, e nada no código sinaliza |
 | 17 | Se os 8 specs de Playwright ainda passam | Nunca foram executados por máquina nenhuma |
 | 18 | Que fração das 7.931 asserções toca código que um cliente executa | Cobertura nunca foi medida |
+
+---
+
+# Onda 3 (06h UTC) — WhatsApp, agente e CRM
+
+## Departamento 3 · 🔴 VERMELHO
+
+Auditado em cópia isolada de `f633d183`, **contra Postgres real** — o especialista subiu um banco de verdade em vez de aceitar o dublê. `npx vitest run src/services/crm` → **1.301 testes, todos verdes. Nenhum dos seis achados abaixo é pego por um único deles.**
+
+### A parede das 500 está consertada — e mudou de lugar para 32.767
+
+**Medido, não deduzido.** Base de 1.200 clientes, campanha recorrente, duas rodadas:
+
+```
+RODADA 1   eligible: 500   sent: 40
+RODADA 2   eligible: 500   sent: 40
+NOVOS na rodada 2: 40
+```
+
+**O PR #183 faz o que promete.** Mas o teste dele (`audiencia-nao-para-nas-mesmas-500.test.ts:23-32`) **mocka o `prisma`**, e o caso que ele chama de *"⭐ prova de negócio"* afirma `expect(segunda.id.notIn).toHaveLength(500)` — isto é, que a lista que o próprio teste passou chegou ao `where`. O dublê devolve `[]` nas duas chamadas. **Nenhuma pessoa diferente é alcançada em lugar nenhum daquele teste.**
+
+E por isso ele não viu o teto que o próprio conserto criou:
+
+| `notIn` | resultado |
+|---|---|
+| 30.000 | OK, 138 ms |
+| 32.700 | OK, 156 ms |
+| **32.766** | **ERRO** — `Invalid prisma.customer.findMany()` |
+
+É o limite de parâmetros do protocolo do Postgres. **Não dispara com os 21 mil de hoje**; dispara quando uma base passar de ~33 mil, ou quando o histórico acumular mais que isso. Aí vira campanha muda de novo, 32 mil pessoas adiante.
+
+### 🔴 A campanha de aniversário parabeniza no dia errado — 85% das vezes
+
+Medido, 1.200 clientes com data de nascimento, dia 9 de setembro:
+
+| | |
+|---|---|
+| fazem aniversário **no mês** | 100 |
+| fazem aniversário **hoje** | 15 |
+| audiência que a campanha devolve | **40** |
+| desses 40, fazem aniversário hoje | **6** |
+
+**34 de 40 mensagens dizem "Feliz aniversário, {nome}! 🎉" no dia errado — e cada uma queima um cupom** do orçamento mensal. E **60 dos 100 aniversariantes do mês são inalcançáveis**, porque o corte de 500 acontece antes do filtro.
+
+Quatro lugares do repositório dizem coisas diferentes sobre a mesma pergunta:
+
+| Onde | Regra | |
+|---|---|---|
+| `readyMadeCampaigns.ts:127` | *"No dia do aniversário do cliente"* | o que o lojista lê |
+| `CRMService.ts:420-433` | hoje + 3 dias | o que o painel conta |
+| `AutomationSchedulerService.ts:305-306` | mês **e** dia (±1) | o motor **aposentado** — o único que acerta |
+| `CrmCampaignService.ts:445-447` | **o mês inteiro** | **o motor que envia de verdade** |
+
+O código certo está no caminho morto.
+
+> **Isto é decisão do CEO, não minha:** a mensagem que chega ao cliente é dele. Ou o cartão passa a dizer "no mês do aniversário", ou o motor passa a filtrar por dia. **Recomendo filtrar por dia** — o código já existe, no arquivo aposentado.
+
+### 🔴 Uma campanha malformada de UM restaurante cala o CRM de TODOS
+
+Medido, dois restaurantes. O "Mau" com uma campanha `{ mode: "RECURRING" }` sem `weekdays`:
+
+```
+runDueCampaigns({})  →  TypeError: Cannot read properties of undefined (reading 'includes')
+```
+
+**O restaurante saudável enviou zero.** `ScheduledCampaignRunnerService.ts:297` faz `cfg.weekdays.includes(...)` sem guarda, dentro de um `.filter()` **sem `try/catch`** — antes do `catch` por campanha que existe mais adiante. O cron devolve 500 e o ciclo inteiro morre, em todo tick, até alguém achar a linha.
+
+**E a linha envenenada é criável pela porta da frente:** `api/crm/campaigns/route.ts:182` tipa `scheduleConfig?: Record<string, unknown>` e repassa **sem validação de forma nenhuma**. Com `mode: "RECURRING"`, a campanha nasce já ACTIVE.
+
+Ninguém testa isso porque **o teste do agendador mocka o próprio motor** (`CrmSchedulerBootTick.test.ts:22`). Ele prova que o relógio bate. **Não existe, em toda a bateria, um teste que chame o `runDueCampaigns` de verdade.**
+
+### 🔴 O motor "aposentado" tem porta lateral, e a trava está no botão
+
+A vitrine diz *"se alguém religar o motor legado, o CI cai"*. O teste só chama `runEnabledAutomations`. Mas `AutomationSchedulerService.runSingleAutomation:69` **não foi aposentado** — 380 linhas que enviam de verdade — e tem chamador: `api/crm/automations/run/route.ts:36`, exposto por um botão **"▶ Executar agora"** com `dryRun: false`.
+
+Pior: **`runSingleAutomation` nunca confere `isEnabled`.** A única trava contra disparar uma automação **desligada** é o atributo `disabled` do botão em React. **É o guardrail 4 invertido: o aviso está no cliente e a trava não existe no servidor.**
+
+*O que salva:* cada destinatário ainda passa pelo `ContactSafetyService` (opt-out, cooldown, teto). Ninguém recebe duas vezes.
+
+### As outras duas
+
+**O silêncio continua sem rastro no banco.** O PR #183 consertou a causa; o alarme não existe. O `reason` — horário quieto, teto atingido, sem elegíveis, e agora o estouro do `notIn` — **não é persistido em lugar nenhum**. Vive só no JSON da resposta do cron, que ninguém lê. Uma campanha muda aparece na tela como ACTIVE, sem explicação. *A exceção honrosa:* canal desconectado **grava** uma linha `BLOCKED` com o motivo escrito. É o modelo certo, e existe só nesse caso.
+
+**Mensagem duas vezes.** `ScheduledCampaignRunnerService.ts:1832` grava a execução **depois** do envio retornar sucesso. Se o processo morrer entre os dois — e o próprio código cita os *"Railway proxy timeouts (exit 56)"* — o cliente recebeu e não existe linha. No tick seguinte ele não está em nenhuma lista de proteção e **recebe de novo**. Alcance: ≤40 por lote. Frequência: não medida.
+
+### O que está VERDE, e merece ser dito
+
+- **Mensagem que sai (Meta)** — a peça mais bem feita do domínio: recusa texto livre por provedor que não declare janela, mede as 24h e devolve `BLOCKED`, não `FAILED`.
+- **Cupom** — concedido depois do envio bem-sucedido, com orçamento mensal.
+- **Isolamento entre inquilinos** — as sete rotas de campanha conferem o dono.
+
+---
+
+## CEGO — acréscimos da onda 3
+
+| # | O que ninguém sabe | O que destravaria |
+|---|---|---|
+| 19 | ⚠️ **Se os 84 modelos aprovados estão de fato LIGADOS às campanhas.** O vínculo só é escrito por um dropdown manual — nada o preenche sozinho. **Sem ele, a campanha cai em texto livre, é recusada pela janela de 24h, e cada destinatário vira `BLOCKED`: zero entrega, com tudo parecendo saudável.** É a pergunta nº 1 deste departamento | `SELECT status, "mappedCampaignType", COUNT(*) FROM meta_message_templates GROUP BY 1,2` |
+| 20 | Quantas linhas `BLOCKED` com `META_TEMPLATE_REQUIRED` existem hoje — responde a de cima num `SELECT` só | leitura do banco |
+| 21 | **Se já existe alguma campanha ACTIVE sem `weekdays`** — ou seja, se a bomba que cala o CRM de todos já está armada | `SELECT id FROM campaigns WHERE status IN ('ACTIVE','SCHEDULED') AND "scheduleConfig"->>'mode'='RECURRING' AND "scheduleConfig"->'weekdays' IS NULL` |
+| 22 | Fuso de `birthDate`: se as datas vieram como meia-noite UTC e o processo roda em `America/Sao_Paulo`, quem nasceu no dia 1 cai no mês anterior | valor de `TZ` no Railway |
+| 23 | ⚠️ **O histórico de migrations não é replayável.** `prisma migrate diff --from-migrations` falha em `20250506000000_saipos_integration`. **Não existe hoje um jeito automático de provar que o `schema.prisma` bate com o Postgres de produção** — que é exatamente a classe do defeito da comanda | um `pg_dump -s` de produção |
