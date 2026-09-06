@@ -59,6 +59,14 @@ Foi por isso que seis dias passaram sem ninguém ver.
 | **4** | Saber se algum restaurante já ligou a nota fiscal | Decide se o defeito da numeração é risco ou incêndio |
 | **5** | Um segredo que só você alcança (`DIOLI_BRAIN_KIT_TOKEN`) | **Amanhã às 05h56 trava todo trabalho da casa** — inclusive o conserto da comanda |
 
+### Por que ninguém viu, e é a melhor lição do dia
+
+O botão **"testar impressora"** do painel montava um texto simples, **sem os comandos que a impressora de verdade recebe**. Ou seja: o único instrumento que o lojista tinha para conferir se a impressão funcionava era exatamente o único caso que **não passava pelo defeito**. Ele testava a si mesmo.
+
+A mesma coisa aconteceu do lado dos testes automáticos, por outro caminho.
+
+**Instrumento que não percorre o caminho real não aprova nada — ele impede a pergunta.**
+
 ### E uma coisa que eu preciso dizer sem enfeite
 
 Nenhum dos seis defeitos deste dia foi encontrado por um teste. **Todos foram encontrados quando alguém foi olhar.** A suíte tem 7.931 verificações verdes; o caminho do dinheiro tem 293 verdes; o CRM tem 1.301 verdes. Os defeitos passaram por baixo de todas elas.
@@ -74,11 +82,11 @@ O que muda isso não é escrever mais testes — é escrever testes que toquem o
 | 1 | Pedido e checkout | 🔴 **VERMELHO** | 1 |
 | 2 | Cardápio, cupom e link do cliente | 🔴 **VERMELHO** | 4 |
 | 3 | WhatsApp, agente e CRM | 🔴 **VERMELHO** | 3 |
-| 4 | SDR e prospecção | — | 4 (em curso) |
+| 4 | SDR e prospecção | 🔴 **VERMELHO** | 4 |
 | 5 | Cobrança, assinatura e billing | 🔴 **VERMELHO** | 4 |
 | 6 | Site institucional e as portas de contato | 🟡 **AMARELO** | 1 (parcial) |
 | 7 | Painel e autenticação | 🔴 **VERMELHO** | 2 |
-| 8 | Banco, migrações e integridade | — | 4 (em curso) |
+| 8 | Banco, migrações e integridade | 🔴 **VERMELHO** | 4 |
 | 9 | Infra e publicação | 🔴 **VERMELHO** | 1 |
 | 10 | Esteira de testes e CI | 🔴 **VERMELHO** | 2 |
 
@@ -557,3 +565,131 @@ A tabela de preço tem **fonte única** e a página pública lê a mesma funçã
 | 28 | Se existe hoje algum lojista inadimplente com a loja no ar | `SELECT status, count(*) FROM plan_subscriptions GROUP BY 1` |
 | 29 | **O comportamento real do Mercado Pago na recusa de cartão.** Todo o nosso caminho de inadimplência depende de um aviso dele, e só lemos o nosso lado | painel do MP |
 | 30 | O caminho do QR/mesa e do WhatsApp têm **o mesmo `?? 0`** e a mesma falta de escopo — lido no código, **não dirigido contra banco**. Provável, não provado | rodar as sondas naquele caminho |
+
+---
+
+# Onda 4 (fechamento, 05h30 UTC) — SDR, banco e migrações
+
+## ⭐ O achado que explica o dia inteiro
+
+**O botão "testar impressora" testava exatamente o único caso que não passava pelo defeito.**
+
+`api/integracoes/impressao/teste/route.ts:30-38` monta um corpo de **texto puro**, sem nenhum código de controle ESC/POS — **zero bytes nulos**. O único instrumento que o lojista tinha para conferir o cano provava que o cano estava bom, *justamente porque não percorria o defeito*.
+
+Dois instrumentos falharam juntos, e pelo mesmo motivo:
+
+| Instrumento | Por que aprovou |
+|---|---|
+| A suíte | `prisma` é dublê, e um `vi.fn()` aceita o byte que o Postgres recusa |
+| O botão do lojista | monta texto puro, sem os comandos da impressora |
+
+**Instrumento que não percorre o caminho real não aprova nada — ele impede a pergunta.**
+
+E há uma terceira camada: os **cinco** chamadores do enfileiramento (`OrderService.ts:178`, `confirmCardPayment.ts:102`, `orders/manual/route.ts:432`, `finalize/route.ts:916`, `mercadopago/webhook/route.ts:97`) são todos `.catch(e => console…)`. O erro existia, gritava, e caía num log que ninguém lê.
+
+---
+
+## Departamento 8 — Banco, migrações e integridade · 🔴 VERMELHO
+
+Medido contra **PostgreSQL 16.13 real**, com o banco construído pela própria cadeia de migrations.
+
+### 🔴 A cadeia de migrations não reconstrói o banco do zero — e o conserto é uma linha
+
+Banco vazio + `prisma migrate deploy` → **falha** em `20250506000000_saipos_integration` com `relation "orders" does not exist`.
+
+**A data é 2025.** Ela ordena **antes** de `20260314000000_initial_schema`. Renomeando só ela para `20260506000000`, **as 208 migrations aplicam limpas.**
+
+**Consequência hoje:** não existe recuperação de desastre, não existe staging, não existe segunda região. E o CI já desistiu por escrito: `jornadas-p0.yml:74-93` usa `prisma db push --accept-data-loss` e `psql` à mão nas duas últimas migrations, em vez da cadeia.
+
+**Nenhum portão do repositório compara o `schema.prisma` com o banco.** Foi por esse buraco que o `0x00` passou.
+
+### 🔴 Uma migration quebra a atomicidade que o script de deploy ASSUME
+
+`scripts/migrate-deploy.sh:13-16` afirma por escrito que *"ALL our migrations are additive single statements wrapped in a transaction"* — e é essa premissa que autoriza ele a marcar uma migration falha como revertida e tentar de novo, seis vezes.
+
+`20260825180000_sala_de_vendas_e_sdrs` **não é atômica**: abre transação na linha 98, fecha na 174, e ainda traz **540 linhas de DDL depois do `COMMIT`** — fora de qualquer transação. Provado contra Postgres real: após a falha, a tabela criada antes do `COMMIT` **sobreviveu**.
+
+E é a pior migration possível para isso: ela recria o enum do funil. Se morrer depois da linha 174, o enum já foi trocado, o script marca "revertida", roda de novo, o `CASE` não tem ramo para o valor novo, devolve NULL numa coluna `NOT NULL` — e **falha para sempre**. Seis tentativas, `exit 1`, deploy morto.
+
+### 🔴 O servidor sobe mesmo com a migration falhando
+
+`scripts/start-production.sh` tem só `set -u`. O passo do `migrate deploy` não tem `set -e`, nem `||`, nem `if`. **Falhou, segue para o `next start`** e serve tráfego contra um banco em estado de migration incompleta. É o guardrail 2 invertido: o portão aprova por omissão.
+
+### 🔴 A numeração da NFC-e: corrida provada, e sem rede embaixo
+
+Duas sessões concorrentes leram `proximoNumero = 1`; **as duas emitiram a nota nº 1**, e o contador terminou em 2 em vez de 3. E `fiscal_documents` **não tem índice único** em `(restaurantId, serie, numero)` — provado gravando duas notas série 1 nº 77.
+
+Vinte metros ao lado, `order-number.ts:27` faz certo, com `{ increment: 1 }` atômico **e** índice único de guarda. **O molde correto está no mesmo repositório, a trinta linhas de distância.**
+
+### 🔴 Apagar um cliente pode responder ao cliente errado
+
+Dois defeitos que se somam:
+
+1. `conversations.customerId` é `ON DELETE RESTRICT` no banco e `SetNull` no schema. Provado: `customer.delete()` com conversa vinculada **explode**. Dois caminhos contornam à mão; **três engolem o erro**.
+2. `MessageService.ts:120` filtra por `customerId: conv.customerId ?? undefined` — e o Prisma **descarta filtro `undefined`**. Com `customerId` nulo, o `findFirst ... orderBy updatedAt desc` devolve **a identidade de outro cliente**.
+
+Junte com a órfã provada em `customer_channel_identities` (sem chave estrangeira, "soft ref") e o resultado é: **resposta manual do Instagram indo para a caixa de entrada de terceiro.**
+
+### ✅ E uma confirmação independente do PR #189
+
+O `cerebro` auditou o conserto da comanda sem eu pedir e concluiu: **é o certo.** Confirmou que `api/print-agent/poll/route.ts` é o **único** leitor de `print_jobs.body` no repositório inteiro, e que a cura não apaga o parâmetro do comando ESC/POS — que era a armadilha da primeira tentativa. **Só falta chegar em produção.**
+
+### O que está verde no banco
+
+A **purga de restaurante passou no teste mais duro possível**: comparada contra o banco real, cobre 82 das 83 tabelas com `restaurantId`, e a 83ª está nomeada e justificada. Nada sobrando. A numeração de pedido e a idempotência do checkout também estão corretas.
+
+---
+
+## Departamento 4 — SDR e prospecção · 🔴 VERMELHO
+
+### 🔴 O robô responde quem mandou parar
+
+Medido contra Postgres real: mandei **"PARE"**. O retorno foi `RECONHECIDO_POR_TELEFONE`, o `optOutAt` continuou **nulo**, e o fluxo seguiu para o agente responder.
+
+O detector aceita quatro palavras — `stop`, `sair`, `parar`, `descadastrar`. **Recusou 24 de 30 frases naturais**, entre elas: *PARE · para · chega · não quero · me tira dessa lista · não me mande mais mensagens · não tenho interesse · me exclui · cancela · não perturbe*.
+
+E o código **justifica** a estreiteza dizendo que *"o rodapé com 'responda SAIR' vai junto em toda campanha"* — **esse rodapé só existe no template do CRM.** O SDR nunca ensina a palavra e não aceita a que a pessoa usa.
+
+Hoje isso é uma linha `PENDENTE`, porque o envio está desligado. **No dia em que ligar, é o número queimando.**
+
+### 🔴 A trava "infalsificável" é falsificada pelo seu único chamador
+
+`FoocciSalesChannel.ts:236-244` explica que a decisão do portão é o primeiro parâmetro *"não uma checagem que alguém pode esquecer de fazer"*, e que quem tentar burlar *"precisa fabricar uma decisão aprovada, e isso é visível em revisão de código"*.
+
+Em `entrega.ts:143-146` a decisão **é fabricada**, à mão, com comentário. Não é má-fé — o autor confere opt-out e telefone logo acima. Mas o que **não** é conferido no instante de sair é janela de horário, teto de tentativas, descanso de 48h e base legal. E `avaliarContatoDeLead`, que confere tudo isso, **tem zero chamadores em produção**.
+
+O teste que guardava a propriedade é **uma regex sobre o texto do arquivo**: fica verde enquanto a assinatura existir, **independentemente do que os chamadores passem**.
+
+### 🔴 A prospecção não existe — existe a tela dela
+
+`materializarLead` **não tem chamador**. A rota não tem ação de abordar. **Não há template de primeira mensagem em lugar nenhum.** O motor de cadência inteiro (`inscreverEmCadencia`, `avancarCadencia`, `passosVencidos`) tem zero chamadores **e zero testes**.
+
+**Ligar `FOOCCI_SDR_SEND_ENABLED` hoje não abordaria ninguém.** O código é claríssimo sobre isso em três cabeçalhos — e ainda assim é o tipo de coisa que sobe como *"prospecção entregue, falta ligar a chave"*.
+
+E o teto que deveria segurar isso **conta pessoas, não mensagens**: medido, 5 mensagens à mesma pessoa consumiram **1 de 3**.
+
+### 🔴 Vinte testes nunca rodaram — e três ficam verdes num banco SEM a trava
+
+`SALA_VENDAS_TEST_DB` **não existe em lugar nenhum do repositório**. O especialista forçou os dois arquivos a rodar:
+
+- `responsavel.corrida` (a corrida entre dois SDRs) **passa** — nunca soubemos.
+- `identidadeNoBanco.rls` **reprova 4 de 11** num banco novo, porque conta linhas que ele não cria. **Ninguém conseguiria ligá-lo no CI sem reescrever.**
+
+E o pior: num banco onde `relrowsecurity = 'f'` — **RLS completamente ausente** — três asserções ficaram **verdes**, entre elas *"sem identidade declarada, NADA é visível"*. Bastou **inserir uma linha** para as três virarem vermelhas.
+
+O cabeçalho do próprio arquivo diz que pular calado *"faria a suíte verde afirmar que a autorização de banco foi verificada quando ninguém a verificou"*. **Ele descreve a si mesmo.**
+
+---
+
+## CEGO — fechamento da onda 4
+
+| # | O que ninguém sabe | O que destravaria |
+|---|---|---|
+| 31 | ⚠️ **Se o Postgres de produção é igual ao que as migrations constroem.** Como a cadeia não roda do zero, o banco de produção nasceu de um `db push` em alguma era e recebeu migrations por cima. **Toda a "deriva" medida é contra o banco-de-migrations; se produção for outra coisa, os números mudam** | um `pg_dump -s` (só esquema, sem dado) |
+| 32 | Se `conversations_customerId_fkey` em produção é `RESTRICT` ou `SET NULL` — é a diferença entre "apagar cliente falha" e "funciona" | uma consulta de uma linha |
+| 33 | Se produção já tem **duas NFC-e com o mesmo número**, ou identidades de canal órfãs | `SELECT` de contagem |
+| 34 | Quantas vezes o `migrate-deploy.sh` já rodou a recuperação automática — diz se o laço de deploy já aconteceu e ninguém contou | `_prisma_migrations` |
+| 35 | **Nunca vimos uma mensagem do SDR sair.** Tudo foi medido com o envio desligado | as variáveis do Railway |
+| 36 | Se a RLS está de pé em produção. O banco de teste foi criado por `db push`, onde as políticas não entram. **Se a migration não estiver aplicada lá, os 4 testes que reprovaram aqui reprovariam lá — e como o arquivo está pulado, ninguém saberia** | a mesma consulta de esquema |
+
+> **Sobre o `pg_dump`:** o especialista registrou que **não** puxou credencial de produção por conta própria — existe acesso via Railway e o dump é leitura pura, mas ampliar o alcance da sessão é decisão de quem despacha, não dele. **Concordo, e endosso: o pedido sobe, a ação não.**
