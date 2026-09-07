@@ -15,6 +15,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getTenantContext } from "@/lib/tenant";
 import { CustomerMetricsSyncService } from "@/services/crm/CustomerMetricsSyncService";
+import { enfileirarComandaDoPagamento } from "@/services/print/comandaDoPagamento";
 
 export async function PATCH(
   req: NextRequest,
@@ -74,6 +75,15 @@ export async function PATCH(
   } else {
     await paymentUpdate;
   }
+
+  // A saída manual do Stone também não mandava imprimir. O lojista puxava esta
+  // alavanca justamente porque o webhook não chegou — e continuava sem papel.
+  enfileirarComandaDoPagamento({
+    restaurantId,
+    orderId,
+    statusDoPedido: order.status,
+    origem:         "stone mark-paid",
+  });
 
   // Idempotent coupon usage count
   if (order.promotionId && !order.couponUsageCountedAt) {

@@ -1,6 +1,32 @@
 # Pendências — o que está aberto
 
-> Última atualização: 05/09/2026.
+> Última atualização: 07/09/2026.
+
+## ⚠️ 07/09/2026 — Os cinco caminhos voltaram a imprimir; a NFC-e deles ainda não sai
+
+**Consertado hoje** (PR dos cinco caminhos): stone/webhook, stone/mark-paid,
+mercadopago/mark-paid, confirm-manual-payment e o pedido por texto no WhatsApp
+confirmavam o pedido e nunca enfileiravam a comanda. Agora enfileiram, e um
+censo no código (`CensoDosCaminhosQueConfirmam.test.ts`) reprova quem criar o
+sexto caminho mudo.
+
+**O que ficou aberto, e por escolha:** esses mesmos cinco caminhos também não
+chamam `FiscalEmissionService.maybeEmitForOrder`. É o mesmo defeito — pedido
+confirmado sem a nota — e não foi consertado junto **porque a numeração da NFC-e
+colide sob concorrência**: no raio-x de 06/09, o número 104 saiu nove vezes em 20
+reservas simultâneas, e não existe índice único no banco.
+
+**Por que esperar é o certo aqui:** ligar a emissão em cinco portas novas antes
+de consertar a numeração cria um problema fiscal — nota duplicada, difícil de
+desfazer — para resolver um problema fiscal. É o guardrail 5 (proteção que
+dispara não pode ser mais destrutiva que o problema que evita).
+
+**A ordem, então:** consertar a numeração (índice único + reserva atômica) e, no
+mesmo PR ou logo depois, ligar a emissão nos cinco. Enquanto isso não acontece,
+restaurante com NFC-e ligada que receba pagamento por esses cinco caminhos fica
+sem nota emitida automaticamente — a emissão manual por
+`api/orders/[id]/fiscal` continua funcionando.
+
 
 ## ⛔ 05/09/2026 — A cadeia de migrations NÃO reconstrói o banco do zero
 

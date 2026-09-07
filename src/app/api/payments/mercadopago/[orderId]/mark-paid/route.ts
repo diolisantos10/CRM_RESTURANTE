@@ -11,6 +11,7 @@ import { prisma } from "@/lib/prisma";
 import { getTenantContext } from "@/lib/tenant";
 import { CustomerMetricsSyncService } from "@/services/crm/CustomerMetricsSyncService";
 import { CustomerCouponService } from "@/services/crm/CustomerCouponService";
+import { enfileirarComandaDoPagamento } from "@/services/print/comandaDoPagamento";
 
 export async function PATCH(
   req: NextRequest,
@@ -48,6 +49,14 @@ export async function PATCH(
       data: { status: "CONFIRMED" },
     }),
   ]);
+
+  // Mesma falha da saída manual do Stone: confirma o pedido e não manda imprimir.
+  enfileirarComandaDoPagamento({
+    restaurantId:   ctx.restaurantId,
+    orderId,
+    statusDoPedido: order.status,
+    origem:         "mp mark-paid",
+  });
 
   // Idempotent coupon usage count
   if (order.promotionId && !order.couponUsageCountedAt) {
