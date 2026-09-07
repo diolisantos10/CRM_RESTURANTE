@@ -84,40 +84,6 @@ export const FRESCOR_AVISO_DIAS = 7;
 export const FRESCOR_REPROVA_DIAS = 14;
 
 /**
- * ⚠️ PONTE COM PRAZO — aberta em 06/09/2026, e ela mesma vence.
- *
- * A CAUSA REAL, medida e não suposta: `.github/workflows/kit-espelho.yml` **não
- * conclui desde 24/08/2026** — treze dias de vermelho diário que ninguém viu. Ele
- * faz `exit 1` sem o segredo `DIOLI_BRAIN_KIT_TOKEN` (linhas 95 e 106 do
- * workflow). Sem o robô, o carimbo `verificadoEm` congela; com o carimbo
- * congelado, este portão passa a REPROVAR todo PR da casa às 05h56 de 07/09 —
- * inclusive o merge de consertos que não têm nada a ver com doutrina.
- *
- * Isso foi levantado no raio-x do produto (06/09/2026) com o relógio deslocado em
- * onze pontos: em `+2 dias` já sai `ESPELHO_VELHO — não é conferido há 14.9 dias`.
- *
- * ENQUANTO A PONTE VALE, o espelho velho vira **AVISO** em vez de REPROVADO. O
- * grito continua em toda execução do CI; o que sai é a capacidade de travar a
- * casa por um segredo que ninguém do time de dentro alcança.
- *
- * ⭐ POR QUE A PONTE TEM PRAZO PRÓPRIO, e este é o ponto: ponte sem prazo é o
- * defeito que ela está tapando, com outro nome. Depois de `PONTE_ATE` o portão
- * volta a reprovar sozinho, sem ninguém precisar lembrar. Se o segredo não tiver
- * sido reposto até lá, a casa trava — e aí trava sabendo por quê.
- *
- * O PASSO EXATO PARA FECHAR A PONTE, e ele é do CEO porque só ele tem o segredo:
- * criar um token de leitura do repositório `dioli-brain-kit` e salvá-lo nos
- * segredos deste repositório com o nome `DIOLI_BRAIN_KIT_TOKEN`. Feito isso, o
- * robô volta a carimbar sozinho todo dia e esta ponte pode ser apagada.
- */
-export const PONTE_ATE = new Date("2026-09-20T00:00:00.000Z");
-
-/** A ponte está valendo? Falso a partir de `PONTE_ATE` — o portão volta a reprovar. */
-export function pontePorFaltaDoSegredoEstaValendo(agora: Date): boolean {
-  return agora.getTime() < PONTE_ATE.getTime();
-}
-
-/**
  * Piso de arquivos no espelho.
  *
  * O TRAP QUE ISTO FECHA: se o clone do kit falhar de um jeito silencioso (token
@@ -562,20 +528,12 @@ export function conferirEspelho(entrada: EntradaDaConferencia): ResultadoDaConfe
   }
 
   const frescor = conferirFrescor(manifesto.verificadoEm, entrada.agora);
-  // A ponte de 06/09 (ver PONTE_ATE) rebaixa espelho VENCIDO de reprovação para
-  // aviso, porque a causa é um segredo que o time de dentro não alcança. Ela
-  // vence sozinha; depois disso o espelho velho volta a reprovar.
-  const pontePega = frescor.estado === "VENCIDO" && pontePorFaltaDoSegredoEstaValendo(entrada.agora);
-  if (frescor.estado === "VENCIDO" && !pontePega) {
+  if (frescor.estado === "VENCIDO") {
     problemas.push({ tipo: "ESPELHO_VELHO", detalhe: frescor.mensagem });
   }
 
   const veredito: ResultadoDaConferencia["veredito"] =
-    problemas.length > 0
-      ? "REPROVADO"
-      : frescor.estado === "AVISO" || pontePega
-        ? "AVISO"
-        : "APROVADO";
+    problemas.length > 0 ? "REPROVADO" : frescor.estado === "AVISO" ? "AVISO" : "APROVADO";
 
   return {
     veredito,

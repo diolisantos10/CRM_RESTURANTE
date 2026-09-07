@@ -52,6 +52,53 @@ inteira dentro do Foocci, a resposta também cabe.
 
 ## Abertas
 
+## O portão do espelho da doutrina reprova o CI da casa inteira. Isso é intencional?
+
+**Quem pergunta:** Diretor do Foocci · 07/09/2026
+
+**O fato, medido.** `kitEspelho.test.ts` reprova quando o espelho da doutrina passa
+de 14 dias sem conferência. Às 05:56 de 07/09 ele venceu e **reprovou todo PR do
+repositório** — inclusive merges que não tocam em doutrina nenhuma. Outra sessão
+resolveu em #199 **atualizando os documentos espelhados**, não o portão: o relógio
+zerou e vence de novo por volta de **21/09**.
+
+**A causa não está no Foocci.** O robô que carimba o espelho depende do segredo
+`DIOLI_BRAIN_KIT_TOKEN`, que não existe neste repositório. Sem ele, o espelho
+envelhece sozinho e o portão volta a reprovar a casa inteira, em ciclos de 14 dias,
+para sempre. Criar o segredo é ato do CEO, e já foi pedido a ele.
+
+**O que eu fiz e desfiz, com honestidade.** Eu tinha construído uma ponte — espelho
+vencido vira AVISO até 20/09 — no PR #192. **Retirei.** Com o espelho atualizado
+pelo #199 a ponte não defende de nada e o único efeito que sobra é afrouxar um
+portão de doutrina por treze dias. Guardrail 3: agente não muda a própria regra.
+
+**A pergunta, em uma linha:** um portão de *frescor de doutrina* deve reprovar o
+**CI inteiro do produto**, ou deve reprovar apenas o trabalho de doutrina e gritar
+alto nos demais?
+
+**Minha recomendação, e as duas saídas:**
+
+1. **O portão passa a distinguir** — reprova PR que toca `docs/kit/` ou os
+   serviços de doutrina; nos demais, avisa em vermelho no log sem travar o merge.
+   *Custa:* uma mudança no portão, que é doutrina e por isso não é minha.
+   *Destrava:* a casa para de parar por um relógio que ninguém consegue dar corda.
+   *Arrisca:* espelho velho passa a ser mais fácil de ignorar.
+2. **O portão fica como está** e o segredo vira pré-requisito de operação —
+   sem `DIOLI_BRAIN_KIT_TOKEN`, todo repositório que espelha a doutrina para a
+   cada 14 dias, e isso é aceito de propósito.
+   *Custa:* nada de código; custa a disciplina do segredo em cada projeto.
+   *Destrava:* mantém o rigor.
+   *Arrisca:* o próximo travamento é dia 21/09, e ele para tudo de novo.
+
+**Eu recomendo a 1**, com uma ressalva: a 2 só é honesta se alguém for responsável
+por criar o segredo em todo projeto novo — senão ela não é uma escolha, é a espera
+do próximo incidente com outro nome.
+
+**Enquanto não há resposta:** sigo trabalhando; nada meu depende disto. O que
+depende é o dia 21/09.
+
+---
+
 ## PROPOSTA — problema nunca sobe sozinho: no mínimo duas saídas, sempre
 
 **Aberta em** 2026-08-14 · **bloqueia:** nada. Já está valendo no Foocci
