@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { MensagemNaTela, JanelaDe24h } from "@/services/salaDeVendas/conversa";
 import type { FatorDoScore } from "@/services/salaDeVendas/score";
+import type { EventoDaFicha } from "@/services/salaDeVendas/linhaDoTempo";
 
 export const ROTA_CONVERSA = "/api/admin/sala-de-vendas/conversa";
 export const ROTA_FICHA = "/api/admin/sala-de-vendas/ficha";
@@ -66,6 +67,12 @@ export interface DadosDaConversa {
   lead: LeadNaConversa;
   mensagens: MensagemNaTela[];
   fatoresDoScore: FatorDoScore[];
+  /**
+   * O histórico do lead FORA das mensagens — captura, movimento no funil, quem
+   * assumiu, notas. Mais recente primeiro, já em português e com o autor
+   * resolvido pelo servidor.
+   */
+  linhaDoTempo: EventoDaFicha[];
   janela: JanelaDe24h;
   podeEscrever: boolean;
   /**
@@ -214,6 +221,19 @@ export function desde(iso: string | Date | null): string | null {
   const h = Math.floor(min / 60);
   if (h < 24) return `há ${h} h`;
   return `há ${Math.floor(h / 24)} d`;
+}
+
+/**
+ * Dia e hora curtos, para a linha do tempo.
+ *
+ * Sem o dia, "14:32" numa lista que atravessa meses é pior que nada: parece hoje.
+ */
+export function dataHoraCurta(iso: string | Date): string {
+  const d = typeof iso === "string" ? new Date(iso) : iso;
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("pt-BR", {
+    day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+  });
 }
 
 /** Hora curta para a bolha da conversa. */
