@@ -38,7 +38,12 @@
  */
 
 import { metaGraphUrl } from "@/services/whatsapp/metaFlag";
-import { buildMetaTextPayload, toMetaRecipient, maskGraphResponse } from "@/services/whatsapp/providers/metaPayload";
+import {
+  buildMetaTextPayload,
+  buildMetaTemplatePayload,
+  toMetaRecipient,
+  maskGraphResponse,
+} from "@/services/whatsapp/providers/metaPayload";
 import type { LeadSafetyDecision } from "./LeadContactSafety";
 
 // ─── Identidade do canal ────────────────────────────────────────────────────────
@@ -306,11 +311,24 @@ export interface EnvioDeVendasResult {
  * A decisão vem primeiro porque é a única que fala do DESTINATÁRIO; as outras
  * falam de nós.
  */
-export async function enviarTextoDeVendas(
+type CanalPronto = { phoneNumberId: string; token: string; recipient: string };
+
+/**
+ * As quatro recusas que valem para QUALQUER envio, numa função só.
+ *
+ * Elas eram inline no envio de texto. Ao nascer o envio por modelo aprovado, o
+ * caminho óbvio era copiar — e cópia de portão é portão que diverge no primeiro
+ * conserto. Aqui uma correção vale para os dois, por construção.
+ *
+ * A ordem é a de antes e não é arbitrária: decisão → autorização → configuração
+ * → formato. A decisão vem primeiro porque é a única que fala do DESTINATÁRIO;
+ * as outras falam de nós. As mensagens de erro são as mesmas, palavra por
+ * palavra: quem lê log de produção não deve notar que este arquivo mudou.
+ */
+function conferirAntesDeEnviar(
   decisao: LeadSafetyDecision,
   toPhone: string,
-  text: string,
-): Promise<EnvioDeVendasResult> {
+): { ok: true; canal: CanalPronto } | { ok: false; error: string } {
   if (!decisao.sendable) {
     return { ok: false, error: `portão do lead reprovou: ${decisao.reason ?? "sem motivo declarado"}` };
   }
@@ -336,11 +354,16 @@ export async function enviarTextoDeVendas(
   const recipient = toMetaRecipient(toPhone);
   if (!recipient) return { ok: false, error: "telefone inválido" };
 
+  return { ok: true, canal: { phoneNumberId, token, recipient } };
+}
+
+/** Faz o POST na Graph e traduz a resposta. O corpo já vem pronto de quem chama. */
+async function postarNaMeta(canal: CanalPronto, corpo: unknown): Promise<EnvioDeVendasResult> {
   try {
-    const res = await fetch(metaGraphUrl(`${phoneNumberId}/messages`), {
+    const res = await fetch(metaGraphUrl(`${canal.phoneNumberId}/messages`), {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify(buildMetaTextPayload(recipient, text)),
+      headers: { Authorization: `Bearer ${canal.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(corpo),
     });
     if (!res.ok) {
       const json: unknown = await res.json().catch(() => ({}));
@@ -351,4 +374,78 @@ export async function enviarTextoDeVendas(
   } catch (e) {
     return { ok: false, error: maskGraphResponse(e instanceof Error ? e.message : String(e)) };
   }
+}
+
+export async function enviarTextoDeVendas(
+  decisao: LeadSafetyDecision,
+  toPhone: string,
+  text: string,
+): Promise<EnvioDeVendasResult> {
+  const conferido = conferirAntesDeEnviar(decisao, toPhone);
+  if (!conferido.ok) return conferido;
+
+  return postarNaMeta(conferido.canal, buildMetaTextPayload(conferido.canal.recipient, text));
+}
+
+// ─── O MODELO APROVADO, que é o único jeito de falar com quem nunca falou ─────
+
+/**
+ * O modelo de abordagem aprovado pela Meta, lido do ambiente.
+ *
+ * ⚠️ ESTAS DUAS VARIÁVEIS EXISTEM NA PRODUÇÃO DESDE ANTES DESTE ARQUIVO, E
+ * NINGUÉM AS LIA. Medido em 07/09/2026: `FOOCCI_SDR_MODELO_ABORDAGEM` e
+ * `FOOCCI_SDR_MODELO_IDIOMA` estão configuradas no Railway e não apareciam em
+ * NENHUM arquivo do repositório — nem código, nem teste, nem documento. Quem as
+ * salvou tinha toda a razão de acreditar que tinha configurado o texto aprovado.
+ * Não tinha configurado nada, e não havia erro nem log dizendo isso.
+ *
+ * `null` quando o nome não está no ambiente. Ausência de configuração é
+ * recusa, nunca "manda do jeito que der" (guardrail 1).
+ */
+export function modeloDeAbordagem(): { nome: string; idioma: string } | null {
+  const nome = (process.env.FOOCCI_SDR_MODELO_ABORDAGEM ?? "").trim();
+  if (!nome) return null;
+  const idioma = (process.env.FOOCCI_SDR_MODELO_IDIOMA ?? "").trim() || "pt_BR";
+  return { nome, idioma };
+}
+
+/**
+ * Envia o MODELO APROVADO pelo número de vendas — o único envio válido para
+ * quem nunca escreveu para a gente.
+ *
+ * ── POR QUE ESTA FUNÇÃO PRECISOU EXISTIR ────────────────────────────────────
+ * O canal de vendas só sabia mandar `type: "text"`. Texto livre só é entregue
+ * DENTRO da janela de 24 horas depois de a pessoa escrever. Abordagem fria é,
+ * por definição, fora dela: o construtor de modelo já existia na casa
+ * (`metaPayload.ts:60`) e este canal nunca o importava. Era a peça que faltava
+ * entre "a lista está carregada" e "a primeira mensagem sai" — e mandar texto
+ * livre para contato frio é o que derruba o número no WhatsApp oficial.
+ *
+ * ── O QUE ELA NÃO FAZ ───────────────────────────────────────────────────────
+ * Não escolhe quem recebe, não monta fila, não decide hora. Recebe a decisão do
+ * portão pronta, como a irmã dela, e o nome do modelo vem do ambiente — não do
+ * código: o texto aprovado é da Meta e do dono da marca, não deste arquivo.
+ */
+export async function enviarModeloDeVendas(
+  decisao: LeadSafetyDecision,
+  toPhone: string,
+  parametros: string[] = [],
+): Promise<EnvioDeVendasResult> {
+  const conferido = conferirAntesDeEnviar(decisao, toPhone);
+  if (!conferido.ok) return conferido;
+
+  const modelo = modeloDeAbordagem();
+  if (!modelo) {
+    return {
+      ok: false,
+      error:
+        "modelo de abordagem não configurado (FOOCCI_SDR_MODELO_ABORDAGEM) — " +
+        "sem o nome do modelo aprovado não há como abordar quem nunca escreveu",
+    };
+  }
+
+  return postarNaMeta(
+    conferido.canal,
+    buildMetaTemplatePayload(conferido.canal.recipient, modelo.nome, modelo.idioma, parametros),
+  );
 }
