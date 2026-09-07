@@ -55,6 +55,7 @@ interface Performance {
 
 interface Contato {
   id: string; nome: string; codigo: string | null; whatsapp: string; whatsappLink: string | null;
+  pediuSilencio: boolean;
   restaurante: string | null; cidade: string | null; tipo: string | null; desafio: string | null;
   stage: FoocciLeadStage; stageChangedAt: string; stageChangedBy: string | null;
   origemRotulo: string; canal: string; utmCampaign: string | null;
@@ -802,10 +803,23 @@ function GavetaContato({ id, onFechar, onMudou }: { id: string; onFechar: () => 
                 </span>
               </div>
               <dl className="mt-3 grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-2">
+                {/* Quem pediu silêncio não vira link clicável — e o motivo
+                    aparece ao lado do número, não numa nota de rodapé. Sem isto
+                    o vendedor abria o dossiê de quem mandou "PARE", via o número
+                    em laranja, clicava, e o WhatsApp abria a conversa. */}
                 <Linha rotulo="WhatsApp" valor={
-                  dossie.whatsappLink
-                    ? <a href={dossie.whatsappLink} target="_blank" rel="noopener noreferrer" className="font-medium text-brand-400 hover:underline">{dossie.whatsapp}</a>
-                    : <span className="text-gray-300">{dossie.whatsapp}</span>
+                  dossie.pediuSilencio
+                    ? (
+                      <span className="inline-flex flex-wrap items-center gap-2">
+                        <span className="text-gray-300">{dossie.whatsapp}</span>
+                        <span className="rounded-lg border border-amber-900/60 bg-amber-950/40 px-2 py-0.5 text-xs font-medium text-amber-200">
+                          pediu silêncio — não contate
+                        </span>
+                      </span>
+                    )
+                    : dossie.whatsappLink
+                      ? <a href={dossie.whatsappLink} target="_blank" rel="noopener noreferrer" className="font-medium text-brand-400 hover:underline">{dossie.whatsapp}</a>
+                      : <span className="text-gray-300">{dossie.whatsapp}</span>
                 } />
                 <Linha rotulo="Restaurante" valor={dossie.restaurante ?? "—"} />
                 <Linha rotulo="Cidade" valor={dossie.cidade ?? "—"} />
