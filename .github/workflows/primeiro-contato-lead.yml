@@ -1,0 +1,88 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# PRIMEIRO CONTATO — o gatilho, à mão.
+#
+# Duas ações, e a diferença entre elas é o ponto:
+#
+#   · `conferir` (padrão) → GET. **Não fala com ninguém.** Mostra quem SERIA
+#     abordado agora e por que os outros não. Com `simular: true`, mostra quem
+#     estaria liberado se `FOOCCI_SDR_SEND_ENABLED` estivesse ligada — útil
+#     antes da estreia, e ainda assim sem escrever nada;
+#   · `abordar` → POST. Roda de verdade. Só faz alguma coisa com as três chaves
+#     ligadas (envio do SDR, primeiro contato, e modelo aprovado declarado).
+#     Com qualquer uma desligada, devolve a fila e o motivo, e nada sai.
+#
+# ⚠️ SEM AGENDAMENTO, DE PROPÓSITO. `workflow_dispatch` só. Pôr um `schedule`
+# aqui é o ato que transforma isto num robô que aborda gente sozinho, e esse ato
+# é do CEO — não de quem escreveu o arquivo.
+#
+# Usa CRON_SECRET, nunca ADMIN_SECRET.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Primeiro contato do lead
+
+on:
+  workflow_dispatch:
+    inputs:
+      acao:
+        description: "conferir (só lê) ou abordar (roda de verdade)"
+        type: choice
+        options: ["conferir", "abordar"]
+        default: "conferir"
+      simular:
+        description: "só em 'conferir': finge que o canal está ligado, para ver quem passaria"
+        type: boolean
+        default: false
+
+jobs:
+  primeiro-contato:
+    name: "Primeiro contato — ${{ inputs.acao }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Montar a URL
+        id: params
+        run: |
+          BASE_URL="${{ secrets.FOOCCI_BASE_URL }}"
+          if [[ -z "$BASE_URL" ]]; then BASE_URL="${{ secrets.QUALITY_AUDIT_URL }}"; fi
+          BASE_URL="${BASE_URL%/}"
+          URL="${BASE_URL}/api/cron/sala-de-vendas/primeiro-contato"
+          if [[ "${{ inputs.acao }}" == "conferir" && "${{ inputs.simular }}" == "true" ]]; then
+            URL="${URL}?simular=1"
+          fi
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+          if [[ "${{ inputs.acao }}" == "abordar" ]]; then
+            echo "metodo=POST" >> "$GITHUB_OUTPUT"
+          else
+            echo "metodo=GET" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Chamar o gatilho
+        env:
+          ENDPOINT_URL: ${{ steps.params.outputs.url }}
+          METODO: ${{ steps.params.outputs.metodo }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          echo "→ $METODO $ENDPOINT_URL"
+
+          set +e
+          curl --connect-timeout 20 --max-time 180 -sS \
+            -X "$METODO" "$ENDPOINT_URL" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -o /tmp/resposta.json \
+            -w "%{http_code}" > /tmp/status.txt
+          set -e
+
+          HTTP=$(cat /tmp/status.txt 2>/dev/null || echo "000")
+
+          # Só resumo seguro. O corpo não carrega segredo — o estado das chaves
+          # é presença (true/false), nunca valor.
+          echo "──────────────── HTTP $HTTP ────────────────"
+          jq -r '.chaves // {}' /tmp/resposta.json 2>/dev/null || true
+          jq -r '"liberados: \(.fila.liberados | length // 0)  ·  barrados: \(.fila.barrados | length // 0)  ·  motivo: \(.fila.motivoDaFilaVazia // "-")"' /tmp/resposta.json 2>/dev/null || true
+          jq -r '"abordados: \(.abordados // "-")  ·  recusados: \(.recusados // "-")"' /tmp/resposta.json 2>/dev/null || true
+
+          if [[ "$HTTP" != "200" ]]; then
+            echo "::error::o gatilho respondeu HTTP $HTTP"
+            exit 1
+          fi

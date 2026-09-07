@@ -49,7 +49,16 @@ export type LeadBlockReason =
   /** Prospecção fria sem base legal declarada por quem responde pela marca. */
   | "PROSPECCAO_SEM_BASE_LEGAL"
   /** A prospecção está desligada, ou pausada, ou o teto do dia acabou. */
-  | "PROSPECCAO_DESLIGADA";
+  | "PROSPECCAO_DESLIGADA"
+  /**
+   * Não há modelo aprovado pela Meta para a casa FALAR PRIMEIRO com esta
+   * pessoa — ou o modelo declarado não pode ser preenchido com os dados dela.
+   *
+   * Este motivo não fala do contato, fala de nós: quem nunca escreveu para a
+   * Foocci não tem janela de 24 h aberta, e sem janela a Meta só aceita modelo
+   * aprovado. Ver `src/services/foocci-sdr/ModeloAprovado.ts`.
+   */
+  | "SEM_MODELO_APROVADO";
 
 export interface LeadSafetyDecision {
   /** true → pode falar. false → não pode, e o motivo está ao lado. */
@@ -331,6 +340,15 @@ export function pediuSilencio(optOutAt: Date | null | undefined): boolean {
 export function bloqueioPassaSozinho(reason: LeadBlockReason): boolean {
   return reason === "FORA_DA_JANELA" || reason === "DESCANSO_ATIVO" || reason === "CANAL_INDISPONIVEL";
 }
+
+/**
+ * ⚠️ `SEM_MODELO_APROVADO` fica de fora da lista acima **de propósito**.
+ *
+ * Ele parece um bloqueio temporário — "é só cadastrar o modelo" — mas quem
+ * cadastra é uma pessoa, e a Meta ainda precisa aprovar. Tratá-lo como algo que
+ * passa sozinho faria a fila reagendar o mesmo lead a cada rodada, para sempre,
+ * esperando um ato que nenhum relógio executa.
+ */
 
 // ─── PROSPECÇÃO FRIA ────────────────────────────────────────────────────────────
 
