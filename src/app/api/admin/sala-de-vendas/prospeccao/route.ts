@@ -22,11 +22,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { guardarSalaDeVendas, somenteLeitura, vePelaOperacaoToda } from "../_guarda";
 import {
+  conferirLista,
   importarLote,
   liberarLote,
   pausarLote,
   ListaGrandeDemais,
   ProvenienciaAusente,
+  MAX_LINHAS_POR_IMPORTACAO,
   type LinhaDaLista,
 } from "@/services/salaDeVendas/prospeccao/lote";
 import { montarFilaDeProspeccao } from "@/services/salaDeVendas/prospeccao/selecao";
@@ -49,8 +51,8 @@ function inteiroNaoNegativo(v: unknown): number | null {
 }
 
 interface Corpo {
-  acao?: "importar" | "liberar" | "pausarLote" | "interruptor";
-  // importar
+  acao?: "conferir" | "importar" | "liberar" | "pausarLote" | "interruptor";
+  // conferir / importar
   nome?: string;
   proveniencia?: string;
   linhas?: LinhaDaLista[];
@@ -116,6 +118,43 @@ export async function POST(req: NextRequest) {
   }
 
   const quem = `${portao.sessao.nome} (${portao.sessao.userId})`;
+
+  // ── Conferir: só lê, e não grava nada ─────────────────────────────────────
+  //
+  // "Destes 500, quantos já temos?" — respondido ANTES de importar, porque
+  // importar grava. Usa exatamente a mesma função que a importação usa depois,
+  // e é por isso que os dois números não podem discordar.
+  //
+  // ⚠️ Não exige procedência: conferir não é abordar, e obrigar a escrever a
+  // base legal para simplesmente contar duplicados faria o operador inventar
+  // uma frase só para passar da tela — que é o oposto do que o campo existe
+  // para conseguir.
+  if (c.acao === "conferir") {
+    if (!Array.isArray(c.linhas) || c.linhas.length === 0) {
+      return NextResponse.json({ ok: false, error: "Lista vazia." }, { status: 400 });
+    }
+    if (c.linhas.length > MAX_LINHAS_POR_IMPORTACAO) {
+      return NextResponse.json(
+        { ok: false, error: new ListaGrandeDemais(c.linhas.length).message },
+        { status: 400 },
+      );
+    }
+
+    const r = await conferirLista(prisma, c.linhas);
+    // O detalhe linha a linha não sai daqui: a tela precisa dos NÚMEROS, e
+    // devolver a lista inteira de volta só engordaria a resposta.
+    return NextResponse.json({
+      ok: true,
+      data: {
+        recebidas: r.recebidas,
+        novas: r.novas,
+        jaEramLead: r.jaEramLead,
+        repetidasEmOutroLote: r.repetidasEmOutroLote,
+        repetidasNoArquivo: r.repetidasNoArquivo,
+        invalidas: r.invalidas,
+      },
+    });
+  }
 
   // ── Importar: conferência, não autorização ──
   if (c.acao === "importar") {

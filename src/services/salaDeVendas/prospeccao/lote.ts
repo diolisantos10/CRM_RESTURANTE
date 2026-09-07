@@ -100,6 +100,126 @@ export class ProvenienciaAusente extends Error {
  * A terceira é a que evita o erro caro: prospectar como estranho alguém que já
  * está em conversa com a gente.
  */
+/**
+ * O que a conferência diz de UMA linha.
+ *
+ * Os nomes são de gente porque eles chegam à tela: quem sobe uma lista precisa
+ * ler "já era lead" e entender, não decifrar um código.
+ */
+export type SituacaoDaLinha =
+  | "NOVA"
+  | "JA_ERA_LEAD"
+  | "PENDENTE_EM_OUTRO_LOTE"
+  | "REPETIDA_NO_ARQUIVO"
+  | "TELEFONE_INVALIDO";
+
+export interface LinhaConferida {
+  situacao: SituacaoDaLinha;
+  /** Só dígitos, quando o telefone é plausível. */
+  digitos: string | null;
+  /** Preenchido quando o contato já existe como lead. */
+  leadId: string | null;
+}
+
+export interface ConferenciaDaLista {
+  recebidas: number;
+  /** Contatos que a base ainda não conhece. É o número que interessa. */
+  novas: number;
+  jaEramLead: number;
+  repetidasEmOutroLote: number;
+  repetidasNoArquivo: number;
+  invalidas: number;
+  linhas: LinhaConferida[];
+}
+
+/**
+ * ⭐ CONFERE A LISTA SEM ESCREVER NADA — "quantos destes já temos?"
+ *
+ * ── POR QUE ELA EXISTE ──────────────────────────────────────────────────────
+ *
+ * Pedido do CEO em 07/09/2026: *"quando um arquivo chegar, fale: olha, esses
+ * cinquenta aqui já estão, mas esses vinte aqui são novos."* Até então a
+ * resposta só aparecia DEPOIS de importar — e importar é ato que grava.
+ *
+ * ── ⚠️ E POR QUE `importarLote` USA ESTA MESMA FUNÇÃO ──────────────────────
+ *
+ * Porque a alternativa era escrever a mesma regra duas vezes, e duas
+ * implementações da mesma regra divergem no primeiro conserto que alguém fizer
+ * em uma só. A conferência prévia e a importação **têm de dar o mesmo
+ * resultado** — e a única forma honesta de garantir isso é serem o mesmo
+ * código, não dois que se parecem.
+ *
+ * ── O CASAMENTO É PELA CAUDA, E ISSO IMPORTA ───────────────────────────────
+ *
+ * `existeLeadParaTelefone` casa pelos últimos oito dígitos: a base tem
+ * telefones em formato legado, e igualdade exata deixaria passar como "novo"
+ * quem já é lead — **inclusive quem pediu silêncio**.
+ */
+export async function conferirLista(
+  db: Cliente,
+  linhas: readonly LinhaDaLista[],
+): Promise<ConferenciaDaLista> {
+  const vistos = new Set<string>();
+  const resultado: LinhaConferida[] = [];
+
+  let novas = 0;
+  let jaEramLead = 0;
+  let repetidasEmOutroLote = 0;
+  let repetidasNoArquivo = 0;
+  let invalidas = 0;
+
+  for (const linha of linhas) {
+    const analise = analisarWhatsappBr(linha.whatsapp ?? "");
+
+    if (!analise.ok) {
+      invalidas += 1;
+      resultado.push({ situacao: "TELEFONE_INVALIDO", digitos: null, leadId: null });
+      continue;
+    }
+
+    const digitos = analise.digitos;
+
+    if (vistos.has(digitos)) {
+      repetidasNoArquivo += 1;
+      resultado.push({ situacao: "REPETIDA_NO_ARQUIVO", digitos, leadId: null });
+      continue;
+    }
+    vistos.add(digitos);
+
+    const leadExistente = await existeLeadParaTelefone(db, digitos);
+
+    // O mesmo telefone esperando abordagem em outro lote. Não é lead ainda, e
+    // por isso a busca acima não o encontra — mas abordar seria em duplicidade.
+    const pendenteEmOutroLote = leadExistente
+      ? null
+      : await db.itemDeProspeccao.findFirst({
+          where: { whatsappDigits: digitos, situacao: "PENDENTE" },
+          select: { id: true },
+        });
+
+    if (leadExistente) {
+      jaEramLead += 1;
+      resultado.push({ situacao: "JA_ERA_LEAD", digitos, leadId: leadExistente.id });
+    } else if (pendenteEmOutroLote) {
+      repetidasEmOutroLote += 1;
+      resultado.push({ situacao: "PENDENTE_EM_OUTRO_LOTE", digitos, leadId: null });
+    } else {
+      novas += 1;
+      resultado.push({ situacao: "NOVA", digitos, leadId: null });
+    }
+  }
+
+  return {
+    recebidas: linhas.length,
+    novas,
+    jaEramLead,
+    repetidasEmOutroLote,
+    repetidasNoArquivo,
+    invalidas,
+    linhas: resultado,
+  };
+}
+
 export async function importarLote(
   db: Cliente,
   pedido: PedidoDeImportacao,
@@ -127,17 +247,16 @@ export async function importarLote(
     select: { id: true },
   });
 
-  const vistos = new Set<string>();
-  let aceitas = 0;
-  let repetidasNoArquivo = 0;
-  let repetidasEmOutroLote = 0;
-  let invalidas = 0;
-  let jaEramLead = 0;
+  // ⚠️ A MESMA função que a tela usa para conferir antes de subir. Escrever a
+  // regra de duplicidade duas vezes faria a conferência prometer um número e a
+  // importação entregar outro — e quem descobre é o operador, no fim.
+  const conferencia = await conferirLista(db, pedido.linhas);
 
-  for (const linha of pedido.linhas) {
-    const analise = analisarWhatsappBr(linha.whatsapp ?? "");
-    if (!analise.ok) {
-      invalidas += 1;
+  for (let i = 0; i < pedido.linhas.length; i++) {
+    const linha = pedido.linhas[i]!;
+    const v = conferencia.linhas[i]!;
+
+    if (v.situacao === "TELEFONE_INVALIDO") {
       await db.itemDeProspeccao.create({
         data: {
           loteId: lote.id,
@@ -158,53 +277,38 @@ export async function importarLote(
       continue;
     }
 
-    const digitos = analise.digitos;
+    // Repetida dentro do próprio arquivo não vira linha: a primeira já entrou,
+    // e gravar a segunda criaria duas fichas para o mesmo telefone no mesmo
+    // lote — que é o que a chave única do lote impediria com um erro feio.
+    if (v.situacao === "REPETIDA_NO_ARQUIVO") continue;
 
-    if (vistos.has(digitos)) {
-      repetidasNoArquivo += 1;
-      continue;
-    }
-    vistos.add(digitos);
-
-    // Pela cauda de oito dígitos: a base tem telefones em formato legado, e
-    // igualdade exata deixaria passar como "novo" quem já é lead — inclusive
-    // quem pediu silêncio. Ver `casamento.ts`.
-    const leadExistente = await existeLeadParaTelefone(db, digitos);
-
-    // O mesmo telefone esperando abordagem em outro lote. Não é lead ainda, e
-    // por isso a busca acima não o encontra — mas abordar seria em duplicidade.
-    const pendenteEmOutroLote = leadExistente
-      ? null
-      : await db.itemDeProspeccao.findFirst({
-          where: { whatsappDigits: digitos, situacao: "PENDENTE" },
-          select: { id: true },
-        });
-
-    if (leadExistente) jaEramLead += 1;
-    else if (pendenteEmOutroLote) repetidasEmOutroLote += 1;
-    else aceitas += 1;
+    const duplicada = v.situacao !== "NOVA";
 
     await db.itemDeProspeccao.create({
       data: {
         loteId: lote.id,
         nome: texto(linha.nome),
         whatsapp: String(linha.whatsapp),
-        whatsappDigits: digitos,
+        whatsappDigits: v.digitos!,
         empresa: texto(linha.empresa),
         cidade: texto(linha.cidade),
         estado: texto(linha.estado),
         tipo: texto(linha.tipo),
-        situacao: leadExistente || pendenteEmOutroLote ? "DUPLICADO" : "PENDENTE",
-        leadId: leadExistente?.id ?? null,
-        motivo: leadExistente
-          ? "Já existe como lead na base."
-          : pendenteEmOutroLote
-            ? "Já está pendente em outro lote de prospecção."
-            : null,
-        processadoEm: leadExistente || pendenteEmOutroLote ? new Date() : null,
+        situacao: duplicada ? "DUPLICADO" : "PENDENTE",
+        leadId: v.leadId,
+        motivo:
+          v.situacao === "JA_ERA_LEAD"
+            ? "Já existe como lead na base."
+            : v.situacao === "PENDENTE_EM_OUTRO_LOTE"
+              ? "Já está pendente em outro lote de prospecção."
+              : null,
+        processadoEm: duplicada ? new Date() : null,
       },
     });
   }
+
+  const { novas: aceitas, repetidasNoArquivo, repetidasEmOutroLote, invalidas, jaEramLead } =
+    conferencia;
 
   return {
     loteId: lote.id,

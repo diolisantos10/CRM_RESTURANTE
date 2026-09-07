@@ -44,6 +44,16 @@ interface ArquivoLido {
   erro: string | null;
 }
 
+/** O que o servidor responde a "quantos destes já temos?". */
+interface Conferencia {
+  recebidas: number;
+  novas: number;
+  jaEramLead: number;
+  repetidasEmOutroLote: number;
+  repetidasNoArquivo: number;
+  invalidas: number;
+}
+
 const ROTULO_CAMPO: Record<string, string> = {
   nome: "Nome da pessoa",
   whatsapp: "WhatsApp",
@@ -60,6 +70,8 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
   const [ocupado, setOcupado] = useState(false);
   const [resultado, setResultado] = useState<string | null>(null);
   const [erro, setErro] = useState<string | null>(null);
+  const [conferencia, setConferencia] = useState<Conferencia | null>(null);
+  const [conferindo, setConferindo] = useState(false);
   const entrada = useRef<HTMLInputElement>(null);
 
   const total = arquivos.reduce((n, a) => n + a.linhas.length, 0);
@@ -103,6 +115,9 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
     async (lista: FileList | File[]) => {
       setErro(null);
       setResultado(null);
+      // A conferência anterior deixa de valer no instante em que a lista muda.
+      // Número velho ao lado de arquivo novo é pior que número nenhum.
+      setConferencia(null);
       const lidos = await Promise.all(Array.from(lista).map(lerArquivo));
       // Acumula: quem tem cinco arquivos escolhe cinco vezes sem perder os
       // anteriores. Substituir a cada escolha seria uma armadilha silenciosa.
@@ -113,6 +128,7 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
 
   const colar = useCallback((texto: string) => {
     if (!texto.trim()) return;
+    setConferencia(null);
     const r = lerPlanilha(texto);
     setArquivos((a) => [
       ...a,
@@ -125,6 +141,45 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
       },
     ]);
   }, []);
+
+  /**
+   * ⭐ "Destes, quantos já temos?" — respondido ANTES de subir.
+   *
+   * Pedido do CEO: *"quando um arquivo chegar, fale: esses cinquenta já estão,
+   * esses vinte são novos."* Roda no servidor, com a MESMA função que a
+   * importação usa depois — por isso o número da conferência e o do resultado
+   * não podem discordar.
+   *
+   * ⚠️ Confere só a primeira parte quando a lista passa de 500. Dizer "conferi
+   * 500 de 3.000" é honesto; conferir tudo antes de o operador decidir se vai
+   * subir seria caro e ele nem pediu.
+   */
+  async function conferir() {
+    setConferindo(true);
+    setErro(null);
+    try {
+      const amostra = arquivos.flatMap((a) => a.linhas).slice(0, POR_LOTE);
+      const res = await fetch(ROTA, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ acao: "conferir", linhas: amostra }),
+      });
+      const json = (await res.json().catch(() => null)) as {
+        error?: string;
+        data?: Conferencia;
+      } | null;
+
+      if (!res.ok || !json?.data) {
+        setErro(json?.error ?? `Não consegui conferir (${res.status}).`);
+        return;
+      }
+      setConferencia(json.data);
+    } catch (e) {
+      setErro(e instanceof Error ? e.message : "Não consegui conferir.");
+    } finally {
+      setConferindo(false);
+    }
+  }
 
   async function importar() {
     if (!procedencia.trim()) {
@@ -192,6 +247,7 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
       );
       setArquivos([]);
       setNomeDoLote("");
+      setConferencia(null);
       aoImportar();
     } catch (e) {
       setErro(e instanceof Error ? e.message : "Não consegui subir a lista.");
@@ -261,7 +317,10 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
                 <span className="text-[13px] font-semibold text-ink">{a.nome}</span>
                 <button
                   type="button"
-                  onClick={() => setArquivos((x) => x.filter((_, j) => j !== i))}
+                  onClick={() => {
+                    setConferencia(null);
+                    setArquivos((x) => x.filter((_, j) => j !== i));
+                  }}
                   className="text-[11.5px] font-semibold text-muted underline underline-offset-2"
                 >
                   tirar
@@ -320,6 +379,67 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
       )}
 
       {/* ── De onde veio, e o nome do lote ── */}
+      {/* ── "Destes, quantos já temos?" ────────────────────────────────────
+          Antes de subir, e sem gravar nada. É a pergunta que o CEO faz ao
+          receber um arquivo, e a resposta vem do MESMO cálculo que a
+          importação usa depois. */}
+      {total > 0 && (
+        <div className="mt-3 rounded-xl border border-line bg-canvas p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[13px] font-semibold text-ink">
+              Quantos destes já temos?
+            </span>
+            <button
+              type="button"
+              onClick={() => void conferir()}
+              disabled={conferindo}
+              className="rounded-lg border border-line2 bg-paper px-3 py-1.5 text-[12.5px] font-semibold text-ink2 transition-colors hover:border-brand-400 disabled:opacity-50"
+            >
+              {conferindo ? "Conferindo…" : conferencia ? "Conferir de novo" : "Conferir"}
+            </button>
+          </div>
+
+          {conferencia ? (
+            <>
+              <ul className="mt-2 flex flex-col gap-0.5 text-[12.5px]">
+                <li className="flex items-baseline justify-between gap-2">
+                  <span className="font-semibold text-ink">São novos</span>
+                  <span className="font-semibold tabular-nums text-ink">{conferencia.novas}</span>
+                </li>
+                <li className="flex items-baseline justify-between gap-2 text-ink2">
+                  <span>Já estão na base como lead</span>
+                  <span className="tabular-nums">{conferencia.jaEramLead}</span>
+                </li>
+                <li className="flex items-baseline justify-between gap-2 text-ink2">
+                  <span>Já esperando em outro lote</span>
+                  <span className="tabular-nums">{conferencia.repetidasEmOutroLote}</span>
+                </li>
+                <li className="flex items-baseline justify-between gap-2 text-ink2">
+                  <span>Repetidos dentro do próprio arquivo</span>
+                  <span className="tabular-nums">{conferencia.repetidasNoArquivo}</span>
+                </li>
+                <li className="flex items-baseline justify-between gap-2 text-ink2">
+                  <span>Telefone inválido</span>
+                  <span className="tabular-nums">{conferencia.invalidas}</span>
+                </li>
+              </ul>
+
+              <p className="mt-2 text-[11.5px] leading-relaxed text-muted">
+                Os repetidos entram marcados, e não viram abordagem — ninguém recebe
+                duas vezes.
+                {total > POR_LOTE &&
+                  ` Conferi as primeiras ${POR_LOTE} de ${total}; o resto é conferido na hora de subir.`}
+              </p>
+            </>
+          ) : (
+            <p className="mt-1 text-[12.5px] leading-relaxed text-muted">
+              O sistema compara pelos últimos oito dígitos do telefone, então pega
+              contato gravado em formato antigo. Nada é gravado nesta conferência.
+            </p>
+          )}
+        </div>
+      )}
+
       <label className="mt-3 block">
         <span className="block text-[11.5px] font-semibold uppercase tracking-[.04em] text-muted">
           De onde veio esta lista *
