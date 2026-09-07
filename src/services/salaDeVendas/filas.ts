@@ -269,7 +269,12 @@ const VAZIO: Record<NomeDaFila, number> = {
  * volume chegar lá, as saídas são fila separada para MORNO ou envelhecimento
  * que promove de faixa. Fica escrito aqui para a hora ser reconhecida.
  */
-function ordenacaoDaFila(fila: NomeDaFila): Prisma.SiteLeadOrderByWithRelationInput[] {
+/**
+ * ⭐ A ORDEM DE CADA FILA. **Exportada porque ela é uma regra de negócio**, e
+ * regra de negócio sem teste volta no primeiro rebase distraído — esta já
+ * enterrou um lead de 21 dias no fim da lista que existia para achá-lo.
+ */
+export function ordenacaoDaFila(fila: NomeDaFila): Prisma.SiteLeadOrderByWithRelationInput[] {
   switch (fila) {
     case "qualificados":
       // A ordem do enum `LeadTemperatura` no schema é PRIORIDADE_MAXIMA,
@@ -280,8 +285,24 @@ function ordenacaoDaFila(fila: NomeDaFila): Prisma.SiteLeadOrderByWithRelationIn
       // Quem chegou primeiro e ninguém mediu. Aqui o custo é o tempo parado, e
       // não existe "mais importante" — ninguém sabe nada sobre nenhum deles.
       return [{ createdAt: "asc" }];
+    case "semResponsavel":
+      // ⭐ "O que está largado?" — e a resposta certa é o MAIS LARGADO primeiro.
+      //
+      // Até 07/09/2026 esta fila caía no `default`, que ordena por
+      // `atendenteDesde` e desempata com `createdAt: "desc"`. Ninguém aqui tem
+      // atendente, então o desempate virava a ordem inteira: **o mais novo no
+      // topo e o mais abandonado no fim.**
+      //
+      // Medido em 06/09/2026: o lead mais velho da base esperava 21 dias, tinha
+      // vindo da página de PREÇOS, e estava no fundo da lista que existe
+      // justamente para encontrá-lo.
+      return [{ createdAt: "asc" }];
     default:
-      return [{ atendenteDesde: "asc" }, { createdAt: "desc" }];
+      // ⚠️ O desempate é `asc`, e não `desc`. Entre dois leads igualmente
+      // parados, quem espera há mais tempo vem primeiro — em toda fila.
+      // Ordenar pelo mais recente é confortável para quem opera (o assunto está
+      // fresco) e é exatamente como um lead antigo nunca mais é tocado.
+      return [{ atendenteDesde: "asc" }, { createdAt: "asc" }];
   }
 }
 

@@ -5775,6 +5775,42 @@ model InternalUser {
   isActive    Boolean   @default(true)
   lastLoginAt DateTime?
 
+  /// ⛔ A senha atual foi definida por OUTRA PESSOA — troca obrigatória na entrada.
+  ///
+  /// Ordem do CEO em 05/09/2026: *"deveria haver uma forma de a pessoa receber
+  /// uma senha provisória e já trocar. Esse é o procedimento padrão em qualquer
+  /// empresa."* E ele tinha razão sobre um buraco real: a casa sorteava uma
+  /// senha, alguém a lia na tela, e ela valia **para sempre**. Quem criou o
+  /// acesso ficava sabendo a senha de quem entra — indefinidamente.
+  ///
+  /// Nasce `true` em toda criação e em toda troca feita pelo Admin, inclusive
+  /// quando a senha foi DIGITADA por quem criou: o que torna a senha provisória
+  /// não é ela ter sido sorteada, é ela ter passado por um terceiro.
+  ///
+  /// Só volta a `false` quando a própria pessoa define a dela em
+  /// `POST /api/interno/senha`.
+  deveTrocarSenha Boolean @default(false)
+
+  /// Quando a pessoa definiu a senha dela pela última vez. Nulo = nunca definiu
+  /// — ou seja, ainda está com a que recebeu de outra pessoa.
+  senhaDefinidaEm DateTime?
+
+  /// ⛔ Até quando a senha provisória vale. Passou disso, ela não entra mais.
+  ///
+  /// Senha provisória que dura para sempre é senha definitiva com nome bonito —
+  /// e é ela que fica escrita na caixa postal, num histórico que não se apaga.
+  /// O prazo é o que fecha essa janela sozinho, sem ninguém precisar lembrar.
+  ///
+  /// Nulo quando a pessoa já definiu a própria: não há provisória para vencer.
+  senhaProvisoriaExpiraEm DateTime?
+
+  /// ⭐ O crachá desta pessoa no Dioli Connect, se ela tiver um.
+  ///
+  /// É por aqui que a senha provisória viaja: a plataforma posta na caixa do
+  /// crachá, de máquina para máquina. Nulo = não há para onde mandar, e a senha
+  /// só aparece na tela de quem criou o acesso, como antes.
+  crachaConnect String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

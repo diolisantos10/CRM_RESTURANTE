@@ -21,6 +21,7 @@ import { prisma } from "@/lib/prisma";
 import { isGuestIdentifier } from "@/lib/guest";
 import { formatOrderNumber } from "@/lib/order-number";
 import { buildStoreInfo } from "@/lib/print-ticket";
+import { escapeNulForPg } from "@/lib/pg-text";
 import {
   renderKitchenTicketText,
   renderCashierTicketText,
@@ -245,7 +246,18 @@ export class PrintQueueService {
       return 0;
     }
 
-    await prisma.printJob.createMany({ data: jobs });
+    // O texto da comanda é ESC/POS: carrega bytes 0x00 como PARÂMETRO de comando
+    // (corte de papel, negrito off, tamanho de fonte). O Postgres recusa 0x00 em
+    // coluna de texto (22021) — era isto que derrubava TODO enfileiramento, com
+    // o pedido já pago e confirmado. Guardamos escapado e desfazemos no único
+    // ponto que entrega ao Carteiro (api/print-agent/poll). Ver src/lib/pg-text.ts.
+    const escapedJobs = jobs.map((j) => ({
+      ...j,
+      title: escapeNulForPg(j.title),
+      body: escapeNulForPg(j.body),
+    }));
+
+    await prisma.printJob.createMany({ data: escapedJobs });
     console.info("[PrintQueueService] enqueued station print jobs", {
       restaurantId, orderId, jobs: jobs.length, stations: jobs.map((j) => j.stationKey),
     });

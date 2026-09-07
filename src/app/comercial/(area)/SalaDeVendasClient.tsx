@@ -228,15 +228,48 @@ function CartaoLead({
 
   const espera = desdeQuando(l.atendenteDesde);
 
+  // ⭐⭐ A IDADE DO LEAD — o número que decide o dia, e que a tela não mostrava.
+  //
+  // O cartão dizia há quanto tempo o lead está COM o atendente. Para quem não
+  // tem responsável — justamente quem mais precisa de alguém — não dizia nada:
+  // aparecia "Sem responsável" e ponto. Um lead parado há 21 dias e um que
+  // chegou agora eram visualmente idênticos.
+  //
+  // Medido em 06/09/2026: o mais velho da base esperava 21 dias, tinha vindo da
+  // página de PREÇOS, e ninguém sabia porque a tela não contava.
+  const idade = desdeQuando(l.createdAt);
+  const diasParado = l.createdAt
+    ? Math.floor((Date.now() - new Date(l.createdAt).getTime()) / 86_400_000)
+    : 0;
+  const velho = diasParado >= 7;
+
   return (
     <li className="rounded-2xl border border-line2 bg-paper px-4 py-3">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <span className="text-[14.5px] font-semibold text-ink">{l.nome}</span>
+        {/* ⭐ O nome vira link. Era o beco: o cartão mostrava o lead e não
+            deixava abrir — a ficha existe do outro lado, em `/conversas`. */}
+        <a
+          href={`${ROTAS.conversas}?leadId=${encodeURIComponent(l.id)}`}
+          className="text-[14.5px] font-semibold text-ink underline decoration-line2 underline-offset-2 hover:decoration-brand-500"
+        >
+          {l.nome}
+        </a>
         {l.restaurante && <span className="text-[13px] text-muted">· {l.restaurante}</span>}
         {l.cidade && <span className="text-[12.5px] text-muted">· {l.cidade}</span>}
         <span className="rounded-full bg-canvas px-1.5 py-0.5 text-[11.5px] text-ink2">
           {l.stage}
         </span>
+        {idade && (
+          <span
+            className={
+              velho
+                ? "rounded-full border border-red-200 bg-red-50 px-1.5 py-0.5 text-[11.5px] font-medium text-red-700"
+                : "rounded-full bg-canvas px-1.5 py-0.5 text-[11.5px] text-muted"
+            }
+          >
+            espera há {idade}
+          </span>
+        )}
       </div>
 
       <p className="mt-1 text-[12.5px] text-muted">

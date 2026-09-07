@@ -1,13 +1,13 @@
 <!-- ESPELHO-DO-KIT
 origem: docs/26a-pedido-pronto-branding.md
-kit-commit: 8d60b5e919b2429b2166a2731c8548e6023a84a3
+kit-commit: 20abdeff6daecf9a2624df198c75ac784db1b9eb
 sha256-do-corpo: 2262a6097fdc9890136fa8ee91248c85d2858aa7fe78153244e28a00d69f1a54
 -->
 
 > ⚠️ **ESPELHO GERADO — NÃO EDITE ESTE ARQUIVO.**
 >
 > Ele é uma cópia automática de `diolisantos10/dioli-brain-kit` → `docs/26a-pedido-pronto-branding.md`,
-> no commit `8d60b5e`.
+> no commit `20abdef`.
 >
 > **Editar aqui não muda a doutrina** — muda só este repositório, e reprova o
 > teste `src/services/doutrina/kitEspelho.test.ts` no próximo CI. Para mudar a

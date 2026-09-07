@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ROTULO_ETAPA, DESCRICAO_ETAPA, TODAS_AS_ETAPAS,
   ROTULO_INTERACAO, formataTaxa,
-  type FoocciLeadStage, type FoocciInteractionType,
+  type FoocciLeadStage, type FoocciInteractionType, type TipoDeInteracao,
 } from "@/services/foocci-crm/foocciCrmFunnel";
 
 // ── Tipos do que as rotas devolvem (espelho leve, sem importar Prisma no cliente) ──
@@ -70,8 +70,12 @@ interface Dossie extends Contato {
     canal: string; rotulo: string;
   };
   respostas: Array<{ pergunta: string; resposta: string }>;
+  // `TipoDeInteracao` (os doze do banco), e não o subconjunto que ESTA tela
+  // escreve: o histórico mostra tudo que aconteceu, inclusive o que a Sala de
+  // Vendas gravou. Declarar o subconjunto aqui foi o que deixou quatro tipos
+  // caírem em `ROTULO_INTERACAO[...] === undefined` e renderizarem em branco.
   historico: Array<{
-    id: string; tipo: FoocciInteractionType; fromStage: FoocciLeadStage | null;
+    id: string; tipo: TipoDeInteracao; fromStage: FoocciLeadStage | null;
     toStage: FoocciLeadStage | null; actor: string; nota: string | null; createdAt: string;
   }>;
 }

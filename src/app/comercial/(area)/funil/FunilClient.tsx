@@ -356,7 +356,22 @@ function CartaoDoLead({ cartao, aoPegar }: { cartao: Cartao; aoPegar: () => void
       onDragStart={aoPegar}
       className="cursor-grab rounded-xl border border-line2 bg-paper px-2.5 py-2 active:cursor-grabbing"
     >
-      <p className="truncate text-[12.5px] font-medium leading-snug text-ink">{cartao.nome}</p>
+      {/* ⭐ O nome vira link para a ficha. O quadro deixava MOVER o lead entre
+          colunas e não deixava ABRI-LO: para ver a qualificação era preciso
+          sair daqui e caçá-lo em outra tela.
+
+          ⚠️ `stopPropagation` e `preventDefault` no arraste: sem eles o clique
+          no nome disputa com o gesto de arrastar do cartão, e o quadro fica com
+          um link que às vezes navega e às vezes não — que é pior que link
+          nenhum, porque ensina a não confiar no cartão. */}
+      <a
+        href={`/comercial/conversas?leadId=${encodeURIComponent(cartao.id)}`}
+        onClick={(e) => e.stopPropagation()}
+        onDragStart={(e) => e.preventDefault()}
+        className="block truncate text-[12.5px] font-medium leading-snug text-ink underline decoration-line2 underline-offset-2 hover:decoration-brand-500"
+      >
+        {cartao.nome}
+      </a>
 
       {cartao.restaurante && (
         <p className="truncate text-[11.5px] leading-snug text-muted">{cartao.restaurante}</p>

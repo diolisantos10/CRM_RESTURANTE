@@ -32,7 +32,7 @@ import { isSupportPhoneNumberId, handleInboundSupport } from "@/services/support
 import { InboundGuardsService } from "@/services/whatsapp/inbound/InboundGuardsService";
 import { dispatchInboundAgent, interceptBuildOsCommand } from "@/services/whatsapp/inbound/InboundAgentDispatch";
 import { isBuildOsPhoneNumberId } from "@/services/buildos/BuildOsMetaChannel";
-import { isFoocciSalesPhoneNumberId } from "@/services/foocci-sdr/FoocciSalesChannel";
+import { isFoocciSalesPhoneNumberId, decidirDesvioParaVendas } from "@/services/foocci-sdr/FoocciSalesChannel";
 import { receberMensagemDeVendas } from "@/services/foocci-sdr/FoocciSalesInbound";
 import { tipoDaMeta, statusDaMeta, aplicarStatus } from "@/services/salaDeVendas/conversa";
 
@@ -216,7 +216,47 @@ async function processMetaWebhook(payload: unknown): Promise<void> {
     // o que demora. Compor com modelo leva segundos — segurar o 200 esperando
     // por isso faria a Meta reenviar a mesma mensagem, e o cliente receberia a
     // resposta duas vezes. A recepção não lança, então nada fica sem dono.
-    if (isFoocciSalesPhoneNumberId(m.phoneNumberId)) {
+    // ══════════════════════════════════════════════════════════════════════
+    // ⛔⛔ UM NÚMERO NÃO PODE SER DE VENDAS **E** DE RESTAURANTE.
+    //
+    // ── O DANO, MEDIDO EM 06/09/2026 ─────────────────────────────────────
+    //
+    // `FOOCCI_SALES_PHONE_NUMBER_ID` estava com o id de um número que **não é
+    // da Foocci** — apontava para um número registrado no mesmo aplicativo da
+    // Meta, ou seja, de um restaurante. E o desvio abaixo é cego: ele compara
+    // com a variável e segue, sem perguntar de quem é o número.
+    //
+    // Resultado: TODA mensagem que chegava naquele número era desviada para a
+    // caixa de vendas e **nunca chegava ao restaurante**. Três pessoas
+    // escreveram — 27/08, 31/08 e 06/09 — e viraram "lead" com o próprio
+    // telefone no campo nome. Ninguém respondeu nenhuma, e o dono do
+    // restaurante não teve como saber que existiam.
+    //
+    // ── A REGRA, E POR QUE ELA CAI PARA ESTE LADO ────────────────────────
+    //
+    // Na dúvida, **o cliente do restaurante ganha**. Prospecção perdida se
+    // recupera com outra abordagem; cliente que escreveu para um restaurante e
+    // não foi respondido é uma venda perdida do NOSSO cliente, por culpa nossa.
+    //
+    // E a recusa GRITA: `console.error` com o id e a instrução. Uma variável
+    // errada que sequestra conversa em silêncio é a pior forma deste defeito —
+    // foi assim que ele viveu semanas sem ninguém notar.
+    // ══════════════════════════════════════════════════════════════════════
+    // ⚠️ Quem BUSCA o dado é este arquivo; quem DECIDE é `decidirDesvioParaVendas`,
+    // que é pura e testada caso a caso. A consulta só acontece quando o número
+    // bate com o de vendas — o webhook de restaurante não paga por esta trava.
+    const veredito = decidirDesvioParaVendas({
+      phoneNumberId: m.phoneNumberId,
+      ehDeUmRestaurante: isFoocciSalesPhoneNumberId(m.phoneNumberId)
+        ? (await MetaConfigService.getByPhoneNumberId(m.phoneNumberId)) !== null
+        : false,
+    });
+
+    if (veredito.conflito) {
+      console.error(`[webhook/meta/whatsapp] ⛔ ${veredito.conflito}`);
+    }
+
+    if (veredito.desviar) {
       // Desde 25/08/2026 a mensagem é GRAVADA, e não só anotada: a Sala de
       // Vendas precisa abrir a conversa, e antes disto a linha do tempo dizia
       // "escreveu no WhatsApp" sem guardar o que a pessoa escreveu.

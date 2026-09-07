@@ -1,13 +1,13 @@
 <!-- ESPELHO-DO-KIT
 origem: docs/24-o-quadro-do-ceo.md
-kit-commit: 8d60b5e919b2429b2166a2731c8548e6023a84a3
-sha256-do-corpo: 4f4ebb5f4ed7cbd5e93e475cd6d149b8661565e3b4d29cbe48797741d4b0410a
+kit-commit: 20abdeff6daecf9a2624df198c75ac784db1b9eb
+sha256-do-corpo: 599861a55953f033b0e69c93f96dc18c336a1b341aaa8e14a0c4c8bbfa518bd5
 -->
 
 > ⚠️ **ESPELHO GERADO — NÃO EDITE ESTE ARQUIVO.**
 >
 > Ele é uma cópia automática de `diolisantos10/dioli-brain-kit` → `docs/24-o-quadro-do-ceo.md`,
-> no commit `8d60b5e`.
+> no commit `20abdef`.
 >
 > **Editar aqui não muda a doutrina** — muda só este repositório, e reprova o
 > teste `src/services/doutrina/kitEspelho.test.ts` no próximo CI. Para mudar a
@@ -152,6 +152,12 @@ compra em troca** — de preferência, *"esta é a última vez que você toca ni
 `commitSha` em produção antes de dizer que está no ar. Item em ✅ que só foi
 mergeado é **mentira curta** — a pior espécie, porque cabe numa linha e ninguém
 questiona.
+
+> ⛔ **ISTO DEIXOU DE SER ARMADILHA E VIROU MANDAMENTO — CEO, 29/08/2026.**
+> **✅ neste quadro significa: está em produção, funcionando, e alguém abriu e
+> conferiu lá.** Pronto, testado, aprovado ou mergeado é 🔄. A regra inteira,
+> com as três camadas de prova, está na **doutrina 31**, e ela é
+> inquestionável — leia antes de preencher o quadro.
 
 **2. O quadro virar enfeite.** Se ✅ cresce, 🔄 nunca muda e 👤 vive vazio há
 semanas, o quadro parou de descrever a realidade e virou ritual. O sintoma é

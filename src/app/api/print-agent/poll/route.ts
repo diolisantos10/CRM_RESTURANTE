@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveByToken } from "@/services/print/PrintAgentService";
 import { emprestarJobs, resgatarJobsVencidos } from "@/services/print/PrintJobLease";
 import { prisma } from "@/lib/prisma";
+import { restoreNulFromPg } from "@/lib/pg-text";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,6 +60,14 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     ok: true,
     stations,
-    jobs: jobs.map((j) => ({ id: j.id, printerName: j.printerName, title: j.title, body: j.body })),
+    // O job foi gravado com o 0x00 do ESC/POS escapado (o Postgres recusa esse
+    // byte em texto). Aqui, e SÓ aqui, ele volta ao original: o Carteiro recebe
+    // exatamente os mesmos bytes de sempre. Ver src/lib/pg-text.ts.
+    jobs: jobs.map((j) => ({
+      id: j.id,
+      printerName: j.printerName,
+      title: restoreNulFromPg(j.title),
+      body: restoreNulFromPg(j.body),
+    })),
   });
 }

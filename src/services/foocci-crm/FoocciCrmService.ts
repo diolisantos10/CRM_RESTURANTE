@@ -24,6 +24,7 @@ import type { Prisma } from "@prisma/client";
 import {
   type FoocciLeadStage,
   type FoocciInteractionType,
+  type TipoDeInteracao,
   contaComoAbordagem,
   podeMover,
   indiceEtapa,
@@ -275,7 +276,14 @@ export async function listarContatos(f: ListarContatosFiltro = {}): Promise<Cont
 
 export interface InteracaoResumo {
   id: string;
-  tipo: FoocciInteractionType;
+  /**
+   * ⚠️ `TipoDeInteracao`, e não `FoocciInteractionType`: aqui se LÊ o que está
+   * gravado, e o banco grava doze tipos. Até 07/09/2026 este campo declarava o
+   * subconjunto de oito que a tela do admin escreve, e o `as` logo abaixo calava
+   * o compilador. O preço apareceu na tela: os quatro tipos da Sala de Vendas
+   * não achavam rótulo, e o histórico mostrava a linha em branco.
+   */
+  tipo: TipoDeInteracao;
   fromStage: FoocciLeadStage | null;
   toStage: FoocciLeadStage | null;
   actor: string;
@@ -370,7 +378,7 @@ export async function getDossie(leadId: string): Promise<DossieContato | null> {
     respostas,
     historico: l.interactions.map((i) => ({
       id: i.id,
-      tipo: i.tipo as FoocciInteractionType,
+      tipo: i.tipo as TipoDeInteracao,
       fromStage: i.fromStage as FoocciLeadStage | null,
       toStage: i.toStage as FoocciLeadStage | null,
       actor: i.actor,

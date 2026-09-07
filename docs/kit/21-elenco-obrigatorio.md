@@ -1,13 +1,13 @@
 <!-- ESPELHO-DO-KIT
 origem: docs/21-elenco-obrigatorio.md
-kit-commit: 8d60b5e919b2429b2166a2731c8548e6023a84a3
+kit-commit: 20abdeff6daecf9a2624df198c75ac784db1b9eb
 sha256-do-corpo: 8c9e3c1a48cfe4c1459deb895d33fd671ec7a45a229eba87f627ac31f611733c
 -->
 
 > ⚠️ **ESPELHO GERADO — NÃO EDITE ESTE ARQUIVO.**
 >
 > Ele é uma cópia automática de `diolisantos10/dioli-brain-kit` → `docs/21-elenco-obrigatorio.md`,
-> no commit `8d60b5e`.
+> no commit `20abdef`.
 >
 > **Editar aqui não muda a doutrina** — muda só este repositório, e reprova o
 > teste `src/services/doutrina/kitEspelho.test.ts` no próximo CI. Para mudar a

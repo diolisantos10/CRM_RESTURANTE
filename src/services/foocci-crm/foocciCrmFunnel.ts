@@ -106,11 +106,44 @@ export function indiceEtapa(stage: FoocciLeadStage): number {
 
 // ── Interações ────────────────────────────────────────────────────────────────
 
-export type FoocciInteractionType =
+/**
+ * TODOS os tipos que a tabela `SiteLeadInteraction` aceita — o que se LÊ.
+ *
+ * ⛔ **Isto tem de bater com o enum do Prisma, e há um teste que exige.** Até
+ * 07/09/2026 esta lista tinha oito dos doze: faltavam os quatro que a Sala de
+ * Vendas escreve (`ASSUMIU_HUMANO`, `DEVOLVEU_PARA_IA`, `PEDIU_HUMANO`,
+ * `NOTA_INTERNA`). O `Record` abaixo não os cobria, e `ROTULO_INTERACAO[tipo]`
+ * devolvia `undefined` — no histórico do CRM antigo, **toda vez que alguém
+ * assumia um lead a linha aparecia em branco**: data, autor, e nenhuma palavra
+ * dizendo o que tinha acontecido.
+ *
+ * Ninguém percebeu porque o defeito era SILENCIOSO: o tipo mentia (`i.tipo as
+ * FoocciInteractionType`) e o TypeScript acreditou. Agora o tipo diz a verdade e
+ * o teste mede contra o enum do banco, não contra esta lista.
+ */
+export type TipoDeInteracao =
   | "CAPTURA" | "REENVIO_FORMULARIO" | "MUDANCA_ETAPA" | "MENSAGEM_ENVIADA"
-  | "RESPOSTA_RECEBIDA" | "LIGACAO" | "REUNIAO" | "NOTA";
+  | "RESPOSTA_RECEBIDA" | "LIGACAO" | "REUNIAO" | "NOTA"
+  | "ASSUMIU_HUMANO" | "DEVOLVEU_PARA_IA" | "PEDIU_HUMANO" | "NOTA_INTERNA";
 
-export const ROTULO_INTERACAO: Record<FoocciInteractionType, string> = {
+/**
+ * O que a tela do admin pode REGISTRAR à mão — um subconjunto, e de propósito.
+ *
+ * Os quatro que faltam aqui são consequência de um ato (assumir, devolver, pedir
+ * gente) e são escritos pelo serviço que executa o ato, na mesma transação. Um
+ * botão que grava "assumiu" sem trocar o responsável produziria um histórico que
+ * discorda do estado — e `NOTA_INTERNA` gravada por esta porta entraria com
+ * `interna: false`, que é a nota interna vazando para fora.
+ *
+ * A trava de verdade é a lista `TIPOS_PERMITIDOS` da rota; este tipo é o aviso
+ * que chega antes, em quem escreve o código.
+ */
+export type FoocciInteractionType = Exclude<
+  TipoDeInteracao,
+  "ASSUMIU_HUMANO" | "DEVOLVEU_PARA_IA" | "PEDIU_HUMANO" | "NOTA_INTERNA"
+>;
+
+export const ROTULO_INTERACAO: Record<TipoDeInteracao, string> = {
   CAPTURA:            "Entrou na base",
   REENVIO_FORMULARIO: "Preencheu o formulário de novo",
   MUDANCA_ETAPA:      "Mudou de etapa",
@@ -119,6 +152,10 @@ export const ROTULO_INTERACAO: Record<FoocciInteractionType, string> = {
   LIGACAO:            "Ligação",
   REUNIAO:            "Reunião / demonstração",
   NOTA:               "Anotação",
+  ASSUMIU_HUMANO:     "Uma pessoa assumiu",
+  DEVOLVEU_PARA_IA:   "Devolvido para a IA",
+  PEDIU_HUMANO:       "A IA pediu gente",
+  NOTA_INTERNA:       "Nota interna",
 };
 
 /**
@@ -127,12 +164,17 @@ export const ROTULO_INTERACAO: Record<FoocciInteractionType, string> = {
  * Só estas mexem em `lastContactedAt`, e é `lastContactedAt` que responde
  * "quem ainda não foi abordado" — a fila de trabalho do SDR. Uma anotação
  * interna não pode fazer um contato sumir dessa fila.
+ *
+ * ⚠️ Os quatro tipos da Sala de Vendas continuam FORA daqui, e é o certo:
+ * assumir um lead é movimento interno. Se `ASSUMIU_HUMANO` contasse como
+ * abordagem, o lead sumiria da fila "ninguém falou com ele" no instante em que
+ * alguém clicasse em "Assumir" — sem uma palavra ter sido dita.
  */
-const INTERACOES_DE_SAIDA: ReadonlySet<FoocciInteractionType> = new Set([
+const INTERACOES_DE_SAIDA: ReadonlySet<TipoDeInteracao> = new Set([
   "MENSAGEM_ENVIADA", "LIGACAO", "REUNIAO",
 ]);
 
-export function contaComoAbordagem(tipo: FoocciInteractionType): boolean {
+export function contaComoAbordagem(tipo: TipoDeInteracao): boolean {
   return INTERACOES_DE_SAIDA.has(tipo);
 }
 

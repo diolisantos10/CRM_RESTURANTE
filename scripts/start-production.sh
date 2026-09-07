@@ -89,5 +89,37 @@ else
   echo "[sala-sync] ADMIN_SECRET not set — skipping Sala self-seed."
 fi
 
-echo "Step 6: starting Next.js..."
+echo "Step 6: scheduling declared-access self-seed (background)..."
+# Concede os acessos DECLARADOS no repositorio (src/services/organizacao/
+# acessosDeclarados.ts) e manda a senha provisoria para a caixa do Dioli Connect
+# de cada um — de maquina para maquina, sem ninguem ler a senha na tela.
+#
+# Ordem do CEO em 06/09/2026: conceder acesso nao pode depender de alguem
+# lembrar de abrir uma tela. Nenhuma credencial nova nasce disto: quem age e a
+# plataforma, com o ADMIN_SECRET que ja vive aqui dentro.
+#
+# ⚠️ Idempotente e conservadora: NUNCA troca a senha de quem ja existe (senao
+# todo deploy expulsaria a pessoa da propria conta) e NUNCA desliga ninguem.
+#
+# Mesmo molde dos tres passos acima, e pelo mesmo motivo: depois do boot, em
+# subshell, para nao poder bloquear nem derrubar a subida.
+if [ -n "${ADMIN_SECRET:-}" ]; then
+  (
+    for delay in 25 40 60; do
+      sleep "$delay"
+      STATUS=$(curl --max-time 30 -s -o /tmp/seed-acessos.json -w "%{http_code}" \
+        -X POST "http://localhost:${PORT:-3000}/api/admin/acessos/self-seed" \
+        -H "x-admin-secret: ${ADMIN_SECRET}" || echo "000")
+      echo "[acessos-sync] self-seed attempt → HTTP ${STATUS}"
+      if [ "$STATUS" = "200" ]; then
+        echo "[acessos-sync] acessos aplicados: $(cat /tmp/seed-acessos.json 2>/dev/null)"
+        break
+      fi
+    done
+  ) &
+else
+  echo "[acessos-sync] ADMIN_SECRET not set — skipping declared-access self-seed."
+fi
+
+echo "Step 7: starting Next.js..."
 npx next start

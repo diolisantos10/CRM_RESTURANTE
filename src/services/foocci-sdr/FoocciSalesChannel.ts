@@ -104,6 +104,66 @@ export function isFoocciSalesPhoneNumberId(phoneNumberId: string | null | undefi
   return isFoocciSalesChannelConfigured() && phoneNumberId === foocciSalesPhoneNumberId();
 }
 
+/**
+ * ⛔⛔ O DESVIO PARA VENDAS — e a única condição que o impede.
+ *
+ * ── O DANO, MEDIDO EM 06/09/2026 ───────────────────────────────────────────
+ *
+ * `FOOCCI_SALES_PHONE_NUMBER_ID` estava com o id de um número que **não é da
+ * Foocci**: um número registrado no mesmo aplicativo da Meta, ou seja, de um
+ * restaurante. O webhook comparava com a variável e desviava, sem perguntar de
+ * quem era o número.
+ *
+ * Toda mensagem que chegava ali era desviada para a caixa de vendas e **nunca
+ * chegava ao restaurante**. Três pessoas escreveram — 27/08, 31/08 e 06/09 — e
+ * viraram "lead" com o próprio telefone no campo nome. Ninguém respondeu, e o
+ * dono do restaurante não teve como saber que existiam.
+ *
+ * ── A REGRA, E PARA QUE LADO ELA CAI ───────────────────────────────────────
+ *
+ * Na dúvida, **o cliente do restaurante ganha**. Prospecção perdida se recupera
+ * com outra abordagem; cliente que escreveu para um restaurante e não foi
+ * respondido é uma venda perdida do NOSSO cliente, por culpa nossa.
+ *
+ * ⚠️ **Função pura**, no molde de `LeadContactSafety`: quem busca o dado é o
+ * chamador, quem decide é esta função. Assim a regra é provável caso a caso, e
+ * nenhum caminho de webhook consegue "esquecer" de consultá-la sem que isso
+ * apareça no tipo.
+ */
+export interface VeredictoDoDesvio {
+  /** true → a mensagem é de vendas. false → segue o fluxo de restaurante. */
+  desviar: boolean;
+  /**
+   * Preenchido só quando a configuração se contradiz: o número de vendas é,
+   * ao mesmo tempo, o número de um restaurante. É erro de ambiente, e quem
+   * recebe este campo tem de GRITAR — sequestrar conversa em silêncio foi
+   * exatamente como este defeito viveu semanas sem ninguém notar.
+   */
+  conflito: string | null;
+}
+
+export function decidirDesvioParaVendas(input: {
+  phoneNumberId: string | null | undefined;
+  /** Este mesmo número resolve para um restaurante cadastrado? */
+  ehDeUmRestaurante: boolean;
+}): VeredictoDoDesvio {
+  if (!isFoocciSalesPhoneNumberId(input.phoneNumberId)) {
+    return { desviar: false, conflito: null };
+  }
+
+  if (input.ehDeUmRestaurante) {
+    return {
+      desviar: false,
+      conflito:
+        `FOOCCI_SALES_PHONE_NUMBER_ID=${input.phoneNumberId} é o número de um RESTAURANTE. ` +
+        "O desvio de vendas foi IGNORADO e a mensagem segue para o restaurante. Corrija a " +
+        "variável no ambiente — enquanto ela estiver assim, nenhum lead de vendas nasce por aqui.",
+    };
+  }
+
+  return { desviar: true, conflito: null };
+}
+
 /** Estado do canal para tela de diagnóstico — sem segredo, só presença. */
 export function describeFoocciSalesChannel(): {
   provedor: ProvedorDeVendas;
