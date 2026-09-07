@@ -48,7 +48,7 @@
  * esperando uma resposta que nunca vem, e culpa o cliente.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSalaDeVendas, mudarResponsavel } from "../_dados";
 import {
   useConversa, escrever, marcarLidas, salvarFicha, moverEtapa,
@@ -88,14 +88,49 @@ const COR_TEMPERATURA: Record<string, string> = {
   NUTRICAO: "bg-cyan-50 text-cyan-700 border-cyan-200",
 };
 
-export function AtendimentoClient() {
-  const [fila, setFila] = useState<NomeDaFila>("aguardandoHumano");
-  const [leadId, setLeadId] = useState<string | null>(null);
-  const [painel, setPainel] = useState<PainelVisivel>("lista");
+/**
+ * ⭐⭐ `leadInicial` — A PORTA QUE FALTAVA, e ela é a razão desta prop existir.
+ *
+ * ── O DEFEITO, MEDIDO EM 06/09/2026 ─────────────────────────────────────────
+ *
+ * A ficha 360º do lead vive aqui, e SÓ aqui. As duas telas onde o vendedor
+ * realmente olha — Filas e Funil — mostravam o lead e **não deixavam abrir**:
+ * os cartões não levavam a lugar nenhum. Quem quisesse ver a qualificação de um
+ * lead tinha de vir para cá e caçá-lo na lista.
+ *
+ * O CEO abriu a área comercial e disse: *"as fichas de leads, as fichas de
+ * clientes que eu não estou vendo em lugar nenhum aqui."* Ele estava quase
+ * certo — a ficha existia, e não tinha porta.
+ *
+ * ── ⚠️ POR QUE NÃO UMA PÁGINA `/comercial/lead/[id]` ───────────────────────
+ *
+ * Porque uma segunda tela de lead seria uma SEGUNDA FICHA. Duas fichas do mesmo
+ * lead divergem no primeiro campo novo — e a divergência aparece como "salvei
+ * numa e a outra não mostra", que é a pior classe de defeito de interface.
+ *
+ * Aqui a porta abre a tela que já existe, com a conversa e a fila em volta. É a
+ * mesma ficha, sempre.
+ */
+export function AtendimentoClient({ leadInicial = null }: { leadInicial?: string | null }) {
+  // ⚠️ Chegando por endereço, a fila padrão passa a ser "todos". A padrão
+  // ("o que a IA parou e me espera") quase nunca contém o lead que veio de um
+  // link — e uma lista que não mostra o lead aberto ensina que o link errou.
+  const [fila, setFila] = useState<NomeDaFila>(leadInicial ? "todos" : "aguardandoHumano");
+  const [leadId, setLeadId] = useState<string | null>(leadInicial);
+  const [painel, setPainel] = useState<PainelVisivel>(leadInicial ? "conversa" : "lista");
   const [aviso, setAviso] = useState<string | null>(null);
 
   const { estado: estadoDaLista, recarregar: recarregarLista } = useSalaDeVendas(fila);
   const { estado: estadoDaConversa, recarregar: recarregarConversa } = useConversa(leadId);
+
+  // Abrir por endereço carimba leitura igual a abrir por clique. Sem isto, o
+  // lead aberto por link continuaria "não lido" para o resto do time.
+  useEffect(() => {
+    if (!leadInicial) return;
+    void marcarLidas(leadInicial).then(() => recarregarLista());
+    // Só na entrada: recarregar a lista a cada render seria um laço.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leadInicial]);
 
   function abrir(id: string) {
     setLeadId(id);

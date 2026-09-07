@@ -15,6 +15,7 @@ import {
   canalDeVendasPronto,
   describeFoocciSalesChannel,
   resolverProvedorDeVendas,
+  decidirDesvioParaVendas,
 } from "../FoocciSalesChannel";
 import type { LeadSafetyDecision } from "../LeadContactSafety";
 
@@ -132,5 +133,66 @@ describe("diagnóstico — presença, nunca segredo", () => {
     expect(d.phoneNumberIdMasked).toBe("…2222");
     // O segredo não aparece em campo nenhum, com nome nenhum.
     expect(JSON.stringify(d)).not.toContain("token-de-teste-nao-real");
+  });
+});
+
+/**
+ * ⛔⛔ O DESVIO PARA VENDAS — a trava que protege o cliente do restaurante.
+ *
+ * Em 06/09/2026 `FOOCCI_SALES_PHONE_NUMBER_ID` estava com o id de um número que
+ * não era da Foocci. Toda mensagem que chegava ali era desviada para a caixa de
+ * vendas e NUNCA chegava ao restaurante: três pessoas escreveram em 27/08, 31/08
+ * e 06/09 e viraram "lead" com o próprio telefone no campo nome.
+ *
+ * A regra que este bloco guarda: **na dúvida, o cliente do restaurante ganha.**
+ */
+describe("⛔ um número não pode ser de vendas E de restaurante", () => {
+  const original = { ...process.env };
+  afterEach(() => {
+    process.env = { ...original };
+  });
+
+  function comCanalLigado(id: string) {
+    process.env.FOOCCI_SALES_PHONE_NUMBER_ID = id;
+    process.env.FOOCCI_SALES_ACCESS_TOKEN = "token-de-prova-bem-longo";
+  }
+
+  it("⭐ número de vendas que NÃO é de restaurante: desvia", () => {
+    comCanalLigado("111");
+    const v = decidirDesvioParaVendas({ phoneNumberId: "111", ehDeUmRestaurante: false });
+    expect(v.desviar).toBe(true);
+    expect(v.conflito).toBeNull();
+  });
+
+  it("⛔⛔ número de vendas que TAMBÉM é de restaurante: NÃO desvia", () => {
+    comCanalLigado("111");
+    const v = decidirDesvioParaVendas({ phoneNumberId: "111", ehDeUmRestaurante: true });
+    // A mensagem segue para o restaurante. Prospecção perdida se recupera com
+    // outra abordagem; cliente que escreveu e não foi respondido, não.
+    expect(v.desviar).toBe(false);
+  });
+
+  it("⛔ e o conflito GRITA, com o id dentro", () => {
+    comCanalLigado("111");
+    const v = decidirDesvioParaVendas({ phoneNumberId: "111", ehDeUmRestaurante: true });
+    // Sequestrar conversa em silêncio foi exatamente como o defeito viveu
+    // semanas sem ninguém notar. A recusa tem de dizer o que corrigir.
+    expect(v.conflito).toContain("111");
+    expect(v.conflito).toContain("FOOCCI_SALES_PHONE_NUMBER_ID");
+  });
+
+  it("número de outro: não desvia, e não é conflito", () => {
+    comCanalLigado("111");
+    const v = decidirDesvioParaVendas({ phoneNumberId: "999", ehDeUmRestaurante: true });
+    expect(v.desviar).toBe(false);
+    // Número de restaurante que nunca foi de vendas é o caso NORMAL — gritar
+    // aqui encheria o log de alarme falso a cada mensagem de cliente.
+    expect(v.conflito).toBeNull();
+  });
+
+  it("⛔ canal desligado não desvia nada", () => {
+    delete process.env.FOOCCI_SALES_PHONE_NUMBER_ID;
+    delete process.env.FOOCCI_SALES_ACCESS_TOKEN;
+    expect(decidirDesvioParaVendas({ phoneNumberId: "111", ehDeUmRestaurante: false }).desviar).toBe(false);
   });
 });
