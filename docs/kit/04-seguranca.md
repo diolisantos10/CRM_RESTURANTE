@@ -1,13 +1,13 @@
 <!-- ESPELHO-DO-KIT
 origem: docs/04-seguranca.md
-kit-commit: 8d60b5e919b2429b2166a2731c8548e6023a84a3
+kit-commit: 20abdeff6daecf9a2624df198c75ac784db1b9eb
 sha256-do-corpo: b200ea7f1f87c656496c34611fdb5e6a187bc1cec4a771aba4f80754453492f5
 -->
 
 > ⚠️ **ESPELHO GERADO — NÃO EDITE ESTE ARQUIVO.**
 >
 > Ele é uma cópia automática de `diolisantos10/dioli-brain-kit` → `docs/04-seguranca.md`,
-> no commit `8d60b5e`.
+> no commit `20abdef`.
 >
 > **Editar aqui não muda a doutrina** — muda só este repositório, e reprova o
 > teste `src/services/doutrina/kitEspelho.test.ts` no próximo CI. Para mudar a

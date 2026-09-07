@@ -1,9 +1,9 @@
 {
   "kitRepo": "diolisantos10/dioli-brain-kit",
   "kitBranch": "main",
-  "kitCommit": "8d60b5e919b2429b2166a2731c8548e6023a84a3",
-  "kitCommitData": "2026-08-13T14:23:37Z",
-  "verificadoEm": "2026-08-24T05:56:11.871Z",
+  "kitCommit": "20abdeff6daecf9a2624df198c75ac784db1b9eb",
+  "kitCommitData": "2026-08-30T14:31:46+00:00",
+  "verificadoEm": "2026-09-07T11:00:38.630Z",
   "geradoPor": ".github/workflows/kit-espelho.yml → scripts/espelhar-kit.ts",
   "arquivos": [
     {
@@ -14,7 +14,7 @@
     {
       "destino": "docs/kit/CLAUDE.md",
       "origem": "CLAUDE.md",
-      "sha256": "0b79d011933f1fa37152e638036f6e64f9e2794cd6a8fcf421662b44bb3188f4"
+      "sha256": "9b974905aa0b86f2a663ce7f2ff78745f8089d6af11cdd68777aade6730f4e59"
     },
     {
       "destino": "docs/kit/00-onboarding-sessao.md",
@@ -89,7 +89,7 @@
     {
       "destino": "docs/kit/14-interface-entre-diretores.md",
       "origem": "docs/14-interface-entre-diretores.md",
-      "sha256": "89f12859c5448e201c78173ba5cc7ed5ffdfc605da55d5eced8223ce80c9f933"
+      "sha256": "041f5392a1c2aad01cb18c86ac14d2df0611d4098c7e7f4a463b172283f93cd5"
     },
     {
       "destino": "docs/kit/15-conferir-o-deploy-e-usar-agentes.md",
@@ -139,7 +139,7 @@
     {
       "destino": "docs/kit/24-o-quadro-do-ceo.md",
       "origem": "docs/24-o-quadro-do-ceo.md",
-      "sha256": "4f4ebb5f4ed7cbd5e93e475cd6d149b8661565e3b4d29cbe48797741d4b0410a"
+      "sha256": "599861a55953f033b0e69c93f96dc18c336a1b341aaa8e14a0c4c8bbfa518bd5"
     },
     {
       "destino": "docs/kit/25-obra-em-espera.md",
@@ -159,7 +159,7 @@
     {
       "destino": "docs/kit/27-ordem-subir-o-branding.md",
       "origem": "docs/27-ordem-subir-o-branding.md",
-      "sha256": "1135912e6a11add3902d84dc00c5813a1666fb51fdb05a42ec24a272f78da416"
+      "sha256": "2b0c7d11f9814cb13a0f5fd45d8f714c4a8d2af772800d84f9ff33246af59a9b"
     },
     {
       "destino": "docs/kit/28-nao-se-para-no-meio.md",
@@ -170,6 +170,21 @@
       "destino": "docs/kit/29-a-camada-de-delegacao.md",
       "origem": "docs/29-a-camada-de-delegacao.md",
       "sha256": "b9d810d2b2c06c5d3b599e8d882a84a2826c9166ac313dea2e711e1b00bdb624"
+    },
+    {
+      "destino": "docs/kit/30-os-gatilhos-do-diretor.md",
+      "origem": "docs/30-os-gatilhos-do-diretor.md",
+      "sha256": "3b27cf324372a37238711c1e69c0fcc76ee2095bb38344d673b0b6b9d3a5ffe4"
+    },
+    {
+      "destino": "docs/kit/31-verde-e-o-que-esta-rodando.md",
+      "origem": "docs/31-verde-e-o-que-esta-rodando.md",
+      "sha256": "c5769e59074fea0df795022a6d03e02ec0e44b0d001ebfd5bcb48842dbf86487"
+    },
+    {
+      "destino": "docs/kit/32-o-id-aceito-de-quem-chama.md",
+      "origem": "docs/32-o-id-aceito-de-quem-chama.md",
+      "sha256": "263d36c2fc06a71221fccad346350a21335c53be5962ae14f95f270d832facc4"
     },
     {
       "destino": "docs/kit/perguntas-abertas.md",
