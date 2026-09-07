@@ -52,8 +52,9 @@ import { useEffect, useState } from "react";
 import { useSalaDeVendas, mudarResponsavel } from "../_dados";
 import {
   useConversa, escrever, marcarLidas, salvarFicha, moverEtapa,
-  desde, hora, type LeadNaConversa,
+  desde, hora, dataHoraCurta, type LeadNaConversa,
 } from "./_dados";
+import type { EventoDaFicha } from "@/services/salaDeVendas/linhaDoTempo";
 import type { NomeDaFila, LeadNaFila } from "@/services/salaDeVendas/filas";
 import type { MensagemNaTela } from "@/services/salaDeVendas/conversa";
 
@@ -715,11 +716,15 @@ function FichaEditavel({
   aoAvisar,
   aoSalvar,
 }: {
-  dados: { lead: LeadNaConversa; fatoresDoScore: Array<{ fator: string; observado: string; pontos: number }> };
+  dados: {
+    lead: LeadNaConversa;
+    fatoresDoScore: Array<{ fator: string; observado: string; pontos: number }>;
+    linhaDoTempo: EventoDaFicha[];
+  };
   aoAvisar: (s: string | null) => void;
   aoSalvar: () => void;
 }) {
-  const { lead, fatoresDoScore } = dados;
+  const { lead, fatoresDoScore, linhaDoTempo } = dados;
   const q = lead.qualificacao;
 
   const [form, setForm] = useState({
@@ -811,6 +816,10 @@ function FichaEditavel({
         )}
       </Secao>
 
+      <Secao titulo="Linha do tempo">
+        <LinhaDoTempo eventos={linhaDoTempo} />
+      </Secao>
+
       {/* A CONTA do score, e não só o número. Item 10 do comando. */}
       <Secao titulo="Por que este score">
         {lead.score === null ? (
@@ -869,6 +878,70 @@ function FichaEditavel({
         <Linha rotulo="Pediu silêncio" valor={lead.optOutAt ? "sim — definitivo" : "não"} />
       </Secao>
     </div>
+  );
+}
+
+/**
+ * ⭐ A LINHA DO TEMPO — o que aconteceu com este lead antes de agora.
+ *
+ * `SiteLeadInteraction` grava isto desde a captura, e até 07/09/2026 **nenhuma
+ * tela da área comercial mostrava**: a ficha dizia o estado de hoje e nada do
+ * caminho. Quem quisesse a história ia ao CRM antigo, em `/admin`.
+ *
+ * ── O AVISO NO RODAPÉ NÃO É ENFEITE ─────────────────────────────────────────
+ *
+ * As mensagens ficam de fora (a conversa ao lado mostra melhor), e uma lista que
+ * omite EM SILÊNCIO ensina o vendedor a ler "não aconteceu nada" onde o certo é
+ * "está no outro painel". A frase custa uma linha e evita a conclusão errada.
+ *
+ * ── E O AMARELO DA NOTA INTERNA ─────────────────────────────────────────────
+ *
+ * `interna` quer dizer **o lead nunca vê**. Marcar visualmente é o que impede o
+ * copiar-e-colar distraído de uma observação da equipe para dentro de uma
+ * mensagem de saída — que é um estrago que não se desfaz.
+ */
+function LinhaDoTempo({ eventos }: { eventos: EventoDaFicha[] }) {
+  if (eventos.length === 0) {
+    return (
+      <p className="text-[12.5px] leading-relaxed text-muted">
+        Nada registrado além das mensagens. As trocas com o cliente ficam na
+        conversa, ao lado.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      <ol className="flex flex-col">
+        {eventos.map((e) => (
+          <li key={e.id} className="border-l-2 border-line2 py-1 pl-2.5">
+            <p className="text-[12.5px] leading-snug text-ink">{e.titulo}</p>
+            <p className="text-[11px] text-muted">
+              {dataHoraCurta(e.quando)} · {e.autor}
+            </p>
+            {e.nota && (
+              <p
+                className={cx(
+                  "mt-1 rounded-lg px-2 py-1 text-[12px] leading-relaxed",
+                  e.interna
+                    ? "bg-amber-50 text-amber-900"
+                    : "bg-canvas text-ink2",
+                )}
+              >
+                {e.interna && (
+                  <span className="mr-1 font-semibold">Interna — o lead não vê:</span>
+                )}
+                {e.nota}
+              </p>
+            )}
+          </li>
+        ))}
+      </ol>
+
+      <p className="mt-2 text-[11px] leading-relaxed text-muted">
+        As mensagens trocadas não entram nesta lista — elas estão na conversa.
+      </p>
+    </>
   );
 }
 

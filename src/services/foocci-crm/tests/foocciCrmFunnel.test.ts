@@ -8,10 +8,11 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { $Enums } from "@prisma/client";
 import {
   computeFunnel, montaDegrau, formataTaxa, podeMover, indiceEtapa,
-  SEQUENCIA_FUNIL, MIN_LEADS_PARA_TAXA, contaComoAbordagem,
-  type FoocciLeadStage,
+  SEQUENCIA_FUNIL, MIN_LEADS_PARA_TAXA, contaComoAbordagem, ROTULO_INTERACAO,
+  type FoocciLeadStage, type TipoDeInteracao,
 } from "../foocciCrmFunnel";
 
 function leads(pares: Array<[FoocciLeadStage, FoocciLeadStage]>) {
@@ -141,6 +142,44 @@ describe("interações de saída", () => {
     expect(contaComoAbordagem("NOTA")).toBe(false);
     expect(contaComoAbordagem("RESPOSTA_RECEBIDA")).toBe(false);
     expect(contaComoAbordagem("CAPTURA")).toBe(false);
+  });
+
+  it("assumir um lead NÃO é ter falado com ele", () => {
+    // Se contasse, o lead sumiria da fila "ninguém falou com ele" no clique de
+    // "Assumir" — abandonado e invisível ao mesmo tempo.
+    expect(contaComoAbordagem("ASSUMIU_HUMANO")).toBe(false);
+    expect(contaComoAbordagem("DEVOLVEU_PARA_IA")).toBe(false);
+    expect(contaComoAbordagem("PEDIU_HUMANO")).toBe(false);
+    expect(contaComoAbordagem("NOTA_INTERNA")).toBe(false);
+  });
+});
+
+/**
+ * ⛔ O AFERIDOR — e ele mede contra o BANCO, não contra a lista ao lado.
+ *
+ * O defeito de 07/09/2026 foi exatamente este: `ROTULO_INTERACAO` tinha oito
+ * entradas, o banco tinha doze, e nada gritou. Um teste que percorresse
+ * `Object.keys(ROTULO_INTERACAO)` teria passado feliz — estaria conferindo o
+ * mapa consigo mesmo. A única fonte que não mente aqui é o enum do Prisma.
+ */
+describe("rótulos de interação × enum do banco", () => {
+  it("todo tipo que o banco aceita tem rótulo em português", () => {
+    const doBanco = Object.keys($Enums.SiteLeadInteractionType);
+    expect(doBanco.length).toBeGreaterThan(0); // sonda: o enum foi mesmo lido
+
+    const semRotulo = doBanco.filter((t) => !ROTULO_INTERACAO[t as TipoDeInteracao]);
+    expect(semRotulo).toEqual([]);
+  });
+
+  it("não sobra rótulo para tipo que o banco não conhece", () => {
+    const doBanco = new Set(Object.keys($Enums.SiteLeadInteractionType));
+    expect(Object.keys(ROTULO_INTERACAO).filter((t) => !doBanco.has(t))).toEqual([]);
+  });
+
+  it("a sonda de controle: um tipo inventado NÃO tem rótulo", () => {
+    // Sem isto, os dois testes acima passariam mesmo com um `Record` que
+    // devolvesse qualquer coisa para qualquer chave.
+    expect(ROTULO_INTERACAO["ASSUMIU_TUDO" as TipoDeInteracao]).toBeUndefined();
   });
 });
 
