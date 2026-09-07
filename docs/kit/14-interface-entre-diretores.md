@@ -1,13 +1,13 @@
 <!-- ESPELHO-DO-KIT
 origem: docs/14-interface-entre-diretores.md
-kit-commit: 8d60b5e919b2429b2166a2731c8548e6023a84a3
-sha256-do-corpo: 89f12859c5448e201c78173ba5cc7ed5ffdfc605da55d5eced8223ce80c9f933
+kit-commit: 20abdeff6daecf9a2624df198c75ac784db1b9eb
+sha256-do-corpo: 041f5392a1c2aad01cb18c86ac14d2df0611d4098c7e7f4a463b172283f93cd5
 -->
 
 > ⚠️ **ESPELHO GERADO — NÃO EDITE ESTE ARQUIVO.**
 >
 > Ele é uma cópia automática de `diolisantos10/dioli-brain-kit` → `docs/14-interface-entre-diretores.md`,
-> no commit `8d60b5e`.
+> no commit `20abdef`.
 >
 > **Editar aqui não muda a doutrina** — muda só este repositório, e reprova o
 > teste `src/services/doutrina/kitEspelho.test.ts` no próximo CI. Para mudar a
@@ -126,6 +126,51 @@ Por isso o repositório continua sendo a memória, e não vira dispensável:
 
 > **O que precisa sobreviver vai para o repositório.** O recado direto é o gatilho,
 > não o registro. Recado sem OS escrita é ordem que morre com a sessão.
+
+---
+
+## 1.1 ⭐ O CEO AUTORIZOU — 29/08/2026. E a autorização não é o botão.
+
+**Palavras dele, registradas porque ele pediu que ficassem registradas:**
+
+> *"Eu autorizo sim a comunicação entre os departamentos. Não sei quem que
+> bloqueia, mas eu quero que você diga que eu autorizei."*
+
+**Está dito, e vale como ordem permanente do dono da empresa.** Não existe mais
+dúvida de política interna sobre um Diretor falar com outro, nem sobre um
+departamento falar com o departamento vizinho. Quem precisar desse canal **tem o
+consentimento do CEO, por escrito, desta data.** Ninguém precisa perguntar de
+novo: cita esta seção.
+
+**E é preciso ser honesto sobre o que essa autorização faz e o que não faz.**
+
+O que bloqueia **não é regra da empresa** — é uma permissão da plataforma onde
+estas sessões rodam, no nível da organização. A autorização do CEO remove o
+impedimento **político**; ela não liga o interruptor **técnico**. Dizer o
+contrário seria encenar capacidade, que é o erro que este documento inteiro
+existe para não repetir.
+
+**Medido de novo em 29/08/2026, com a ferramenta de listagem na mão:** a única
+coisa que uma sessão enxerga são os subagentes que ela mesma criou. **Nenhuma
+outra sessão da companhia aparece** — nem Diretor de projeto, nem Diretor Geral
+em outra janela. A conclusão da seção 1 continua de pé, agora com duas medições
+independentes em datas diferentes.
+
+**O que resta, na ordem:**
+
+1. A autorização do CEO está registrada. Essa parte acabou.
+2. **Falta ligar a permissão** — ato de administrador da organização, uma
+   pergunta ao suporte da plataforma. É o único passo que sobrou, e ele não é de
+   doutrina.
+3. Até lá **nada muda na prática**: o canal entre produtos continua sendo o
+   pedido escrito em `docs/pedidos/`, com o CEO como carteiro — e isso continua
+   contradizendo a ordem dele, da doutrina 30, de ser o **último** degrau. **A
+   contradição fica declarada, não disfarçada.**
+
+⚠️ **Quando a permissão for ligada, refaça o envio de verdade antes de mudar uma
+palavra deste arquivo.** Autorização escrita não é prova de que funciona,
+exatamente como documentação não era. Foi assim que este documento errou duas
+vezes no mesmo dia, em direções opostas.
 
 ---
 

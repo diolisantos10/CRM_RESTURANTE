@@ -1,13 +1,13 @@
 <!-- ESPELHO-DO-KIT
 origem: CLAUDE.md
-kit-commit: 8d60b5e919b2429b2166a2731c8548e6023a84a3
-sha256-do-corpo: 0b79d011933f1fa37152e638036f6e64f9e2794cd6a8fcf421662b44bb3188f4
+kit-commit: 20abdeff6daecf9a2624df198c75ac784db1b9eb
+sha256-do-corpo: 9b974905aa0b86f2a663ce7f2ff78745f8089d6af11cdd68777aade6730f4e59
 -->
 
 > ⚠️ **ESPELHO GERADO — NÃO EDITE ESTE ARQUIVO.**
 >
 > Ele é uma cópia automática de `diolisantos10/dioli-brain-kit` → `CLAUDE.md`,
-> no commit `8d60b5e`.
+> no commit `20abdef`.
 >
 > **Editar aqui não muda a doutrina** — muda só este repositório, e reprova o
 > teste `src/services/doutrina/kitEspelho.test.ts` no próximo CI. Para mudar a
@@ -233,6 +233,12 @@ precisam saber?*
 | `docs/07-memoria-de-agente.md` | As duas camadas de agente + as salas |
 | `docs/08-modelo-ceo-pm-agentes.md` | **O modelo organizacional** |
 | `docs/09-como-trabalhar-aqui.md` | **O ambiente de execução e o CEO** |
+| `docs/10-canal-de-escalada.md` | Como um Diretor de projeto fala com o Diretor Geral |
+| `docs/11-backlog-do-diretor-geral.md` | Backlog do Diretor Geral |
+| `docs/12-cofre-de-credencial.md` | Cofre de credencial: o padrão que todo projeto segue |
+| `docs/13-quem-esta-vivo.md` | Sessões, colisão e quando montar um Diretor |
+| `docs/14-interface-entre-diretores.md` | A interface entre os Diretores e o Diretor Geral |
+| `docs/15-conferir-o-deploy-e-usar-agentes.md` | Duas disciplinas de operação de todo Diretor |
 | `docs/16-raio-x-noturno.md` | **O raio-x noturno obrigatório** — protocolo e padrões |
 | `docs/17-placar-diario.md` | **O placar diário obrigatório** — a nota por área, logo após o raio-x |
 | `docs/18-o-despacho.md` | **O despacho obrigatório** — trabalho que chega é despachado no mesmo turno; balde "novo" é proibido |
@@ -242,6 +248,15 @@ precisam saber?*
 | `docs/22-briefing-ao-conselho.md` | O pedido ao Conselho: a **constituição** dos cinco, travada e sem domínio |
 | `docs/23-constituicao-dos-essenciais.md` | **A Constituição dos Essenciais** — os doze campos de cada um |
 | `docs/24-o-quadro-do-ceo.md` | **O quadro do CEO** — o único formato de relatório. Substitui a prosa |
+| `docs/25-obra-em-espera.md` | A obra em espera: o que fica escrito e como se retoma |
+| `docs/26-briefing-ao-conselho-branding.md` | O pedido ao Conselho: a constituição do `branding` |
+| `docs/26a-pedido-pronto-branding.md` | O pedido de branding pronto, para colar no Conselho |
+| `docs/27-ordem-subir-o-branding.md` | **ORDEM:** subir o `branding` em todos os projetos |
+| `docs/28-nao-se-para-no-meio.md` | **REGRA DE OURO:** não se para no meio do cronograma |
+| `docs/29-a-camada-de-delegacao.md` | **A camada de delegação** — cargo, exceção fechada e bordas de turno |
+| `docs/30-os-gatilhos-do-diretor.md` | **Os gatilhos do Diretor** — o que o acorda sem ninguém pedir, e a escada que termina no CEO |
+| `docs/31-verde-e-o-que-esta-rodando.md` | **MANDAMENTO:** ✅ só para o que está no ar, funcionando e conferido lá |
+| `docs/32-o-id-aceito-de-quem-chama.md` | **O identificador que chega de fora não é credencial** — conferir que existe não é conferir que é seu |
 | `templates/` | Código-molde generalizado |
 | `casos/` | O que foi plantado em cada produto |
 
@@ -272,6 +287,18 @@ um incidente real. Regra que parece exagerada normalmente é cicatriz.
    turno encerrado. Sessão que vai acabar deixa a retomada **agendada** e o
    estado **escrito**. Doutrina 28 — e ela nasceu de eu ter parado cinco vezes
    em dois dias e o CEO ter tido de perguntar *"por que você parou?"*.
+9. **⭐ MANDAMENTO — verde é o que está rodando.** ✅ só existe para o que está
+   **em produção, funcionando, e conferido lá**. Pronto, testado, aprovado ou
+   juntado ao código é 🔄, não ✅. Não se cria estado intermediário que pareça
+   verde. Ordem do CEO em 29/08/2026, declarada **inquestionável**, valendo em
+   todos os produtos. Doutrina 31 — nasceu de duas correções críticas ficarem
+   42 commits presas com o quadro verde.
+10. **A proatividade tem gatilho, não cobrança.** Todo Diretor age sem ser
+    chamado diante de: raio-x parado há mais de 8h · pendência que não fechou no
+    mesmo dia · gasto acima da média sem causa registrada · ✅ que não está no ar
+    · incoerência entre o que a empresa promete e o que sustenta. E **esgota a
+    escada antes de subir: o CEO é o último degrau**, porque ele é 100%
+    estratégico. Doutrina 30, ordem do CEO em 29/08/2026.
 
 ---
 

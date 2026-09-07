@@ -109,6 +109,26 @@ const PUBLIC_PATHS: RegExp[] = [
   // Global admin area — auth handled by admin cookie + layout, NOT by NextAuth
   /^\/admin(\/.*)?$/,                  // Admin UI pages
   /^\/api\/admin(\/.*)?$/,             // Admin API routes (each verifies x-admin-secret or admin cookie)
+  // ⛔⛔ AS ROTAS DA PESSOA DA CASA — e esta linha faltou, com dano medido.
+  //
+  // "Público" aqui significa o mesmo que significa duas linhas acima: **não
+  // exige sessão de LOJISTA**. Cada rota decide o resto sozinha — `/senha`
+  // exige a sessão interna E a senha atual; `/sessao-de-agente` exige crachá
+  // declarado E credencial de agente. Nenhuma das duas é aberta.
+  //
+  // ── O QUE ACONTECEU SEM ELA, MEDIDO EM PRODUÇÃO EM 06/09/2026 ────────────
+  //
+  // A troca obrigatória de senha subiu no #188 e foi reportada como pronta.
+  // Estava morta: `/admin/trocar-senha` (que É público aqui) carregava, a
+  // pessoa preenchia, e o POST para `/api/interno/senha` levava o 401 genérico
+  // do middleware — sem uma linha do handler chegar a rodar.
+  //
+  // ⚠️ É a MESMA armadilha que a porta do Connect documentou logo acima, e é a
+  // terceira vez nesta casa. O disfarce é o que a torna cruel: para um caminho
+  // `/api/`, o middleware responde `{"success":false,"error":"Unauthorized"}`
+  // — um 401 que PARECE a recusa da rota. Quem depura troca cabeçalho o dia
+  // inteiro enquanto o problema é que a rota nunca executou.
+  /^\/api\/interno(\/.*)?$/,           // Rotas da pessoa da casa (cada uma verifica a própria credencial)
 ];
 
 function isPublicPath(pathname: string): boolean {

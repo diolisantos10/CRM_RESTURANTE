@@ -1,13 +1,13 @@
 <!-- ESPELHO-DO-KIT
 origem: docs/27-ordem-subir-o-branding.md
-kit-commit: 8d60b5e919b2429b2166a2731c8548e6023a84a3
-sha256-do-corpo: 1135912e6a11add3902d84dc00c5813a1666fb51fdb05a42ec24a272f78da416
+kit-commit: 20abdeff6daecf9a2624df198c75ac784db1b9eb
+sha256-do-corpo: 2b0c7d11f9814cb13a0f5fd45d8f714c4a8d2af772800d84f9ff33246af59a9b
 -->
 
 > ⚠️ **ESPELHO GERADO — NÃO EDITE ESTE ARQUIVO.**
 >
 > Ele é uma cópia automática de `diolisantos10/dioli-brain-kit` → `docs/27-ordem-subir-o-branding.md`,
-> no commit `8d60b5e`.
+> no commit `20abdef`.
 >
 > **Editar aqui não muda a doutrina** — muda só este repositório, e reprova o
 > teste `src/services/doutrina/kitEspelho.test.ts` no próximo CI. Para mudar a
@@ -91,6 +91,32 @@ conta como feito, que é a regra da casa aplicada a esta ordem.
 | Foocci Manager | ☐ | ☐ | | |
 | CityJobs | ☐ | ☐ | | |
 | Dioli Political | ☐ | ☐ | | |
+| **Control Room** | ✅ | ✅ | `marca_nao_constituida` · 0/9 campos · 2 rotas de entrega fora do portão (`src/publicacao/`, `docs/pedidos/`) | 29/08/2026 |
+
+> **A Control Room entra na tabela porque ela não tinha isenção, e ninguém tinha
+> reparado.** A ordem dizia "todos os Diretores de projeto" e listava os cinco
+> produtos; a Control Room não é produto, é a oficina do Diretor Geral — e a
+> leitura literal deixou de fora justamente a casa que escreve a doutrina.
+> Linha acrescentada pelo Diretor Geral em 29/08/2026, ao montar o elenco desta
+> sala e descobrir o buraco. **A sala que redige a regra é a que menos pode ficar
+> de fora dela.**
+
+### ⚠️ Vinte dias depois, quatro de cinco continuam em branco
+
+Apurado em 29/08/2026: das cinco linhas originais, **só a Dioli Digital foi
+marcada**, em 09/08. Foocci, Foocci Manager, CityJobs e Dioli Political seguem
+`☐` — vinte dias.
+
+E a própria regra desta seção decide o que isso significa: **"quem não marcou,
+não fez"**. Não é presunção contra os Diretores; é a regra da casa aplicada a
+esta ordem, e ela existe justamente para o silêncio não virar conformidade.
+
+**Isto é uma ordem do CEO parada há vinte dias**, e é exatamente o que a doutrina
+30 passou a chamar de gatilho 2 — pendência que não fechou. Sob a doutrina 30 ela
+teria fechado no mesmo dia. Fica registrado aqui, com data, para que o Diretor
+Geral leve ao CEO na próxima consolidação: **não como cobrança aos Diretores, mas
+como prova de que uma ordem escrita sem gatilho não anda sozinha.** Era esse o
+buraco que a 30 nasceu para tapar.
 
 ---
 

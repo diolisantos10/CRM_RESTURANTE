@@ -35,6 +35,7 @@ import {
 import { explicacaoDoScore } from "@/services/salaDeVendas/score";
 import { comSessao } from "@/services/salaDeVendas/identidadeNoBanco";
 import { lerOSilencio, avisoDoSilencio } from "@/services/salaDeVendas/anterioresASala";
+import { lerLinhaDoTempo } from "@/services/salaDeVendas/linhaDoTempo";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -88,6 +89,13 @@ export async function GET(req: NextRequest) {
     ]),
   );
 
+  // ⚠️ FORA de `comSessao`, e isso é escolha, não esquecimento:
+  // `SiteLeadInteraction` não está sob RLS (só as tabelas `lead_*` estão), então
+  // a sessão do banco não mudaria nada aqui. Quem protege este dado é
+  // `podeVerOLead`, três linhas acima — e é por isso que a leitura vem DEPOIS
+  // dele, e nunca antes.
+  const linhaDoTempo = await lerLinhaDoTempo(prisma, { leadId, limite: 30 });
+
   // POR QUE O AVISO É MONTADO NO SERVIDOR: a tela receberia `createdAt` e
   // `mensagens.length` e poderia decidir sozinha — e aí a regra do que é
   // "anterior à Sala" viveria no navegador, longe do teste, e mudaria de
@@ -106,6 +114,10 @@ export async function GET(req: NextRequest) {
       lead,
       mensagens,
       fatoresDoScore: fatores,
+      // O que aconteceu com este lead fora das mensagens: captura, movimento no
+      // funil, quem assumiu, notas. Estava gravado desde sempre e nenhuma tela
+      // da área comercial mostrava.
+      linhaDoTempo,
       janela: janelaDe24h(ultimaEntrada?.ocorreuEm ?? null, agora),
       podeEscrever: !somenteLeitura(portao.sessao) && !lead.optOutAt,
       // `null` quando há conversa. Aviso que aparece sempre é aviso que

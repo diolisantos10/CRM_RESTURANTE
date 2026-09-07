@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { escopoDaConsulta, filtroDaFila, listarFila, FILAS } from "./filas";
+import { escopoDaConsulta, filtroDaFila, listarFila, FILAS, ordenacaoDaFila } from "./filas";
+import type { NomeDaFila } from "./filas";
 import type { SessaoInterna } from "@/lib/internal-auth";
 
 const sessao = (over: Partial<SessaoInterna> = {}): SessaoInterna => ({
@@ -357,5 +358,44 @@ describe("⭐ as duas filas: quem qualifica e quem fecha", () => {
     const r = await listarFila(db as never, { fila: "todos", sessao: sessao(), agora: AGORA });
     expect(r.contagens).toHaveProperty("aguardandoQualificacao");
     expect(r.contagens).toHaveProperty("qualificados");
+  });
+});
+
+/**
+ * ⛔⛔ A ORDEM DA FILA — e por que ela virou teste em 07/09/2026.
+ *
+ * A fila "Sem responsável" responde à pergunta *"o que está largado?"*. Ela caía
+ * no `default`, que desempata por `createdAt: "desc"`. Como ninguém nessa fila
+ * tem atendente, o desempate virava a ordem inteira: **o mais novo no topo e o
+ * mais abandonado no fim** — exatamente ao contrário do que a pergunta pede.
+ *
+ * Medido em 06/09/2026: o lead mais velho da base esperava 21 dias, tinha vindo
+ * da página de PREÇOS, e estava no fundo da lista feita para encontrá-lo.
+ */
+describe("⛔ a ordem das filas põe quem espera mais primeiro", () => {
+  it("Sem responsável ordena pelo mais antigo", () => {
+    expect(ordenacaoDaFila("semResponsavel")).toEqual([{ createdAt: "asc" }]);
+  });
+
+  it("Aguardando qualificação ordena pelo mais antigo", () => {
+    expect(ordenacaoDaFila("aguardandoQualificacao")).toEqual([{ createdAt: "asc" }]);
+  });
+
+  it("⛔ NENHUMA fila desempata pelo mais recente", () => {
+    // `createdAt: "desc"` em qualquer lugar desta função é o defeito voltando:
+    // é confortável para quem opera (o assunto está fresco) e é exatamente como
+    // um lead antigo nunca mais é tocado.
+    const todas: NomeDaFila[] = [
+      "aguardandoQualificacao", "qualificados", "semResponsavel", "meusLeads",
+      "comIA", "aguardandoHumano", "semResposta", "followUpVencido", "todos",
+    ];
+    for (const f of todas) {
+      for (const criterio of ordenacaoDaFila(f)) {
+        expect(
+          (criterio as Record<string, string>).createdAt,
+          `a fila "${f}" desempata pelo mais recente`,
+        ).not.toBe("desc");
+      }
+    }
   });
 });
