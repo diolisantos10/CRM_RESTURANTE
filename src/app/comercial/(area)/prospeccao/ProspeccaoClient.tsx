@@ -280,9 +280,26 @@ export function ProspeccaoClient() {
                 {fila.liberados.map((c) => (
                   <li
                     key={c.itemId}
-                    className="rounded-lg border border-line bg-paper px-3 py-2 text-[13px] text-ink"
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-paper px-3 py-2 text-[13px] text-ink"
                   >
-                    {c.nome ?? "Sem nome"} · {c.whatsapp}
+                    <span className="min-w-0 truncate">
+                      {c.nome ?? "Sem nome"} · {c.whatsapp}
+                    </span>
+
+                    {/* ⚠️ UM botão por contato, e nenhum "abordar todos".
+                        Dez abordagens são dez cliques, e o freio de ritmo é lido
+                        de novo a cada um. Um botão de lote leria o freio uma vez
+                        e valeria para a lista inteira — que é exatamente o que o
+                        freio existe para impedir. O dia em que a operação pedir
+                        volume, o certo é uma fila com ritmo próprio, não um
+                        laço disparado por clique. */}
+                    <button
+                      disabled={ocupado}
+                      onClick={() => agir({ acao: "abordar", itemId: c.itemId })}
+                      className="shrink-0 rounded-lg bg-brand-500 px-3 py-1.5 text-[12.5px] font-semibold text-white transition-colors hover:bg-brand-600 disabled:opacity-50"
+                    >
+                      Abordar
+                    </button>
                   </li>
                 ))}
                 {fila.liberados.length === 0 && (
