@@ -55,6 +55,7 @@ import {
   desde, hora, dataHoraCurta, type LeadNaConversa,
 } from "./_dados";
 import type { EventoDaFicha } from "@/services/salaDeVendas/linhaDoTempo";
+import { rotuloCurto, ETAPAS_NA_SALA } from "@/services/salaDeVendas/rotulosDaSala";
 import type { NomeDaFila, LeadNaFila } from "@/services/salaDeVendas/filas";
 import type { MensagemNaTela } from "@/services/salaDeVendas/conversa";
 
@@ -64,21 +65,13 @@ function cx(...p: Array<string | false | null | undefined>): string {
 
 type PainelVisivel = "filas" | "lista" | "conversa" | "ficha";
 
-const ROTULO_ETAPA: Record<string, string> = {
-  NOVO: "Novo lead",
-  PRIMEIRO_CONTATO: "Primeiro contato",
-  EM_QUALIFICACAO: "Em qualificação",
-  QUALIFICADO: "Qualificado",
-  DEMO_AGENDADA: "Demo agendada",
-  DEMO_REALIZADA: "Demo realizada",
-  PROPOSTA_ENVIADA: "Proposta enviada",
-  EM_NEGOCIACAO: "Em negociação",
-  GANHO: "Ganho",
-  PERDIDO: "Perdido",
-  NUTRICAO: "Nutrição",
-};
-
-const ETAPAS = Object.keys(ROTULO_ETAPA);
+/**
+ * ⚠️ Os rótulos saíram daqui para `@/services/salaDeVendas/rotulosDaSala`, e as
+ * palavras na tela continuam idênticas. O que mudou foi de onde vem a LISTA de
+ * etapas do seletor: era `Object.keys()` do próprio mapa — que é o mapa
+ * decidindo quais etapas existem — e agora vem do funil, que é a fonte. Uma
+ * etapa nova passa a aparecer no seletor sozinha, e há teste exigindo isso.
+ */
 
 const COR_TEMPERATURA: Record<string, string> = {
   PRIORIDADE_MAXIMA: "bg-red-50 text-red-700 border-red-200",
@@ -375,7 +368,7 @@ function LinhaDaConversa({
         )}
 
         <div className="mt-1 flex flex-wrap items-center gap-1">
-          <Etiqueta texto={ROTULO_ETAPA[lead.stage] ?? lead.stage} />
+          <Etiqueta texto={rotuloCurto(lead.stage)} />
           <Etiqueta texto={rotuloDeQuem(lead.atendidoPor)} />
         </div>
       </button>
@@ -803,8 +796,8 @@ function FichaEditavel({
           onChange={(e) => void mover(e.target.value)}
           className="mt-1 w-full rounded-xl border border-line2 bg-paper px-2.5 py-1.5 text-[13px] text-ink outline-none focus:border-brand-400"
         >
-          {ETAPAS.map((e) => (
-            <option key={e} value={e}>{ROTULO_ETAPA[e]}</option>
+          {ETAPAS_NA_SALA.map((e) => (
+            <option key={e} value={e}>{rotuloCurto(e)}</option>
           ))}
         </select>
 
