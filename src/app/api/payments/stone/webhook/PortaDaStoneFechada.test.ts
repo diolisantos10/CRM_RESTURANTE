@@ -115,6 +115,35 @@ describe("sem o segredo, a porta fica fechada — e era assim que a produção e
     nadaFoiEscrito();
   });
 
+  /**
+   * ⭐ ESTE CASO NASCEU DE UMA MUTAÇÃO QUE SOBREVIVEU.
+   *
+   * Apaguei o `return` que recusa quando o segredo não existe, e os dez testes
+   * continuaram verdes. A razão é boa e vale registrar: `verifyWebhookSignature`
+   * (`src/lib/stone.ts:141`) **também** é fail-closed — sem segredo devolve
+   * `false` —, então a segunda trava pega o que a primeira deixou passar. Em
+   * segurança, a mutação é EQUIVALENTE: a porta continua fechada dos dois jeitos.
+   *
+   * O que ela não é equivalente é no DIAGNÓSTICO. Sem a primeira trava, quem
+   * olha o log de produção lê "Invalid signature" e vai procurar defeito na
+   * Stone — quando o que falta é uma variável de ambiente na própria casa. É o
+   * guardrail 6: o alerta carrega a própria evidência. É isso que este caso
+   * tranca, e é só isso — a trava dupla eu deixo de propósito.
+   */
+  it("⭐ o log diz que FALTA O SEGREDO, e não 'assinatura inválida'", async () => {
+    delete process.env.STONE_WEBHOOK_SECRET;
+    const erro = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await bater();
+
+    const ditos = erro.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(
+      ditos,
+      "o log não nomeia a variável que falta — quem investigar vai culpar a Stone",
+    ).toContain("STONE_WEBHOOK_SECRET");
+    erro.mockRestore();
+  });
+
   it("nem chega a consultar o banco — recusa antes de tocar em dado de cliente", async () => {
     delete process.env.STONE_WEBHOOK_SECRET;
     await bater();
