@@ -1,0 +1,148 @@
+{
+  "produto": "Foocci",
+  "data": "2026-09-07",
+  "gerado_em_utc": "2026-09-07T11:25:00Z",
+  "assinado_por": "Diretor do Foocci",
+  "aviso": "null = NAO MEDIDO. 0 = medido e deu zero.",
+  "ficha_lida": false,
+
+  "a_comanda_voltou_a_imprimir": {
+    "resposta": true,
+    "enfileiramentos_bem_sucedidos_na_noite": 7,
+    "falhas_na_noite": 0,
+    "janela_medida_utc": "2026-09-06 20:57 a 2026-09-07 01:19",
+    "carimbos_utc": [
+      "2026-09-06T22:36:46Z", "2026-09-06T22:56:50Z", "2026-09-06T23:13:06Z",
+      "2026-09-06T23:33:18Z", "2026-09-06T23:50:17Z", "2026-09-06T23:52:51Z",
+      "2026-09-07T00:26:10Z"
+    ],
+    "origem": "Railway get-logs, filtro PrintQueueService, nos dois deployments que cobrem o jantar (f9cf1f92 e e81eddeb)",
+    "comparacao": "Nos seis dias anteriores: 33 falhas e ZERO sucessos. Ontem a noite: 7 sucessos e ZERO falhas.",
+    "conserto": "PR #189, mergeado em 06/09 e em producao desde entao",
+    "ressalva": "Isto prova que o trabalho de impressao ENTRA NA FILA. NAO prova que saiu papel na cozinha — isso continua exigindo uma pessoa olhando a impressora numa loja."
+  },
+
+  "a_bomba_do_espelho_explodiu": {
+    "explodiu": true,
+    "quando_utc": "2026-09-07T05:56Z",
+    "medido_como": "rodei kitEspelho.test.ts em copia limpa da branch de deploy as 11:12 UTC: reprova com 'ESPELHO_VELHO — nao e conferido ha 14.2 dias (limite: 14)'",
+    "consequencia": "TODO PR da casa esta reprovando neste momento, por um motivo sem relacao com o que a pessoa mudou",
+    "cura_existe": true,
+    "cura": "PR #192, aberto desde ontem 13h UTC, nao mergeado",
+    "causa_raiz": "o workflow kit-espelho.yml nao conclui desde 24/08 por falta do segredo DIOLI_BRAIN_KIT_TOKEN"
+  },
+
+  "saude": {
+    "app_no_ar": true,
+    "origem": "GET https://foocci.com.br/api/health as 11:08 UTC",
+    "db_status": "ok",
+    "commit_em_producao": "c0ff8938",
+    "uptime_segundos": 35292,
+    "requisicoes_24h": 29779,
+    "erros_5xx_24h": 19,
+    "erro_5xx_24h_pct": 0.0638,
+    "erros_4xx_24h": 163,
+    "origem_erros": "Railway http-error-rate, 24h, 9 baldes",
+    "janela_dos_erros": "18 dos 19 entre 21h de 06/09 e 03h de 07/09 — o horario do jantar, e tambem o de cinco deploys seguidos",
+    "serie_erro_5xx_pct": {"2026-09-02": 0.0875, "2026-09-03": 0.0, "2026-09-05": 0.0468, "2026-09-06": 0.0419, "2026-09-07": 0.0638},
+    "comparacao": "trafego caiu de 45.340 para 29.779. Taxa subiu de 0,042% para 0,064%, com o mesmo numero absoluto de erros (19)."
+  },
+
+  "cliente": {
+    "clientes_sem_resposta_hoje": null,
+    "motivo_null": "exige leitura do banco; DECIMO dia em null",
+    "comandas_enfileiradas_ontem": 7,
+    "comandas_falhadas_ontem": 0,
+    "aniversario_sai_no_dia": false,
+    "aniversario_conserto": "pronto no PR #192, nao mergeado. Ate ser mergeado, 85% das mensagens de aniversario continuam saindo no dia errado.",
+    "instagram_token_valido": false,
+    "instagram_dias_vencido": 13.5,
+    "origem_instagram": "medido em 02/09; NAO reconferido hoje",
+    "agente_solto_1_em_21": null,
+    "motivo_null_agente": "registro estatico de 25/08"
+  },
+
+  "produtividade": {
+    "prs_mergeados_24h": 6,
+    "lista_mergeados": ["#193", "#194", "#195", "#196", "#197", "#198"],
+    "mergeado_por_mim": 0,
+    "observacao_merges": "todos de outras sessoes, no dominio da Sala de Vendas e da area comercial. Nenhum tocou o caminho do restaurante.",
+    "prs_meus_abertos": 3,
+    "lista_meus_abertos": ["#190 cabecalho medido", "#191 raio-X", "#192 aniversario + ponte do espelho"],
+    "prs_meus_mergeados_24h": 1,
+    "lista_meus_mergeados": ["#189 conserto da comanda"],
+    "itens_da_os_feitos": 2,
+    "itens_da_os_totais": 9,
+    "origem": "git log e GitHub as 11:10 UTC"
+  },
+
+  "qualidade": {
+    "suite_total_na_branch_de_deploy": 8035,
+    "origem_suite": "declarado no corpo do commit c0ff8938 (#198). NAO rodei a suite da branch de deploy hoje.",
+    "suite_medida_por_mim_no_192": 7973,
+    "tsc_limpo_no_192": true,
+    "ci_da_casa_esta_verde": false,
+    "motivo_ci_vermelho": "a bomba do espelho explodiu as 05:56 — ver secao propria",
+    "mutacoes_rodadas_24h": 4,
+    "mutacoes_que_sobreviveram": 1,
+    "observacao_mutacao": "a mutacao 3 do #192 (um LIMIT dentro do SQL, repondo a parede das 500) sobreviveu na primeira rodada porque o duble devolve o que o teste manda, independente do que o SQL pede. Corrigido no segundo commit.",
+    "cobertura_medida": null
+  },
+
+  "dinheiro": {
+    "infra_railway_foocci_usd_mes": 20.65,
+    "confianca_infra": "ESTIMADO",
+    "origem_infra": "medido 2026-08-28, NAO reconferido em 10 dias",
+    "receita_mrr": null,
+    "assinantes_ativos": null,
+    "custo_ia_mes": null,
+    "saldo_openai": null,
+    "saldo_anthropic": null,
+    "receita_que_deixou_de_ser_perdida": null,
+    "observacao_receita": "as 7 comandas de ontem representam pedidos que antes morriam sem chegar na cozinha. NAO li os valores — exigiria abrir cada um no log."
+  },
+
+  "risco": {
+    "dados_intactos": true,
+    "origem_dados": "health db=ok; nenhum incidente de banco nas 24h",
+    "copia_de_seguranca_de_hoje": false,
+    "copia_de_seguranca_de_05_09": false,
+    "copias_diarias_existentes": 6,
+    "ultima_copia": "2026-09-06T00:43:09Z, 132 MB",
+    "anomalia": "DOIS dos ultimos tres dias sem copia (05/09 e 07/09 ate as 11:09). E o horario mudou: as cinco primeiras sairam as 12:03, a de 06/09 saiu as 00:43. O agendamento e o mesmo (id 3f1544a7). Isso deixou de ser um dia isolado e virou padrao.",
+    "origem_backup": "workflow copia-de-seguranca acao=listar-copias, 07/09 11:09 UTC",
+    "pitr_ligado": null,
+    "copias_ficam_no_mesmo_volume": true,
+    "bancos_expostos_na_internet": 2,
+    "instagram_fora_do_ar": true,
+    "webhook_saipos_sem_autenticacao": true,
+    "produto_sem_tela_de_erro": true
+  },
+
+  "bloqueio_do_ceo": {
+    "itens": 3,
+    "lista": [
+      "o segredo DIOLI_BRAIN_KIT_TOKEN — a bomba JA explodiu, o CI da casa esta vermelho agora",
+      "alguem precisa VER PAPEL SAIR numa loja de verdade",
+      "saber se algum restaurante ja ligou a nota fiscal"
+    ],
+    "observacao": "a decisao do aniversario ja foi tomada e o conserto esta pronto; sai da lista dele e entra na do Diretor Geral."
+  },
+
+  "nao_medido": [
+    "Se saiu PAPEL na cozinha. Provei que o trabalho entra na fila; o resto e o agente Windows da loja e uma pessoa olhando.",
+    "Quanto valem os 7 pedidos que voltaram a imprimir — nao abri cada um no log.",
+    "Quantos clientes ficaram sem resposta hoje — DECIMO dia em null.",
+    "Por que nao houve copia de seguranca em 05/09 nem hoje, e por que o horario mudou.",
+    "A suite da branch de deploy hoje — usei o numero declarado no commit, nao medido por mim.",
+    "Todo o painel do lojista: 30+ telas atras de login, ainda nenhuma medida.",
+    "O percurso 'fazer o primeiro pedido' — ainda por fazer.",
+    "Se a RLS esta de pe em producao.",
+    "Se existe restaurante com Saipos ativa, e se algum ligou a nota fiscal.",
+    "Se o Postgres de producao e igual ao que as migrations constroem — pg_dump -s pedido, nao puxado.",
+    "Estado do PITR hoje.",
+    "Receita, MRR, assinantes, custo de IA, saldo dos creditos.",
+    "O 1-em-21 de hoje.",
+    "O Postgres-76OG."
+  ]
+}
