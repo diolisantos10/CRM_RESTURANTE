@@ -94,6 +94,50 @@ export function canalDeVendasPronto(): boolean {
 }
 
 /**
+ * ⛔⛔ A SEGUNDA CHAVE: a máquina pode falar SOZINHA com o cliente?
+ *
+ * ── POR QUE ELA PRECISOU EXISTIR, EM 07/09/2026 ─────────────────────────────
+ *
+ * `FOOCCI_SDR_SEND_ENABLED` era uma chave só, e abria DUAS portas de tamanhos
+ * muito diferentes:
+ *
+ *   1. o vendedor digita na tela e a mensagem dele sai — um humano leu, pensou
+ *      e escreveu, e outro humano recebe;
+ *   2. a IA responde sozinha ao WhatsApp que acabou de chegar, **sem ninguém ler
+ *      antes** — `ta/atender.ts` entrega dentro do próprio caminho do webhook.
+ *
+ * O CEO autorizou a primeira. Quem pediu a autorização (eu) descreveu só a
+ * primeira, e a chave entregava as duas. **Autorização obtida com uma descrição
+ * menor que o ato não é autorização** — e a correção não é lembrar disso na
+ * próxima vez, é fazer a máquina não conseguir.
+ *
+ * Padrão desligada, e o nome diz o que ela faz.
+ */
+export function iaRespondeSozinha(): boolean {
+  return (process.env.FOOCCI_SDR_IA_RESPONDE_SOZINHA ?? "").trim().toLowerCase() === "true";
+}
+
+/**
+ * Quem mandou a mensagem que está para sair.
+ *
+ * Declarado em cada chamada, nunca deduzido. Herdar isso do contexto foi
+ * exatamente o defeito: o caminho do webhook e o da tela chamavam a MESMA
+ * função com os MESMOS argumentos, e nada no código distinguia um humano
+ * escrevendo de uma máquina respondendo.
+ */
+export type QuemMandou = "pessoa" | "maquina";
+
+/**
+ * A trava de quem manda, pura e sem ambiente — para poder ser medida.
+ *
+ * `pessoa` passa sempre: quem digitou já decidiu. `maquina` só passa com a
+ * segunda chave ligada.
+ */
+export function maquinaPodeFalar(quemMandou: QuemMandou, liberada: boolean): boolean {
+  return quemMandou === "pessoa" || liberada;
+}
+
+/**
  * Esta mensagem chegou no número de vendas da Foocci?
  *
  * Com o canal desligado devolve sempre `false` — e é assim que o webhook do

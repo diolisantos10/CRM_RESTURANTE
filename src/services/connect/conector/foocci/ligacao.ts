@@ -88,7 +88,12 @@ export function ligacaoDoFoocci(db: Cliente, opcoes: OpcoesDaLigacao = {}): Liga
         // Com `FOOCCI_SDR_SEND_ENABLED` desligada a mensagem fica PENDENTE e
         // visível na tela — que é o estado normal enquanto o dono não ligar a
         // entrega. Uma falha de entrega NÃO desfaz o registro.
-        const entrega = await entregarMensagem(db, gravada.mensagemId);
+        //
+        // "maquina": quem chega por aqui é um AGENTE, não o vendedor com o dedo
+        // no botão. Mesmo instruído por gente, ele não é a pessoa que leu e
+        // escreveu — e a régua desta casa é o que a máquina consegue fazer
+        // sozinha, nunca a boa intenção de quem a instruiu.
+        const entrega = await entregarMensagem(db, gravada.mensagemId, "maquina");
         return {
           registrada: true,
           entregue: entrega.entregue,

@@ -40,6 +40,9 @@ import {
   canalDeVendasPronto,
   enviarTextoDeVendas,
   describeFoocciSalesChannel,
+  iaRespondeSozinha,
+  maquinaPodeFalar,
+  type QuemMandou,
 } from "@/services/foocci-sdr/FoocciSalesChannel";
 import { pediuSilencio } from "@/services/foocci-sdr/LeadContactSafety";
 
@@ -52,6 +55,12 @@ export type ResultadoDaEntrega =
       motivo:
         /** O dono não ligou a entrega. Estado normal, não é falha. */
         | "envioDesligado"
+        /**
+         * A entrega está ligada, mas quem quis mandar foi a MÁQUINA e a segunda
+         * chave está desligada. Também é estado normal: o dono ligou o envio da
+         * equipe sem ligar a IA respondendo sozinha.
+         */
+        | "maquinaNaoFalaSozinha"
         | "mensagemNaoExiste"
         | "naoEraParaEnviar"
         | "semTexto"
@@ -75,6 +84,7 @@ export type ResultadoDaEntrega =
 export async function entregarMensagem(
   db: Cliente,
   mensagemId: string,
+  quemMandou: QuemMandou,
 ): Promise<ResultadoDaEntrega> {
   try {
     // A chave primeiro, e sem tocar no banco: com a entrega desligada não há
@@ -88,6 +98,23 @@ export async function entregarMensagem(
         detalhe: c.configurado
           ? "o canal está configurado e a entrega não foi ligada"
           : "as chaves da Meta não estão completas",
+      };
+    }
+
+    // ⛔ A SEGUNDA TRAVA, e ela é a razão de `quemMandou` ser obrigatório.
+    //
+    // Uma pessoa digitando na tela já decidiu: leu, pensou, escreveu, apertou.
+    // A máquina respondendo no caminho do webhook não passou por ninguém — e
+    // ligar as duas coisas com a mesma chave foi o defeito de 07/09/2026.
+    //
+    // O parâmetro não tem valor padrão de propósito: um padrão faria a chamada
+    // nova herdar "pessoa" por omissão, e a trava voltaria a depender de quem
+    // escreve o código lembrar dela.
+    if (!maquinaPodeFalar(quemMandou, iaRespondeSozinha())) {
+      return {
+        entregue: false,
+        motivo: "maquinaNaoFalaSozinha",
+        detalhe: "a entrega está ligada, mas a IA responder sozinha não está",
       };
     }
 

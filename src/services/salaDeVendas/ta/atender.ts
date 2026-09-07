@@ -546,7 +546,9 @@ async function executarTurno(
           agora,
         });
 
-        if (avisoGravado.ok) await entregarMensagem(db, avisoGravado.mensagemId);
+        // "maquina": ninguém leu este aviso antes de ele sair. Quem decide se
+        // ele pode sair é `FOOCCI_SDR_IA_RESPONDE_SOZINHA`, não esta linha.
+        if (avisoGravado.ok) await entregarMensagem(db, avisoGravado.mensagemId, "maquina");
       }
 
       return { falou: false, chamouGente: true, handoffId: h.handoffId, motivo: h.motivo };
@@ -588,11 +590,17 @@ async function executarTurno(
   // Desligada, `entregarMensagem` não faz nada e a mensagem continua PENDENTE —
   // que é o estado de hoje e continua sendo o padrão. A chave é do CEO.
   //
+  // ⛔ **"maquina", e é ESTA a linha mais perigosa do arquivo.** Aqui a IA
+  // responde a um estranho no WhatsApp sem que ninguém tenha lido antes. Até
+  // 07/09/2026 ela dependia da MESMA chave que liberava o vendedor a mandar o
+  // que acabou de digitar — duas coisas de tamanhos muito diferentes atrás de
+  // um interruptor só. Agora esta exige `FOOCCI_SDR_IA_RESPONDE_SOZINHA`.
+  //
   // ⚠️ A falha de entrega NÃO derruba o turno. A mensagem já está gravada, e o
   // que se perde é a saída — recuperável, visível na tela, e com o motivo
   // guardado na própria linha. Transformar isso em erro faria a Meta reentregar
   // o "oi" do cliente e o TA responder duas vezes.
-  const entrega = await entregarMensagem(db, gravada.mensagemId);
+  const entrega = await entregarMensagem(db, gravada.mensagemId, "maquina");
 
   // ── 9. Qualificar: ouvir o que ele disse e etiquetar ────────────────────
   //
