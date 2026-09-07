@@ -223,7 +223,10 @@ export async function POST(req: NextRequest) {
   //
   // `entregarMensagem` respeita a chave do dono: desligada, ela não faz nada e
   // a mensagem continua PENDENTE, como antes.
-  const entrega = await entregarMensagem(prisma, r.mensagemId);
+  // "pessoa": alguém leu, pensou, digitou e apertou. É o único caminho da casa
+  // em que isso é verdade — todos os outros passam por `"maquina"` e por uma
+  // segunda chave.
+  const entrega = await entregarMensagem(prisma, r.mensagemId, "pessoa");
 
   return NextResponse.json({
     ok: true,
@@ -248,6 +251,10 @@ function avisoDaEntrega(e: Extract<Awaited<ReturnType<typeof entregarMensagem>>,
   switch (e.motivo) {
     case "envioDesligado":
       return "Mensagem registrada na conversa, mas o envio pelo WhatsApp ainda não foi ligado — nada saiu para o cliente.";
+    case "maquinaNaoFalaSozinha":
+      // Não deveria chegar aqui: esta rota manda como "pessoa". Se chegar, a
+      // frase diz a verdade em vez de cair no texto de erro da Meta.
+      return "Mensagem registrada, mas esta saída foi tratada como automática e a resposta automática está desligada.";
     case "leadPediuSilencio":
       return "Não enviado: este contato pediu para não receber mensagens.";
     case "semTelefone":

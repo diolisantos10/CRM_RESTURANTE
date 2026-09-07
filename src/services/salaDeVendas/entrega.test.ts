@@ -29,9 +29,21 @@ vi.mock("@/services/foocci-sdr/FoocciSalesChannel", async (original) => {
 
 const ambiente = { ...process.env };
 
-/** Liga as três chaves — as duas da Meta e a da entrega. */
+/**
+ * Liga as três chaves — as duas da Meta e a da entrega.
+ *
+ * ⚠️ **NÃO liga `FOOCCI_SDR_IA_RESPONDE_SOZINHA`**, e é de propósito: todo caso
+ * deste arquivo manda como `"pessoa"`, que é o caminho que o CEO autorizou em
+ * 07/09/2026. A máquina falando sozinha tem arquivo próprio
+ * (`entrega.quem-manda.test.ts`) justamente para a diferença entre as duas
+ * portas não voltar a se perder dentro de um "ligarTudo".
+ *
+ * ⚠️ O número abaixo é FICTÍCIO. Era `1300518453142518` — que se descobriu ser
+ * o WhatsApp de um restaurante CLIENTE, e não da Foocci. Deixar o id real de um
+ * cliente como fixture convida a próxima cópia do erro.
+ */
 function ligarTudo() {
-  process.env.FOOCCI_SALES_PHONE_NUMBER_ID = "1300518453142518";
+  process.env.FOOCCI_SALES_PHONE_NUMBER_ID = "000000000000001";
   process.env.FOOCCI_SALES_ACCESS_TOKEN = "EAAtoken-de-teste";
   process.env.FOOCCI_SDR_SEND_ENABLED = "true";
 }
@@ -75,7 +87,7 @@ describe("⭐ nada sai enquanto o dono não ligar", () => {
     delete process.env.FOOCCI_SDR_SEND_ENABLED;
 
     const db = banco();
-    const r = await entregarMensagem(db as never, "m1");
+    const r = await entregarMensagem(db as never, "m1", "pessoa");
 
     expect(r).toMatchObject({ entregue: false, motivo: "envioDesligado" });
     expect(enviar, "tentou enviar com a chave desligada").not.toHaveBeenCalled();
@@ -87,7 +99,7 @@ describe("⭐ nada sai enquanto o dono não ligar", () => {
     process.env.FOOCCI_SDR_SEND_ENABLED = "true";
     delete process.env.FOOCCI_SALES_ACCESS_TOKEN;
 
-    const r = await entregarMensagem(banco() as never, "m1");
+    const r = await entregarMensagem(banco() as never, "m1", "pessoa");
 
     expect(r).toMatchObject({ entregue: false, motivo: "envioDesligado" });
     if (r.entregue) return;
@@ -102,7 +114,7 @@ describe("com tudo ligado, a mensagem sai", () => {
     // A metade que passa, e ela é a razão de o arquivo existir: sem ela, uma
     // função que recusasse SEMPRE passaria em todos os casos de bloqueio.
     const db = banco();
-    const r = await entregarMensagem(db as never, "m1");
+    const r = await entregarMensagem(db as never, "m1", "pessoa");
 
     expect(r).toEqual({ entregue: true, mensagemId: "m1" });
 
@@ -117,7 +129,7 @@ describe("com tudo ligado, a mensagem sai", () => {
     enviar.mockResolvedValue({ ok: false, error: "(#131030) recipient not in allowed list" });
 
     const db = banco();
-    const r = await entregarMensagem(db as never, "m1");
+    const r = await entregarMensagem(db as never, "m1", "pessoa");
 
     expect(r).toMatchObject({ entregue: false, motivo: "aMetaRecusou" });
 
@@ -131,7 +143,7 @@ describe("com tudo ligado, a mensagem sai", () => {
     // derrubaria os dois — e a mensagem já estava salva.
     enviar.mockRejectedValue(new Error("ECONNRESET"));
 
-    const r = await entregarMensagem(banco() as never, "m1");
+    const r = await entregarMensagem(banco() as never, "m1", "pessoa");
     expect(r).toMatchObject({ entregue: false });
   });
 });
@@ -144,7 +156,7 @@ describe("⭐ o que nunca sai, mesmo com tudo ligado", () => {
     // Entre escrever e entregar pode ter passado tempo — e quem pediu para parar
     // não recebe o que já estava na fila.
     const db = banco({ mensagem: { lead: { whatsapp: "5511999990000", optOutAt: new Date() } } });
-    const r = await entregarMensagem(db as never, "m1");
+    const r = await entregarMensagem(db as never, "m1", "pessoa");
 
     expect(r).toMatchObject({ entregue: false, motivo: "leadPediuSilencio" });
     expect(enviar).not.toHaveBeenCalled();
@@ -156,7 +168,7 @@ describe("⭐ o que nunca sai, mesmo com tudo ligado", () => {
     // Uma entrega não idempotente manda a mesma frase duas vezes ao cliente na
     // primeira reentrega da Meta — e o cliente conclui que é robô.
     const db = banco({ mensagem: { status: "ENVIADA" } });
-    const r = await entregarMensagem(db as never, "m1");
+    const r = await entregarMensagem(db as never, "m1", "pessoa");
 
     expect(r).toMatchObject({ entregue: false, motivo: "naoEraParaEnviar" });
     expect(enviar).not.toHaveBeenCalled();
@@ -165,7 +177,7 @@ describe("⭐ o que nunca sai, mesmo com tudo ligado", () => {
   it("mensagem de ENTRADA nunca é enviada", async () => {
     // O que o cliente escreveu não pode voltar para ele.
     const db = banco({ mensagem: { direcao: "ENTRADA", status: "PENDENTE" } });
-    const r = await entregarMensagem(db as never, "m1");
+    const r = await entregarMensagem(db as never, "m1", "pessoa");
 
     expect(r).toMatchObject({ entregue: false, motivo: "naoEraParaEnviar" });
     expect(enviar).not.toHaveBeenCalled();
@@ -173,14 +185,14 @@ describe("⭐ o que nunca sai, mesmo com tudo ligado", () => {
 
   it("lead sem telefone vira FALHOU nomeado, e não uma tentativa cega", async () => {
     const db = banco({ mensagem: { lead: { whatsapp: null, optOutAt: null } } });
-    const r = await entregarMensagem(db as never, "m1");
+    const r = await entregarMensagem(db as never, "m1", "pessoa");
 
     expect(r).toMatchObject({ entregue: false, motivo: "semTelefone" });
     expect(enviar).not.toHaveBeenCalled();
   });
 
   it("mensagem que não existe é recusa nomeada, não exceção", async () => {
-    const r = await entregarMensagem(banco({ mensagem: null }) as never, "sumiu");
+    const r = await entregarMensagem(banco({ mensagem: null }) as never, "sumiu", "pessoa");
     expect(r).toMatchObject({ entregue: false, motivo: "mensagemNaoExiste" });
   });
 });
