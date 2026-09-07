@@ -139,10 +139,35 @@ beforeEach(() => {
  * terminar, de propósito (o cliente não espera a impressora). Esperar aqui é
  * esperar o que a produção também espera.
  */
-async function comandaGravada(): Promise<string> {
+type LinhaDaFila = { restaurantId: string; orderId: string; body: string };
+
+async function comandaGravada(): Promise<{ texto: string; linhas: LinhaDaFila[] }> {
   await vi.waitFor(() => expect(db.printJob.createMany).toHaveBeenCalledTimes(1), { timeout: 2_000 });
-  const dados = db.printJob.createMany.mock.calls[0][0].data as Array<{ body: string }>;
-  return restoreNulFromPg(dados.map((j) => j.body).join("\n"));
+  const linhas = db.printJob.createMany.mock.calls[0][0].data as LinhaDaFila[];
+  return { linhas, texto: restoreNulFromPg(linhas.map((j) => j.body).join("\n")) };
+}
+
+/**
+ * ⭐ ESTA FUNÇÃO NASCEU DE UMA MUTAÇÃO QUE SOBREVIVEU.
+ *
+ * Troquei `payment.order.restaurantId` por um id de outro dono na rota da Stone
+ * e os 72 testes continuaram verdes. Eles provavam que ALGUMA comanda era
+ * gravada; não provavam de QUEM ela era.
+ *
+ * E o estrago em produção seria mudo, do pior tipo: `maybeEnqueueOrder` carimba
+ * o pedido com `updateMany({ where: { id, restaurantId, printQueuedAt: null } })`.
+ * Com o restaurante errado o WHERE não casa com linha nenhuma, `count` é 0, a
+ * função retorna sem erro — e a cozinha não recebe nada. É exatamente o defeito
+ * que este PR conserta, voltando por dentro do conserto.
+ *
+ * As linhas gravadas carregam `restaurantId` e `orderId`; é neles que se olha.
+ */
+function conferirDono(linhas: LinhaDaFila[]) {
+  expect(linhas.length).toBeGreaterThan(0);
+  for (const linha of linhas) {
+    expect(linha.restaurantId, "a comanda foi para a fila do restaurante errado").toBe("rest_1");
+    expect(linha.orderId, "a comanda foi para a fila com o pedido errado").toBe("ord_1");
+  }
 }
 
 function reqJson(url: string, body: unknown, headers: Record<string, string> = {}) {
@@ -161,7 +186,9 @@ describe("os cinco caminhos que confirmam o pagamento mandam imprimir", () => {
       }, { "x-stone-signature": "assinada" }),
     );
     expect(res.status).toBe(200);
-    expect(await comandaGravada()).toContain("HOT ROLL");
+    const fila = await comandaGravada();
+    expect(fila.texto).toContain("HOT ROLL");
+    conferirDono(fila.linhas);
   });
 
   it("⭐ 2. mark-paid da Stone — a saída manual também imprime", async () => {
@@ -170,7 +197,9 @@ describe("os cinco caminhos que confirmam o pagamento mandam imprimir", () => {
       { params: { orderId: "ord_1" } },
     );
     expect(res.status).toBe(200);
-    expect(await comandaGravada()).toContain("HOT ROLL");
+    const fila = await comandaGravada();
+    expect(fila.texto).toContain("HOT ROLL");
+    conferirDono(fila.linhas);
   });
 
   it("⭐ 3. mark-paid do Mercado Pago — idem", async () => {
@@ -179,7 +208,9 @@ describe("os cinco caminhos que confirmam o pagamento mandam imprimir", () => {
       { params: Promise.resolve({ orderId: "ord_1" }) },
     );
     expect(res.status).toBe(200);
-    expect(await comandaGravada()).toContain("HOT ROLL");
+    const fila = await comandaGravada();
+    expect(fila.texto).toContain("HOT ROLL");
+    conferirDono(fila.linhas);
   });
 
   it("⭐ 4. confirm-manual-payment — a alavanca que o lojista puxa quando nada mais funcionou", async () => {
@@ -190,7 +221,9 @@ describe("os cinco caminhos que confirmam o pagamento mandam imprimir", () => {
       { params: { id: "ord_1" } },
     );
     expect(res.status).toBe(200);
-    expect(await comandaGravada()).toContain("HOT ROLL");
+    const fila = await comandaGravada();
+    expect(fila.texto).toContain("HOT ROLL");
+    conferirDono(fila.linhas);
   });
 
   it("⭐ 5. pedido por texto no WhatsApp — a quinta porta, fora da lista do raio-x", async () => {
