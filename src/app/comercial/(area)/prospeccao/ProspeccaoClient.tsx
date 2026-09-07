@@ -25,6 +25,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { ReceberLista } from "./ReceberLista";
 
 const ROTA = "/api/admin/sala-de-vendas/prospeccao";
 
@@ -187,6 +188,13 @@ export function ProspeccaoClient() {
           {aviso}
         </p>
       )}
+
+      {/* ── ONDE A LISTA ENTRA ──────────────────────────────────────────────
+          Fica DEPOIS do freio e ANTES da fila, e é o lugar certo: quem chega
+          com um arquivo na mão precisa ver o interruptor primeiro (a casa está
+          abordando agora?) e a porta de entrada logo em seguida — sem rolar
+          até o fim da tela, que é onde os lotes moram. */}
+      <ReceberLista aoImportar={recarregar} />
 
       {/* ── O FREIO, ANTES DA LISTA ── */}
       <section className="rounded-xl border border-line bg-paper p-4">
