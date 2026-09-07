@@ -21,6 +21,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { guardarSalaDeVendas, somenteLeitura, vePelaOperacaoToda } from "../_guarda";
+import { abordarItemDaFila } from "@/services/salaDeVendas/prospeccao/abordarDaFila";
 import {
   conferirLista,
   importarLote,
@@ -51,7 +52,9 @@ function inteiroNaoNegativo(v: unknown): number | null {
 }
 
 interface Corpo {
-  acao?: "conferir" | "importar" | "liberar" | "pausarLote" | "interruptor";
+  acao?: "conferir" | "importar" | "abordar" | "liberar" | "pausarLote" | "interruptor";
+  // abordar
+  itemId?: string;
   // conferir / importar
   nome?: string;
   proveniencia?: string;
@@ -178,6 +181,29 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // ── Abordar UM item da fila ───────────────────────────────────────────────
+  //
+  // Um por chamada, como na rota de abordagem por lead: dez abordagens são dez
+  // chamadas, e o freio de ritmo é lido de novo a cada uma. Aceitar uma lista
+  // aqui faria o freio valer para o lote inteiro a partir de uma leitura só.
+  if (c.acao === "abordar") {
+    const itemId = c.itemId?.trim();
+    if (!itemId) {
+      return NextResponse.json({ ok: false, error: "itemId é obrigatório." }, { status: 400 });
+    }
+
+    const r = await abordarItemDaFila(prisma, { itemId, autorUserId: portao.sessao.userId });
+
+    if (r.abordou) {
+      return NextResponse.json({ ok: true, data: { leadId: r.leadId, mensagemId: r.mensagemId } });
+    }
+
+    return NextResponse.json(
+      { ok: false, error: fraseDaAbordagem(r.motivo, r.detalhe), motivo: r.motivo },
+      { status: 409 },
+    );
+  }
+
   // ── As duas ações que autorizam a casa a falar com estranhos ──
   if (c.acao === "liberar" || c.acao === "interruptor") {
     if (!vePelaOperacaoToda(portao.sessao)) {
@@ -268,4 +294,28 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ ok: false, error: "Ação desconhecida." }, { status: 400 });
+}
+
+/**
+ * O motivo em frase de gente, para a tela da fila.
+ *
+ * `ritmo` não é erro e a frase não pode soar como um: quem está abordando
+ * precisa entender que o sistema segurou de propósito, e que insistir é
+ * justamente o que não se deve fazer.
+ */
+function fraseDaAbordagem(motivo: string, detalhe: string): string {
+  switch (motivo) {
+    case "ritmo":
+      return `O freio de ritmo segurou — ${detalhe}. É proteção do número, não falha: tente mais tarde.`;
+    case "naoVirouLead":
+      return `Este contato não entrou na carteira: ${detalhe}`;
+    case "portaoRecusou":
+      return `Não pode ser abordado: ${detalhe}`;
+    case "naoConseguiuGravar":
+      return "Não consegui registrar a mensagem, então nada foi enviado.";
+    case "aMetaRecusou":
+      return `Registrei a mensagem, mas o WhatsApp recusou: ${detalhe}`;
+    default:
+      return `Não foi possível abordar: ${detalhe}`;
+  }
 }
