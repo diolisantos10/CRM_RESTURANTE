@@ -13,7 +13,7 @@ import type {
   UpdateUserInput,
   ChangePasswordInput,
 } from "@/validators/user";
-import type { User } from "@prisma/client";
+import type { User, Prisma } from "@prisma/client";
 
 export type UserPublic = Omit<User, "password">;
 
@@ -88,6 +88,60 @@ export class UserService {
   }
 
   /**
+   * ⭐ NENHUM RESTAURANTE PODE FICAR SEM NENHUM DONO ATIVO.
+   *
+   * ─── O QUE FALTAVA, e o que isso abria ──────────────────────────────────
+   * Nem `update` nem `deactivate` liam o papel do alvo antes de escrever. Três
+   * chamadas comuns esvaziavam o quadro de donos de uma loja:
+   *
+   *   PATCH /api/users/:id  { isActive: false }   num OWNER ativo
+   *   PATCH /api/users/:id  { role: "STAFF"   }   num OWNER ativo
+   *   DELETE /api/users/:id                       num OWNER ativo
+   *
+   * Qualquer MANAGER logado fazia as três. A única trava que existia — "você não
+   * pode desativar a própria conta" — não pegava nenhuma delas, e o próprio dono
+   * ainda se derrubava com o PATCH, que não tinha nem essa.
+   *
+   * Isso é ruim sozinho: um gerente tranca o dono para fora da loja dele. E é
+   * pior acompanhado — é exatamente o gatilho que abre a porta pública do
+   * `/api/recover`, que cria conta de OWNER em restaurante ativo SEM dono.
+   *
+   * ─── A REGRA JÁ EXISTIA NESTA CASA, para os outros ──────────────────────
+   * O RH da Foocci recusa cortar o último CEO ativo — "trancar a casa por fora
+   * com todo mundo lá dentro" (`src/security/routeGuards.test.ts:104`). A mesma
+   * regra não valia para os donos dos restaurantes, que são os clientes.
+   *
+   * ─── POR QUE `FOR UPDATE`, e não um `count()` ───────────────────────────
+   * Com dois donos e duas requisições ao mesmo tempo, cada uma derrubando um, um
+   * `count` em READ COMMITTED vê o outro ainda ativo — as duas passam, e a loja
+   * fica sem dono nenhum. O `FOR UPDATE` tranca as linhas de dono do restaurante
+   * até o fim da transação, então a segunda espera e enxerga o mundo já mudado.
+   *
+   * @returns `true` quando a mudança deixaria a loja sem dono ativo.
+   */
+  private static async deixariaALojaSemDono(
+    tx: Prisma.TransactionClient,
+    restaurantId: string,
+    alvoId: string,
+    mudanca: { isActive?: boolean; role?: string },
+  ): Promise<boolean> {
+    const tiraODono =
+      mudanca.isActive === false || (mudanca.role !== undefined && mudanca.role !== "OWNER");
+    if (!tiraODono) return false;
+
+    const donosAtivos = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM users
+      WHERE "restaurantId" = ${restaurantId}
+        AND role::text = 'OWNER'
+        AND "isActive" = true
+      FOR UPDATE
+    `;
+
+    const oAlvoEDonoAtivo = donosAtivos.some((d) => d.id === alvoId);
+    return oAlvoEDonoAtivo && donosAtivos.length === 1;
+  }
+
+  /**
    * Update a user's mutable fields.
    * Password changes go through changePassword() instead.
    */
@@ -105,16 +159,27 @@ export class UserService {
       return serviceFail("User not found", 404);
     }
 
-    const rawUpdated = await prisma.user.update({
-      where: { id: userId },
-      data: {
-        ...(input.name !== undefined && { name: input.name }),
-        ...(input.role !== undefined && { role: input.role }),
-        ...(input.isActive !== undefined && { isActive: input.isActive }),
-      },
+    const resultado = await prisma.$transaction(async (tx) => {
+      if (await this.deixariaALojaSemDono(tx, restaurantId, userId, input)) return null;
+
+      return tx.user.update({
+        where: { id: userId },
+        data: {
+          ...(input.name !== undefined && { name: input.name }),
+          ...(input.role !== undefined && { role: input.role }),
+          ...(input.isActive !== undefined && { isActive: input.isActive }),
+        },
+      });
     });
 
-    const { password: _pwd, ...updated } = rawUpdated;
+    if (!resultado) {
+      return serviceFail(
+        "Este é o único dono ativo do restaurante. Promova outra pessoa a dono antes de tirar o acesso deste.",
+        400,
+      );
+    }
+
+    const { password: _pwd, ...updated } = resultado;
     return serviceOk(updated);
   }
 
@@ -172,10 +237,20 @@ export class UserService {
       return serviceFail("User not found", 404);
     }
 
-    await prisma.user.update({
-      where: { id: userId },
-      data: { isActive: false },
+    const desativado = await prisma.$transaction(async (tx) => {
+      if (await this.deixariaALojaSemDono(tx, restaurantId, userId, { isActive: false })) {
+        return false;
+      }
+      await tx.user.update({ where: { id: userId }, data: { isActive: false } });
+      return true;
     });
+
+    if (!desativado) {
+      return serviceFail(
+        "Este é o único dono ativo do restaurante. Promova outra pessoa a dono antes de tirar o acesso deste.",
+        400,
+      );
+    }
 
     return serviceOk({ message: "User deactivated" });
   }
