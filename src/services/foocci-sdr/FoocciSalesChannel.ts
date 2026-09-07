@@ -38,7 +38,12 @@
  */
 
 import { metaGraphUrl } from "@/services/whatsapp/metaFlag";
-import { buildMetaTextPayload, toMetaRecipient, maskGraphResponse } from "@/services/whatsapp/providers/metaPayload";
+import {
+  buildMetaTextPayload,
+  buildMetaTemplatePayload,
+  toMetaRecipient,
+  maskGraphResponse,
+} from "@/services/whatsapp/providers/metaPayload";
 import type { LeadSafetyDecision } from "./LeadContactSafety";
 
 // ─── Identidade do canal ────────────────────────────────────────────────────────
@@ -385,6 +390,102 @@ export async function enviarTextoDeVendas(
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify(buildMetaTextPayload(recipient, text)),
+    });
+    if (!res.ok) {
+      const json: unknown = await res.json().catch(() => ({}));
+      const err = (json as { error?: { message?: string } }).error ?? {};
+      return { ok: false, error: maskGraphResponse(err.message ?? `HTTP_${res.status}`) };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: maskGraphResponse(e instanceof Error ? e.message : String(e)) };
+  }
+}
+
+// ─── Envio por MODELO (abordagem) ───────────────────────────────────────────────
+
+/**
+ * O modelo aprovado que vai sair, e os valores das variáveis dele.
+ *
+ * `parametros` entra na ordem de `{{1}}, {{2}}, …`. A ordem é do modelo, não
+ * nossa — trocar dois de lugar manda o nome do restaurante no lugar da cidade,
+ * e a Meta aceita numa boa: quem vê o erro é o cliente.
+ */
+export interface ModeloDeAbordagem {
+  nome: string;
+  /** Código de idioma como a Meta registrou, ex.: `pt_BR`. */
+  idioma: string;
+  parametros: string[];
+}
+
+/**
+ * ⭐ ENVIA UM MODELO APROVADO — a primeira mensagem para quem nunca escreveu.
+ *
+ * ── POR QUE ELA PRECISOU EXISTIR ────────────────────────────────────────────
+ *
+ * `enviarTextoDeVendas` monta **texto puro**, e texto puro só vale dentro da
+ * janela de 24h depois de a pessoa ter escrito. Para abordagem fria a Meta
+ * exige modelo aprovado — e o canal de vendas não sabia mandar um. O montador
+ * (`buildMetaTemplatePayload`) já existia e servia ao CRM do restaurante; o que
+ * faltava era esta função.
+ *
+ * ── ⚠️ ELA NÃO SABE, E NÃO DEVE SABER, SOBRE RITMO ─────────────────────────
+ *
+ * O freio (`salaDeVendas/freioDeRitmo`) fica em quem CHAMA, não aqui. Uma
+ * função de envio que também conta quanto já saiu vira dois assuntos num
+ * arquivo só, e o teste de um passa a depender do banco do outro.
+ *
+ * A ordem das recusas é a MESMA de `enviarTextoDeVendas`, e de propósito: a
+ * decisão do portão primeiro, porque é a única que fala do DESTINATÁRIO; as
+ * outras falam de nós.
+ */
+export async function enviarModeloDeVendas(
+  decisao: LeadSafetyDecision,
+  toPhone: string,
+  modelo: ModeloDeAbordagem,
+): Promise<EnvioDeVendasResult> {
+  if (!decisao.sendable) {
+    return { ok: false, error: `portão do lead reprovou: ${decisao.reason ?? "sem motivo declarado"}` };
+  }
+
+  if (!isFoocciSdrSendEnabled()) {
+    return { ok: false, error: "envio do SDR desligado (FOOCCI_SDR_SEND_ENABLED)" };
+  }
+
+  const provedor = resolverProvedorDeVendas();
+  if (provedor !== "META_CLOUD_API") {
+    return { ok: false, error: `provedor de vendas não suportado (FOOCCI_SALES_PROVIDER=${provedor})` };
+  }
+
+  const phoneNumberId = foocciSalesPhoneNumberId();
+  const token = foocciSalesAccessToken();
+  if (!phoneNumberId || !token) {
+    return { ok: false, error: "canal de vendas da Foocci não configurado" };
+  }
+
+  // ⛔ Modelo sem nome ou sem idioma não vira "manda assim mesmo". A Meta
+  // devolveria um erro genérico, e o motivo real — configuração faltando do
+  // nosso lado — chegaria à tela disfarçado de recusa da Meta.
+  const nome = modelo.nome?.trim();
+  const idioma = modelo.idioma?.trim();
+  if (!nome) return { ok: false, error: "modelo de abordagem sem nome (FOOCCI_SDR_MODELO_ABORDAGEM)" };
+  if (!idioma) return { ok: false, error: "modelo de abordagem sem idioma (FOOCCI_SDR_MODELO_IDIOMA)" };
+
+  // ⚠️ Parâmetro vazio é recusado em vez de virar espaço em branco no meio da
+  // frase. "Olá , tudo bem?" é pior que não mandar: parece defeito, e é.
+  const vazio = modelo.parametros.findIndex((p) => !p || !p.trim());
+  if (vazio >= 0) {
+    return { ok: false, error: `variável {{${vazio + 1}}} do modelo veio vazia` };
+  }
+
+  const recipient = toMetaRecipient(toPhone);
+  if (!recipient) return { ok: false, error: "telefone inválido" };
+
+  try {
+    const res = await fetch(metaGraphUrl(`${phoneNumberId}/messages`), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(buildMetaTemplatePayload(recipient, nome, idioma, modelo.parametros)),
     });
     if (!res.ok) {
       const json: unknown = await res.json().catch(() => ({}));
