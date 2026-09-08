@@ -11,6 +11,64 @@
 
 ---
 
+## 2026-09-08 — Antes de gastar contato, a rodada confere o modelo na Meta
+
+**Decisão do Diretor**, com autorização do Diretor Geral (é conserto e
+prevenção, não escolha de negócio).
+
+A prospecção manda **um** parâmetro na mensagem: a saudação. Se o modelo aprovado
+na Meta esperar dois, **100% dos envios são recusados** — e a rodada só
+descobriria isso queimando três nomes da lista até bater o freio do #216.
+
+**Fica decidido:** a rodada faz um **pré-voo** — uma consulta à Graph, antes do
+primeiro contato — e a regra de reação é um princípio, não uma lista:
+
+> **Aborta quando 100% dos envios falhariam. Segue quando a perda é parcial ou
+> desconhecida.**
+
+Aborta em: modelo sem nome configurado, sem token, inexistente na conta, não
+aprovado, ou esperando 2+ variáveis. **Segue** quando a Graph não respondeu — não
+saber não é o mesmo que estar errado, e aterrar o dia por uma *leitura* que caiu
+seria a proteção mais destrutiva que o problema (guardrail 5). O freio de três
+recusas seguidas continua por baixo.
+
+**O pré-voo é parâmetro obrigatório no tipo**, e isso é a trava: chamador novo
+não compila sem dizer qual é o pré-voo dele. É a doença crônica da casa — *peça
+pronta, ninguém chamando* — virando erro de compilação.
+
+**Atravessa três domínios:** `meta` (a credencial e o modelo aprovado), `canais`
+(a mensagem que sai) e `crm`/Sala de Vendas (a lista que se gasta).
+
+**Provou o próprio valor no primeiro uso:** na estreia, foi o pré-voo que trouxe
+a frase da Meta dizendo que o token estava vencido havia catorze dias. Sem ele, a
+rodada teria dito "fila acabou".
+
+---
+
+## 2026-09-08 — Vigia de credencial que olha para o lado errado não é vigia
+
+**Decisão do Diretor** (conserto de defeito).
+
+A varredura diária de credenciais lê `metaWhatsAppConfig` — a tabela dos
+**restaurantes**. O número da Foocci mora no ambiente
+(`FOOCCI_SALES_ACCESS_TOKEN`), não em tabela. Ela perguntava à Meta sobre todos
+os tokens **menos o único de que a operação comercial depende**, e ficou verde
+durante os catorze dias em que a Sala esteve morta.
+
+**Fica decidido:** toda credencial que a empresa usa para falar com alguém entra
+na **mesma** varredura diária — não num job novo que alguém esqueceria de
+agendar. A da Sala entra em campo próprio (`salaDeVendas`), porque ela não é
+restaurante e enfiá-la em `results` faria `totalConfigs` mentir.
+
+**E o alerta diz o que a falha CAUSA, não só que ela existe:** *"a prospecção NÃO
+envia nada, e a rodada termina verde com zero abordados"*. Guardrail 6.
+
+**A regra geral, para a próxima vez:** quando um vigia existir e mesmo assim algo
+morrer calado, a primeira pergunta é **para onde ele olha** — não se ele roda.
+Vigia verde é evidência de que ele rodou, nunca de que ele viu.
+
+---
+
 ## 2026-08-29 — O CRM não fala por cima de um pedido em andamento
 
 **Decisão do Diretor** (conserto de defeito visto pelo CEO em cliente real —
