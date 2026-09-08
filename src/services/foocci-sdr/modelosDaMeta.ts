@@ -36,6 +36,7 @@ import { maskGraphResponse } from "@/services/whatsapp/providers/metaPayload";
 import { countBodyVariables } from "@/services/whatsapp/MetaTemplateService";
 import { foocciSalesPhoneNumberId, comOTokenDeVendas } from "./FoocciSalesChannel";
 import { modeloConfigurado } from "@/services/salaDeVendas/abordar";
+import { MetaAppCredentialsService } from "@/services/meta/MetaAppCredentialsService";
 
 export interface ModeloNaMeta {
   nome: string;
@@ -77,15 +78,69 @@ export async function contaDoNumeroDeVendas(
   const id = foocciSalesPhoneNumberId();
   if (!id) return { ok: false, erro: "FOOCCI_SALES_PHONE_NUMBER_ID não está no ambiente" };
 
+  // ── Caminho 1: perguntar ao próprio número ──
   const r = await graphDeVendas(`${id}?fields=whatsapp_business_account{id}`, token);
-  if (ehFalha(r)) return r;
-
-  const waba = (r as { whatsapp_business_account?: { id?: unknown } }).whatsapp_business_account;
-  const wabaId = waba?.id != null ? String(waba.id) : "";
-  if (!wabaId) {
-    return { ok: false, erro: "a Meta não devolveu a conta do número de vendas" };
+  if (!ehFalha(r)) {
+    const waba = (r as { whatsapp_business_account?: { id?: unknown } }).whatsapp_business_account;
+    const wabaId = waba?.id != null ? String(waba.id) : "";
+    if (wabaId) return { ok: true, wabaId };
   }
-  return { ok: true, wabaId };
+
+  /**
+   * ── Caminho 2: perguntar ao TOKEN ──
+   *
+   * ⚠️ MEDIDO EM PRODUÇÃO, 08/09/2026: com o token de usuário de sistema, o
+   * caminho 1 devolve
+   *
+   *   (#100) Tried accessing nonexisting field (whatsapp_business_account)
+   *
+   * — e o pré-voo ficava cego, seguia, e a rodada descobria o problema do
+   * modelo **queimando três contatos** na Meta. A conferência que existe para
+   * economizar contatos não pode depender de um único caminho de leitura.
+   *
+   * `debug_token` devolve `granular_scopes`, e cada permissão de WhatsApp vem
+   * com os `target_ids` — que são exatamente as contas (WABA) que este token
+   * alcança. É a resposta mais confiável das duas: ela vem do token, não de
+   * um campo que muda de nome entre versões da Graph.
+   */
+  const doToken = await contaPeloToken(token);
+  if (doToken) return { ok: true, wabaId: doToken };
+
+  return {
+    ok: false,
+    erro: ehFalha(r) ? r.erro : "a Meta não devolveu a conta do número de vendas",
+  };
+}
+
+/** As contas que o token alcança, lidas do próprio token. */
+async function contaPeloToken(token: string): Promise<string | null> {
+  const { appId, appSecret } = await MetaAppCredentialsService.getResolved().catch(() => ({
+    appId: "",
+    appSecret: "",
+  }));
+  if (!appId || !appSecret) return null;
+
+  const appToken = `${appId}|${appSecret}`;
+  const r = await graphDeVendas(
+    `debug_token?input_token=${encodeURIComponent(token)}&access_token=${encodeURIComponent(appToken)}`,
+    token,
+  );
+  if (ehFalha(r)) return null;
+
+  const escopos = (r as { data?: { granular_scopes?: unknown } }).data?.granular_scopes;
+  if (!Array.isArray(escopos)) return null;
+
+  // A permissão de gerenciar é a que enxerga modelos; a de mensagens serve de
+  // reserva, porque em contas antigas só ela vem com alvo.
+  for (const nome of ["whatsapp_business_management", "whatsapp_business_messaging"]) {
+    for (const e of escopos) {
+      const linha = e as { scope?: unknown; target_ids?: unknown };
+      if (linha.scope !== nome) continue;
+      const alvos = Array.isArray(linha.target_ids) ? linha.target_ids : [];
+      if (alvos.length > 0) return String(alvos[0]);
+    }
+  }
+  return null;
 }
 
 /** Todos os modelos da conta do número de vendas, como a Meta os vê agora. */
