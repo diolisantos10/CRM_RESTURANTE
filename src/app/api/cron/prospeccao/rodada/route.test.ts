@@ -126,9 +126,9 @@ describe("o log da rodada diz POR QUE, não só quantos", () => {
       abordados: 1, pulados: 3, parouPor: "filaAcabou", falha: null,
       extrato: [
         { itemId: "i1", ok: true },
-        { itemId: "i2", ok: false, motivo: "portaoRecusou" },
-        { itemId: "i3", ok: false, motivo: "portaoRecusou" },
-        { itemId: "i4", ok: false, motivo: "semResponsavel" },
+        { itemId: "i2", ok: false, motivo: "portaoRecusou", detalhe: "Esta pessoa pediu para não receber mensagens." },
+        { itemId: "i3", ok: false, motivo: "portaoRecusou", detalhe: "Contato sem telefone." },
+        { itemId: "i4", ok: false, motivo: "semResponsavel", detalhe: "o lote L1 não tem quem o liberou" },
       ],
     });
 
@@ -138,6 +138,32 @@ describe("o log da rodada diz POR QUE, não só quantos", () => {
     expect(linha, "a rodada terminou sem dizer nada").toBeTruthy();
     expect((linha as unknown[])[1]).toMatchObject({
       porMotivo: { ok: 1, portaoRecusou: 2, semResponsavel: 1 },
+    });
+    info.mockRestore();
+  });
+
+  it("⭐ e diz QUAL regra barrou — a classe sozinha não investiga nada", async () => {
+    // `portaoRecusou: 10` foi o que a rodada real devolveu em 08/09. Verdadeiro,
+    // e inútil: aquele portão tem sete regras e a linha não dizia qual. Um caso
+    // concreto por motivo, e não todos — numa rodada de 250 os detalhes repetem.
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    rodada.abordarARodadaDoDia.mockResolvedValue({
+      abordados: 0, pulados: 3, parouPor: "filaAcabou", falha: null,
+      extrato: [
+        { itemId: "i1", ok: false, motivo: "portaoRecusou", detalhe: "Esta pessoa pediu para não receber mensagens." },
+        { itemId: "i2", ok: false, motivo: "portaoRecusou", detalhe: "Contato sem telefone." },
+        { itemId: "i3", ok: false, motivo: "semResponsavel", detalhe: "o lote L1 não tem quem o liberou" },
+      ],
+    });
+
+    await bater("Bearer segredo");
+
+    const linha = info.mock.calls.find((c) => String(c[0]).includes("rodada concluída"));
+    expect((linha as unknown[])[1]).toMatchObject({
+      exemploPorMotivo: {
+        portaoRecusou: "Esta pessoa pediu para não receber mensagens.",
+        semResponsavel: "o lote L1 não tem quem o liberou",
+      },
     });
     info.mockRestore();
   });
