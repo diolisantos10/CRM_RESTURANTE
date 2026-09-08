@@ -117,7 +117,11 @@ describe("⭐ o portão funcionando NÃO para a rodada", () => {
     expect(r.abordados, "um opt-out no topo travou a lista inteira").toBe(2);
     expect(r.pulados).toBe(1);
     expect(r.parouPor).toBe("filaAcabou");
-    expect(r.extrato[0]).toEqual({ itemId: "i1", ok: false, motivo: "portaoRecusou" });
+    // ⭐ O `detalhe` viaja junto: `motivo` é a CLASSE, e o portão do lead tem sete
+    // regras dentro dela. Sem isto, o log diz "portaoRecusou" e não diz o quê.
+    expect(r.extrato[0]).toEqual({
+      itemId: "i1", ok: false, motivo: "portaoRecusou", detalhe: "pediu silêncio",
+    });
   });
 
   it("item que não virou lead é pulado, não é falha", async () => {
