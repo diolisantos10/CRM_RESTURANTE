@@ -271,7 +271,7 @@ export async function POST(req: NextRequest) {
     if (!c.loteId) {
       return NextResponse.json({ ok: false, error: "loteId é obrigatório." }, { status: 400 });
     }
-    const r = await liberarLote(prisma, c.loteId, quem);
+    const r = await liberarLote(prisma, c.loteId, quem, portao.sessao.userId);
     return NextResponse.json(r.ok ? { ok: true } : { ok: false, error: r.motivo }, {
       status: r.ok ? 200 : 400,
     });

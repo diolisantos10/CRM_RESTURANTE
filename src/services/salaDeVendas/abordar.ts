@@ -443,7 +443,10 @@ export async function abordarLead(
   });
 
   if (!gravada.ok) {
-    return { abordou: false, motivo: "naoConseguiuGravar", detalhe: gravada.causa };
+    // O `detalhe` carrega a mensagem do banco quando existe. Sem ela, quem
+    // investiga recebe "naoGravou" — que é o nome do problema, não o problema.
+    const porque = gravada.causa === "naoGravou" ? `naoGravou: ${gravada.detalhe}` : gravada.causa;
+    return { abordou: false, motivo: "naoConseguiuGravar", detalhe: porque };
   }
 
   // ── Trava 4: a entrega, com o resultado escrito na própria linha ───────

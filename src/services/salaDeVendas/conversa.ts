@@ -192,7 +192,22 @@ export interface MensagemParaEnviar {
 export type ResultadoDeSaida =
   | { ok: true; mensagemId: string }
   | { ok: false; causa: "semTexto" }
-  | { ok: false; causa: "humanoSemAutor" };
+  | { ok: false; causa: "humanoSemAutor" }
+  /**
+   * O banco recusou a gravação. `detalhe` traz a mensagem crua, cortada.
+   *
+   * ⚠️ Esta causa nasceu de um 500 em produção, 08/09/2026. A primeira rodada
+   * real com o portão liberando chegou até aqui e o Prisma levantou
+   * `Foreign key constraint violated: lead_mensagens_autorUserId_fkey`. A
+   * exceção **atravessou** esta função, `abordarLead`, `abordarItemDaFila` e a
+   * rodada inteira, e virou HTTP 500 — matando os outros nove contatos por
+   * causa do primeiro.
+   *
+   * `abordarLead` promete devolver `naoConseguiuGravar` nesse caso. Ele não
+   * conseguia: a promessa dependia de uma recusa que nunca vinha, porque o
+   * caminho era exceção e não retorno.
+   */
+  | { ok: false; causa: "naoGravou"; detalhe: string };
 
 /**
  * Registra uma mensagem de saída como PENDENTE, antes de tentar entregar.
@@ -218,20 +233,35 @@ export async function registrarSaida(
 
   const agora = m.agora ?? new Date();
 
-  const criada = await db.leadMensagem.create({
-    data: {
+  // ⚠️ O `try` existe porque uma exceção aqui não para UM envio: ela sobe pela
+  // rodada inteira e mata os contatos seguintes, que não têm nada a ver com o
+  // problema. Falha de gravação é resultado, não acidente.
+  let criada: { id: string };
+  try {
+    criada = await db.leadMensagem.create({
+      data: {
+        leadId: m.leadId,
+        direcao: "SAIDA",
+        tipo: m.tipo ?? "TEXTO",
+        status: "PENDENTE",
+        texto,
+        autor: m.autor,
+        autorUserId: m.autorUserId ?? null,
+        templateNome: m.templateNome ?? null,
+        ocorreuEm: agora,
+      },
+      select: { id: true },
+    });
+  } catch (e) {
+    const detalhe = e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300);
+    console.error("[conversa] o banco recusou gravar a mensagem de saída", {
       leadId: m.leadId,
-      direcao: "SAIDA",
-      tipo: m.tipo ?? "TEXTO",
-      status: "PENDENTE",
-      texto,
       autor: m.autor,
       autorUserId: m.autorUserId ?? null,
-      templateNome: m.templateNome ?? null,
-      ocorreuEm: agora,
-    },
-    select: { id: true },
-  });
+      detalhe,
+    });
+    return { ok: false, causa: "naoGravou", detalhe };
+  }
 
   await db.siteLead.update({
     where: { id: m.leadId },

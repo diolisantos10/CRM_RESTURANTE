@@ -351,14 +351,42 @@ export async function abordarARodadaDoDia(
     ...(params.teto !== undefined ? { limite: params.teto } : {}),
   });
 
-  // Quem autorizou cada lote — uma consulta só, e não uma por item.
+  /**
+   * Quem autorizou cada lote — uma consulta só, e não uma por item.
+   *
+   * ⚠️ `liberadoPorUserId`, e NÃO `liberadoPor`. Este foi o defeito que derrubou
+   * a primeira rodada real em que o portão liberou, 08/09/2026:
+   * `liberadoPor` guarda o RÓTULO DE TELA (`Nome (userId)`), montado para
+   * aparecer em "Liberado por …". Ele era entregue a `autorUserId`, que tem
+   * chave estrangeira para `users`, e o Postgres recusou — HTTP 500, levando
+   * junto os outros nove contatos da rodada.
+   *
+   * ⭐ E o id é CONFERIDO contra `users` antes de valer. Confiar na coluna
+   * porque ela "deveria" ter um id é o mesmo erro uma camada adiante: id órfão
+   * (usuário removido, preenchimento retroativo que não casou) voltaria a
+   * estourar chave estrangeira na hora de gravar. Aqui ele vira
+   * `semResponsavel`, que é um item pulado com motivo — não uma rodada morta.
+   */
   const responsavelDoLote = new Map<string, string | null>();
   if (params.autor === "SISTEMA" && fila.liberados.length > 0) {
     const lotes = await db.loteDeProspeccao.findMany({
       where: { id: { in: [...new Set(fila.liberados.map((c) => c.loteId))] } },
-      select: { id: true, liberadoPor: true },
+      select: { id: true, liberadoPorUserId: true },
     });
-    for (const l of lotes) responsavelDoLote.set(l.id, l.liberadoPor);
+
+    const ids = [...new Set(lotes.map((l) => l.liberadoPorUserId).filter((v): v is string => !!v))];
+    const existem = new Set(
+      ids.length === 0
+        ? []
+        : (await db.user.findMany({ where: { id: { in: ids } }, select: { id: true } })).map(
+            (u) => u.id,
+          ),
+    );
+
+    for (const l of lotes) {
+      const id = l.liberadoPorUserId;
+      responsavelDoLote.set(l.id, id && existem.has(id) ? id : null);
+    }
   }
 
   const extrato: ResultadoDaRodada["extrato"] = [];
@@ -379,7 +407,9 @@ export async function abordarARodadaDoDia(
       pulados += 1;
       extrato.push({
         itemId: candidato.itemId, ok: false, motivo: "semResponsavel",
-        detalhe: `o lote ${candidato.loteId} não tem quem o liberou`,
+        detalhe:
+          `o lote ${candidato.loteId} não tem um responsável que o banco reconheça` +
+          ` (liberadoPorUserId ausente ou apontando para usuário inexistente)`,
       });
       continue;
     }
