@@ -7230,7 +7230,17 @@ model LoteDeProspeccao {
   criadoPor   String?
   criadoEm    DateTime  @default(now())
   liberadoEm  DateTime?
+  /// ⚠️ RÓTULO DE TELA, no formato `Nome (userId)`. NÃO é um id.
+  /// Ele é renderizado como "Liberado por …" no painel, e foi entregue por
+  /// engano a `LeadMensagem.autorUserId` — que tem chave estrangeira para
+  /// `users`. Resultado, em produção, 08/09/2026: a primeira rodada real
+  /// derrubou com `Foreign key constraint violated`. Para responsabilizar
+  /// alguém, use `liberadoPorUserId`.
   liberadoPor String?
+  /// Quem autorizou, como ID de verdade. É este que vai para `autorUserId` da
+  /// mensagem — a promessa de que "toda mensagem que sai em nome da empresa tem
+  /// um responsável" só se cumpre com um id que o banco reconheça.
+  liberadoPorUserId String?
   pausadoEm   DateTime?
   pausadoPor  String?
   encerradoEm DateTime?

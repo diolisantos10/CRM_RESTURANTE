@@ -36,9 +36,28 @@ vi.mock("../freioDeRitmo", () => freio);
 
 import { abordarARodadaDoDia } from "./abordarDaFila";
 
+/**
+ * ⚠️ `liberadoPorUserId`, e NÃO `liberadoPor`.
+ *
+ * A versão anterior deste duplo devolvia `liberadoPor: "quem_liberou"`, e o caso
+ * abaixo afirmava que `autorUserId` saía daí. **O teste codificava o defeito**:
+ * em produção `liberadoPor` guarda o rótulo de tela `Nome (userId)`, e entregá-lo
+ * a uma coluna com chave estrangeira derrubou a primeira rodada real com
+ * `Foreign key constraint violated` — HTTP 500, os dez contatos perdidos.
+ *
+ * `user.findMany` existe aqui porque o id agora é CONFERIDO antes de valer.
+ */
 const db = {
-  loteDeProspeccao: { findMany: vi.fn(async () => [{ id: "lote1", liberadoPor: "quem_liberou" }]) },
+  loteDeProspeccao: {
+    findMany: vi.fn(async () => [{ id: "lote1", liberadoPorUserId: "u_liberou" }]),
+  },
+  user: { findMany: vi.fn(async () => [{ id: "u_liberou" }]) },
 } as never;
+
+const banco = db as unknown as {
+  loteDeProspeccao: { findMany: ReturnType<typeof vi.fn> };
+  user: { findMany: ReturnType<typeof vi.fn> };
+};
 
 function fila(quantos: number) {
   return {
@@ -72,6 +91,10 @@ const preVooOk = async () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // `clearAllMocks` zera as implementações do duplo de banco; sem restaurá-las,
+  // todo caso a partir do segundo veria lote e usuário inexistentes.
+  banco.loteDeProspeccao.findMany.mockResolvedValue([{ id: "lote1", liberadoPorUserId: "u_liberou" }]);
+  banco.user.findMany.mockResolvedValue([{ id: "u_liberou" }]);
   freio.conferirRitmo.mockResolvedValue({ pode: true });
   selecao.materializarLead.mockImplementation(async (_db: unknown, itemId: string) => ({
     materializado: true,
@@ -243,14 +266,13 @@ describe("⭐ a rodada AUTOMÁTICA — e ela não é anônima", () => {
 
     expect(abordar.abordarLead).toHaveBeenCalledTimes(2);
     for (const chamada of abordar.abordarLead.mock.calls) {
-      expect(chamada[1]).toMatchObject({ autor: "SISTEMA", autorUserId: "quem_liberou" });
+      expect(chamada[1]).toMatchObject({ autor: "SISTEMA", autorUserId: "u_liberou" });
     }
   });
 
   it("⭐ lote SEM quem liberou não é abordado — ninguém autorizou", async () => {
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(2));
-    (db as unknown as { loteDeProspeccao: { findMany: ReturnType<typeof vi.fn> } })
-      .loteDeProspeccao.findMany.mockResolvedValue([{ id: "lote1", liberadoPor: null }]);
+    banco.loteDeProspeccao.findMany.mockResolvedValue([{ id: "lote1", liberadoPorUserId: null }]);
 
     const r = await abordarARodadaDoDia(db, { autor: "SISTEMA", canalPronto: true, preVoo: preVooOk });
 
@@ -433,5 +455,52 @@ describe("a rodada confere o modelo antes de gastar o primeiro contato", () => {
     });
 
     expect(selecao.montarFilaDeProspeccao).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ⭐ O ID ÓRFÃO — o degrau que o defeito de 08/09/2026 deixou visível.
+ *
+ * Trocar `liberadoPor` por `liberadoPorUserId` conserta o formato do dado. Não
+ * conserta a pergunta seguinte: **e se o id existir na coluna e não existir em
+ * `users`?** Usuário removido, ou preenchimento retroativo que não casou. Sem a
+ * conferência, a rodada voltaria a estourar chave estrangeira na gravação — o
+ * mesmo 500, um degrau adiante.
+ */
+describe("o responsável é conferido, não presumido", () => {
+  it("⭐ id que não existe em `users` NÃO é abordado — vira item pulado, não rodada morta", async () => {
+    selecao.montarFilaDeProspeccao.mockResolvedValue(fila(2));
+    banco.loteDeProspeccao.findMany.mockResolvedValue([
+      { id: "lote1", liberadoPorUserId: "u_que_foi_removido" },
+    ]);
+    banco.user.findMany.mockResolvedValue([]); // ninguém com esse id
+
+    const r = await abordarARodadaDoDia(db, { autor: "SISTEMA", canalPronto: true, preVoo: preVooOk });
+
+    expect(abordar.abordarLead, "gravaria com um autor que o banco não reconhece")
+      .not.toHaveBeenCalled();
+    expect(r.parouPor, "a rodada morreu em vez de pular").toBe("filaAcabou");
+    expect(r.pulados).toBe(2);
+    expect(r.extrato[0]!.motivo).toBe("semResponsavel");
+  });
+
+  it("não pergunta por usuário nenhum quando não há lote com responsável", async () => {
+    selecao.montarFilaDeProspeccao.mockResolvedValue(fila(1));
+    banco.loteDeProspeccao.findMany.mockResolvedValue([{ id: "lote1", liberadoPorUserId: null }]);
+
+    await abordarARodadaDoDia(db, { autor: "SISTEMA", canalPronto: true, preVoo: preVooOk });
+
+    expect(banco.user.findMany, "consulta inútil por uma lista vazia").not.toHaveBeenCalled();
+  });
+
+  it("HUMANO não passa por essa conferência — o id vem da sessão dele", async () => {
+    selecao.montarFilaDeProspeccao.mockResolvedValue(fila(1));
+
+    await abordarARodadaDoDia(db, {
+      autor: "HUMANO", autorUserId: "u1", canalPronto: true, preVoo: preVooOk,
+    });
+
+    expect(abordar.abordarLead).toHaveBeenCalledTimes(1);
+    expect(banco.loteDeProspeccao.findMany).not.toHaveBeenCalled();
   });
 });

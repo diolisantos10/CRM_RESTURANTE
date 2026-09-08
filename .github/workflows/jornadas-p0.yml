@@ -109,7 +109,14 @@ jobs:
           # com os valores já presentes prova o nome do tipo e a sintaxe.
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260905039000_origens_multicanal/migration.sql
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260905040000_prospeccao_e_origens_multicanal/migration.sql
-          echo "✅ As duas migrations da prospecção aplicaram sobre banco realista."
+          # ⭐ 08/09/2026 — `liberadoPorUserId`. Esta linha faltava e o job
+          # reprovou, que é exatamente o trabalho dele: o `db push` cria a coluna
+          # a partir do schema, o DROP acima a leva embora junto com a tabela, e
+          # sem a migration aqui o cliente do Prisma pede uma coluna que o banco
+          # não tem. Migration nova que não entra nesta lista é migration que
+          # ninguém provou.
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260908203000_quem_liberou_o_lote/migration.sql
+          echo "✅ As três migrations da prospecção aplicaram sobre banco realista."
 
       - name: Percorrer as Jornadas 1, 2 e 3
         run: npm run test:jornada

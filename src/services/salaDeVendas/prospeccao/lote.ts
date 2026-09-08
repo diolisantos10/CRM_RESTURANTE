@@ -331,7 +331,21 @@ export async function importarLote(
 export async function liberarLote(
   db: Cliente,
   loteId: string,
+  /** Rótulo de tela, `Nome (userId)`. É o que aparece em "Liberado por …". */
   quem: string,
+  /**
+   * ⭐ O ID DE VERDADE de quem assinou.
+   *
+   * ⚠️ Separado de `quem` porque confundir os dois derrubou a primeira rodada
+   * real, em 08/09/2026: o rótulo foi entregue a `LeadMensagem.autorUserId`,
+   * que tem chave estrangeira para `users`, e o Postgres recusou — HTTP 500,
+   * levando junto os outros nove contatos da rodada.
+   *
+   * Opcional só para não quebrar chamador antigo; sem ele, o lote fica sem
+   * responsável de verdade e **não é abordado pela rodada automática**. É a
+   * regra que já existia, agora apoiada num dado que o banco reconhece.
+   */
+  quemUserId?: string | null,
 ): Promise<{ ok: boolean; motivo?: string }> {
   const lote = await db.loteDeProspeccao.findUnique({
     where: { id: loteId },
@@ -351,6 +365,7 @@ export async function liberarLote(
       situacao: "LIBERADO",
       liberadoEm: new Date(),
       liberadoPor: quem,
+      ...(quemUserId ? { liberadoPorUserId: quemUserId } : {}),
       // Retomar um lote pausado limpa a pausa, mas não apaga quem pausou:
       // essa história vive na trilha, não nesta linha.
       pausadoEm: null,
