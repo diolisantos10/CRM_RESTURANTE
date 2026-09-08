@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { abordarLead, primeiroNome, resumoDoModelo, modeloConfigurado } from "./abordar";
+import { abordarLead, primeiroNome, saudacaoDoLead, resumoDoModelo, modeloConfigurado } from "./abordar";
 
 const enviarModelo = vi.hoisted(() => vi.fn());
 const canalPronto = vi.hoisted(() => vi.fn(() => true));
@@ -218,5 +218,49 @@ describe("a configuração do modelo", () => {
     // Bolha vazia na tela do vendedor é pior que uma que diz o nome do modelo.
     expect(resumoDoModelo({ nome: "foocci_abordagem_inicial", idioma: "pt_BR", parametros: ["Marina"] }))
       .toBe("[modelo: foocci_abordagem_inicial] (Marina)");
+  });
+});
+
+describe("⭐ a saudação do modelo — o arquivo de 4.880 é de estabelecimentos, não de gente", () => {
+  /**
+   * Medido no arquivo que o CEO mandou: a coluna "Nome" traz `.it Pizza`,
+   * `100% Espetos`, `Bar do Zé`. Cortar no primeiro espaço — que é o certo para
+   * gente — produziria "Olá .it", "Olá 100%", "Olá Bar" em 4.880 mensagens.
+   *
+   * Pior que não saudar: parece defeito, porque é.
+   */
+  const daLista = (nome: string, restaurante: string | null = null) => ({
+    nome,
+    restaurante,
+    fonte: "LISTA_PROSPECCAO",
+  });
+
+  it("⭐ estabelecimento vai INTEIRO, e não cortado no primeiro espaço", () => {
+    expect(saudacaoDoLead(daLista(".it Pizza"))).toBe(".it Pizza");
+    expect(saudacaoDoLead(daLista("100% Espetos e Petiscos"))).toBe("100% Espetos e Petiscos");
+    expect(saudacaoDoLead(daLista("Bar do Zé"))).toBe("Bar do Zé");
+  });
+
+  it("o campo dedicado vence a coluna genérica", () => {
+    expect(saudacaoDoLead(daLista("contato", "Pizzaria Dona Ana"))).toBe("Pizzaria Dona Ana");
+  });
+
+  it("⭐ A METADE LEGÍTIMA: lead do formulário continua sendo saudado pelo PRIMEIRO nome", () => {
+    // Sem esta, "usar o nome inteiro" viraria regra geral e o site passaria a
+    // dizer "Olá Marina Gambarini" a quem digitou o próprio nome.
+    expect(saudacaoDoLead({ nome: "Marina Gambarini", restaurante: null, fonte: "FORMULARIO_DEMONSTRACAO" }))
+      .toBe("Marina");
+  });
+
+  it("telefone como nome continua não virando saudação, nos dois caminhos", () => {
+    expect(saudacaoDoLead(daLista("5511999998888"))).toBeNull();
+    expect(saudacaoDoLead(daLista("+55 (11) 99999-8888"))).toBeNull();
+    expect(saudacaoDoLead({ nome: "5511999998888", restaurante: null, fonte: "FORMULARIO_DEMONSTRACAO" }))
+      .toBeNull();
+  });
+
+  it("sem nome nenhum devolve null — e aí o modelo vai sem parâmetro", () => {
+    expect(saudacaoDoLead(daLista(""))).toBeNull();
+    expect(saudacaoDoLead({ nome: null, restaurante: null, fonte: "LISTA_PROSPECCAO" })).toBeNull();
   });
 });
