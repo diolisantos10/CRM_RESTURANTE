@@ -34,7 +34,13 @@
 import type { PrismaClient, Prisma } from "@prisma/client";
 import { registrarSaida, confirmarEnvio, registrarFalhaDeEnvio } from "./conversa";
 import { conferirRitmo } from "./freioDeRitmo";
-import { avaliarContatoDeLead } from "@/services/foocci-sdr/LeadContactSafety";
+import {
+  avaliarContatoDeLead,
+  avaliarAbordagemDeProspeccao,
+  recusaDeProspeccao,
+  REGRA,
+  type LeadSafetyDecision,
+} from "@/services/foocci-sdr/LeadContactSafety";
 import {
   canalDeVendasPronto,
   enviarModeloDeVendas,
@@ -161,6 +167,98 @@ interface LeadParaAbordar {
 }
 
 /**
+ * A fonte que diz que este lead veio de uma lista fria. Uma constante porque a
+ * string aparece em três arquivos e um erro de digitação aqui manda o lead para
+ * o portão errado — em silêncio, e para o lado permissivo se fosse ao contrário.
+ */
+export const FONTE_DE_LISTA = "LISTA_PROSPECCAO";
+
+/**
+ * ⭐⭐ QUAL PORTÃO ESTE LEAD ATRAVESSA — decisão do Diretor Geral, 08/09/2026.
+ *
+ * ── O DEFEITO QUE ISTO CONSERTA, medido na primeira rodada real ─────────────
+ *
+ * A fila consultava `avaliarAbordagemDeProspeccao` (o **frio**) e o envio
+ * consultava `avaliarContatoDeLead` (o **morno**). Dez itens saíam liberados da
+ * fila e os dez eram barrados no envio — `portaoRecusou: 10`, com o token ainda
+ * por cima.
+ *
+ * Os dois portões respondem perguntas diferentes **de propósito**:
+ *
+ *   · frio  — *"quem mandou abordar declarou por que temos este contato?"*
+ *   · morno — *"esta pessoa entregou os dados, e há quanto tempo?"*
+ *
+ * Perguntar a segunda a quem nunca preencheu formulário nenhum não é rigor: é a
+ * pergunta errada. E ela vinha sendo respondida com uma mentira — ver a trava 2
+ * em `abordarLead`.
+ *
+ * ── ⚠️ ORIGEM DESCONHECIDA CAI NO MAIS RESTRITIVO ──────────────────────────
+ *
+ * `fonte` nula, vazia ou qualquer valor que não seja `LISTA_PROSPECCAO` vai para
+ * o **morno**. A escolha é deliberada e é a única segura: se um dia alguém criar
+ * uma fonte nova e esquecer de classificá-la, o erro tem de ser *"não falamos
+ * com quem podíamos"*, nunca *"falamos com quem não podíamos"*.
+ *
+ * ── E O QUE NÃO MUDA EM NENHUM DOS DOIS ─────────────────────────────────────
+ *
+ * Silêncio pedido (opt-out) é a regra 1 dos dois portões, terminal e
+ * inviolável. O **teto do dia** também vale igual, e vale por fora: ele é a
+ * trava 2 de `abordarLead` (`conferirRitmo`), que roda depois do portão,
+ * qualquer que tenha sido o portão.
+ */
+type PortaoDoLead =
+  | { portao: "morno" }
+  | { portao: "frio"; baseLegal: string; prospeccaoLiberada: boolean; descansoHoras: number }
+  | { portao: "recusado"; decisao: LeadSafetyDecision };
+
+async function escolherPortaoDoLead(
+  db: Cliente,
+  lead: { id: string; fonte: string | null },
+): Promise<PortaoDoLead> {
+  if (lead.fonte !== FONTE_DE_LISTA) return { portao: "morno" };
+
+  // O lote é quem declara a base legal. Sem ele, não há o que declarar.
+  const item = await db.itemDeProspeccao.findFirst({
+    where: { leadId: lead.id },
+    orderBy: { criadoEm: "desc" },
+    select: { lote: { select: { situacao: true, proveniencia: true } } },
+  });
+
+  if (!item) {
+    return {
+      portao: "recusado",
+      decisao: recusaDeProspeccao(
+        "PROSPECCAO_SEM_BASE_LEGAL",
+        "O lead diz vir de lista, e não há lote que o autorize — sem isso não se aborda ninguém.",
+      ),
+    };
+  }
+  if (item.lote.situacao !== "LIBERADO") {
+    return {
+      portao: "recusado",
+      decisao: recusaDeProspeccao(
+        "PROSPECCAO_DESLIGADA",
+        `O lote deste contato está em ${item.lote.situacao}, não LIBERADO.`,
+      ),
+    };
+  }
+
+  const config = await db.prospeccaoConfig.findUnique({ where: { id: "singleton" } });
+
+  return {
+    portao: "frio",
+    baseLegal: item.lote.proveniencia ?? "",
+    // Mesma leitura da fila: sem configuração a resposta é "desligada", nunca
+    // "sem limite". O teto do dia em si é a trava 2, e não esta.
+    prospeccaoLiberada: Boolean(config?.outboundLigado) && !config?.pausadoEm,
+    // ── O CONFIGURÁVEL SÓ APERTA, NUNCA AFROUXA ── idêntico à fila, e de
+    // propósito: se as duas leituras divergirem, a que manda é a que vier por
+    // último — e seria esta, no caminho que fala com estranhos.
+    descansoHoras: Math.max(REGRA.descansoHoras, config?.horasEntreAbordagens ?? REGRA.descansoHoras),
+  };
+}
+
+/**
  * Aborda UM lead com o modelo aprovado.
  *
  * `autorUserId` é obrigatório e não tem padrão: toda mensagem que sai em nome
@@ -209,20 +307,53 @@ export async function abordarLead(
     where: { leadId: lead.id, direcao: "SAIDA" },
   });
 
-  // ── Trava 1: o portão do lead ──────────────────────────────────────────
-  const decisao = avaliarContatoDeLead({
-    telefone: lead.whatsapp,
-    optOutAt: lead.optOutAt,
-    // Quem preencheu o formulário consentiu no instante do envio. Sem
-    // `consentAt`, `createdAt` é o instante do formulário — e nunca "hoje",
-    // que transformaria um lead de três meses em consentimento fresco.
-    consentimentoEm: lead.consentAt ?? lead.createdAt,
-    tentativas,
-    ultimoContatoEm: lead.lastContactedAt,
-    historicoConhecido: true,
-    canalPronto: canalDeVendasPronto(),
-    agora,
-  });
+  // ── Trava 1: o portão do lead, ESCOLHIDO PELA ORIGEM ───────────────────
+  const escolha = await escolherPortaoDoLead(db, lead);
+
+  const decisao =
+    escolha.portao === "recusado"
+      ? escolha.decisao
+      : escolha.portao === "frio"
+        ? avaliarAbordagemDeProspeccao({
+            telefone: lead.whatsapp,
+            optOutAt: lead.optOutAt,
+            tentativas,
+            ultimoContatoEm: lead.lastContactedAt,
+            historicoConhecido: true,
+            canalPronto: canalDeVendasPronto(),
+            prospeccaoLiberada: escolha.prospeccaoLiberada,
+            baseLegalDeclarada: escolha.baseLegal,
+            descansoHoras: escolha.descansoHoras,
+            agora,
+          })
+        : avaliarContatoDeLead({
+            telefone: lead.whatsapp,
+            optOutAt: lead.optOutAt,
+            /**
+             * ⚠️ SEM `?? lead.createdAt`, e a remoção é o coração desta mudança.
+             *
+             * Esta linha era `lead.consentAt ?? lead.createdAt`, com um
+             * comentário dizendo que `createdAt` "é o instante do formulário".
+             * **Para um lead que veio de formulário, é.** Para um lead que a
+             * própria casa acabou de materializar de uma lista fria, `createdAt`
+             * é o instante em que **NÓS** criamos a ficha — e o portão o lia
+             * como consentimento fresquíssimo, liberando por zero dias de idade.
+             *
+             * Era exatamente a mentira que o portão frio foi construído para
+             * não contar: *"registraria como consentimento da pessoa um ato da
+             * empresa"*. Ela entrava aqui, calada, pela porta dos fundos.
+             *
+             * Agora `consentAt` nulo é `CONSENTIMENTO_DESCONHECIDO` — bloqueio,
+             * não presunção. É mais restritivo de propósito: lead sem registro
+             * de quando entregou os dados **não** é abordado por este portão.
+             */
+            consentimentoEm: lead.consentAt,
+            tentativas,
+            ultimoContatoEm: lead.lastContactedAt,
+            historicoConhecido: true,
+            canalPronto: canalDeVendasPronto(),
+            agora,
+          });
 
   if (!decisao.sendable) {
     return {
@@ -233,6 +364,12 @@ export async function abordarLead(
   }
 
   // ── Trava 2: o freio de ritmo ──────────────────────────────────────────
+  //
+  // ⭐ O TETO DO DIA VALE NOS DOIS PORTÕES, e é por isso que ele mora AQUI e não
+  // dentro de nenhum deles: qualquer que tenha sido o portão, a mensagem ainda
+  // passa por este freio antes de sair. Colocá-lo dentro dos portões criaria
+  // duas contagens do mesmo teto — e duas contagens do mesmo teto é como se
+  // manda o dobro sem ninguém perceber.
   const ritmo = await conferirRitmo(db, agora);
   if (!ritmo.pode) {
     return { abordou: false, motivo: "ritmo", detalhe: ritmo.detalhe };

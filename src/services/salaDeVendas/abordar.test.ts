@@ -37,9 +37,12 @@ const LEAD = {
 const AGORA = new Date("2026-09-07T13:00:00Z");
 
 function banco(over: {
-  lead?: Partial<typeof LEAD> | null;
+  lead?: (Partial<typeof LEAD> & { fonte?: string | null }) | null;
   tentativas?: number;
   jaSairam?: number;
+  /** O item de prospecção do lead. `null` = não existe nenhum. */
+  item?: { lote: { situacao: string; proveniencia: string | null } } | null;
+  config?: { outboundLigado?: boolean; pausadoEm?: Date | null; horasEntreAbordagens?: number } | null;
 } = {}) {
   const gravadas: Array<Record<string, unknown>> = [];
   const atualizadas: Array<Record<string, unknown>> = [];
@@ -72,6 +75,18 @@ function banco(over: {
           atualizadas.push(args.data);
           return {};
         },
+      },
+      itemDeProspeccao: {
+        findFirst: async () =>
+          over.item === undefined
+            ? { lote: { situacao: "LIBERADO", proveniencia: "Lista pública de CNPJs de restaurantes (SP)" } }
+            : over.item,
+      },
+      prospeccaoConfig: {
+        findUnique: async () =>
+          over.config === undefined
+            ? { outboundLigado: true, pausadoEm: null, horasEntreAbordagens: null }
+            : over.config,
       },
     } as never,
   };
@@ -262,5 +277,168 @@ describe("⭐ a saudação do modelo — o arquivo de 4.880 é de estabeleciment
   it("sem nome nenhum devolve null — e aí o modelo vai sem parâmetro", () => {
     expect(saudacaoDoLead(daLista(""))).toBeNull();
     expect(saudacaoDoLead({ nome: null, restaurante: null, fonte: "LISTA_PROSPECCAO" })).toBeNull();
+  });
+});
+
+/**
+ * ⭐⭐ O PORTÃO ESCOLHIDO PELA ORIGEM — decisão do Diretor Geral, 08/09/2026.
+ *
+ * ── O QUE ESTES CASOS GUARDAM ───────────────────────────────────────────────
+ *
+ * A fila consultava o portão FRIO e o envio consultava o MORNO. Dez itens saíam
+ * liberados da fila e os dez morriam no envio (`portaoRecusou: 10`), medido na
+ * primeira rodada real. Perguntar *"quando esta pessoa entregou os dados?"* a
+ * quem nunca preencheu formulário nenhum não é rigor — é a pergunta errada.
+ *
+ * As três travas que vieram junto, e cada uma tem caso próprio aqui:
+ *
+ *   1. o portão é escolhido pela ORIGEM, e origem desconhecida cai no morno;
+ *   2. `consentAt` nulo NUNCA cai em `createdAt`;
+ *   3. opt-out e teto do dia valem nos DOIS portões.
+ */
+describe("qual portão o lead atravessa", () => {
+  const DE_LISTA = { fonte: "LISTA_PROSPECCAO", consentAt: null };
+
+  it("⭐ lead de lista SEM consentimento é abordado — é o caso que a rodada media em zero", async () => {
+    // Este é o caso concreto: 4.000 contatos de lista, nenhum com formulário
+    // preenchido. Antes desta mudança, os 4.000 seriam barrados um a um.
+    const { db } = banco({ lead: DE_LISTA });
+
+    const r = await abordarLead(db, { leadId: "L1", autor: "SISTEMA", autorUserId: "u1", agora: AGORA });
+
+    expect(r.abordou, JSON.stringify(r)).toBe(true);
+  });
+
+  it("⭐ e a base legal vem do LOTE, não de uma data nossa disfarçada de consentimento", async () => {
+    // Lote sem proveniência = ninguém declarou por que temos o contato.
+    const { db } = banco({
+      lead: DE_LISTA,
+      item: { lote: { situacao: "LIBERADO", proveniencia: "" } },
+    });
+
+    const r = await abordarLead(db, { leadId: "L1", autor: "SISTEMA", autorUserId: "u1", agora: AGORA });
+
+    expect(r.abordou).toBe(false);
+    expect(r.abordou === false && r.detalhe).toContain("PROSPECCAO_SEM_BASE_LEGAL");
+  });
+
+  it("lead que diz vir de lista e não tem lote nenhum: recusado, e o motivo diz isso", async () => {
+    const { db } = banco({ lead: DE_LISTA, item: null });
+
+    const r = await abordarLead(db, { leadId: "L1", autor: "SISTEMA", autorUserId: "u1", agora: AGORA });
+
+    expect(r.abordou).toBe(false);
+    expect(r.abordou === false && r.detalhe).toContain("não há lote que o autorize");
+  });
+
+  it("lote que não está LIBERADO barra o envio — pausar tem efeito aqui também", async () => {
+    const { db } = banco({
+      lead: DE_LISTA,
+      item: { lote: { situacao: "PAUSADO", proveniencia: "Lista pública" } },
+    });
+
+    const r = await abordarLead(db, { leadId: "L1", autor: "SISTEMA", autorUserId: "u1", agora: AGORA });
+
+    expect(r.abordou).toBe(false);
+    expect(r.abordou === false && r.detalhe).toContain("PAUSADO");
+  });
+
+  it("prospecção pausada na configuração barra, mesmo com lote liberado", async () => {
+    const { db } = banco({
+      lead: DE_LISTA,
+      config: { outboundLigado: true, pausadoEm: new Date("2026-09-06T00:00:00Z") },
+    });
+
+    const r = await abordarLead(db, { leadId: "L1", autor: "SISTEMA", autorUserId: "u1", agora: AGORA });
+
+    expect(r.abordou).toBe(false);
+    expect(r.abordou === false && r.detalhe).toContain("PROSPECCAO_DESLIGADA");
+  });
+
+  // ── TRAVA 1: origem desconhecida cai no mais restritivo ────────────────────
+
+  it("⭐ fonte NULA vai para o portão morno — o erro tem de ser não falar, nunca falar demais", async () => {
+    // Se alguém criar uma fonte nova e esquecer de classificá-la, o lead não
+    // pode escorregar para o portão de estranhos por omissão.
+    const { db } = banco({ lead: { fonte: null, consentAt: null } });
+
+    const r = await abordarLead(db, { leadId: "L1", autor: "HUMANO", autorUserId: "u1", agora: AGORA });
+
+    expect(r.abordou).toBe(false);
+    expect(r.abordou === false && r.detalhe).toContain("CONSENTIMENTO_DESCONHECIDO");
+  });
+
+  it("fonte desconhecida qualquer também cai no morno, e não no frio", async () => {
+    const { db } = banco({ lead: { fonte: "FONTE_QUE_NINGUEM_CLASSIFICOU", consentAt: null } });
+
+    const r = await abordarLead(db, { leadId: "L1", autor: "HUMANO", autorUserId: "u1", agora: AGORA });
+
+    expect(r.abordou).toBe(false);
+    expect(r.abordou === false && r.detalhe).toContain("CONSENTIMENTO_DESCONHECIDO");
+  });
+
+  // ── TRAVA 2: `consentAt` nulo nunca cai em `createdAt` ─────────────────────
+
+  it("⭐ lead de formulário SEM consentAt é recusado — createdAt não vira consentimento", async () => {
+    // Era exatamente esta linha que deixava a mentira passar: um lead criado
+    // agora tinha "consentimento de zero dias de idade", que era a data em que
+    // NÓS criamos a ficha.
+    const { db } = banco({
+      lead: { fonte: "FORMULARIO_DEMONSTRACAO", consentAt: null, createdAt: AGORA },
+    });
+
+    const r = await abordarLead(db, { leadId: "L1", autor: "HUMANO", autorUserId: "u1", agora: AGORA });
+
+    expect(r.abordou, "createdAt voltou a ser lido como consentimento").toBe(false);
+    expect(r.abordou === false && r.detalhe).toContain("CONSENTIMENTO_DESCONHECIDO");
+  });
+
+  // ── TRAVA 3: opt-out e teto do dia valem nos DOIS portões ──────────────────
+
+  it("⭐ opt-out barra no portão FRIO igual ao morno — é a regra 1 dos dois", async () => {
+    const { db } = banco({
+      lead: { ...DE_LISTA, optOutAt: new Date("2026-09-02T00:00:00Z") },
+    });
+
+    const r = await abordarLead(db, { leadId: "L1", autor: "SISTEMA", autorUserId: "u1", agora: AGORA });
+
+    expect(r.abordou).toBe(false);
+    expect(r.abordou === false && r.detalhe).toContain("LEAD_OPT_OUT");
+  });
+
+  it("⭐ o teto do dia barra o lead de lista — ele vale por FORA do portão", async () => {
+    // O freio roda depois do portão, qualquer que tenha sido o portão. Se o teto
+    // morasse dentro de cada um, haveria duas contagens do mesmo teto — e duas
+    // contagens do mesmo teto é como se manda o dobro sem ninguém perceber.
+    const { db } = banco({ lead: DE_LISTA, jaSairam: 9999 });
+
+    const r = await abordarLead(db, { leadId: "L1", autor: "SISTEMA", autorUserId: "u1", agora: AGORA });
+
+    expect(r.abordou).toBe(false);
+    expect(r.abordou === false && r.motivo).toBe("ritmo");
+  });
+
+  it("o descanso entre tentativas continua valendo no portão frio", async () => {
+    const { db } = banco({
+      lead: { ...DE_LISTA, lastContactedAt: new Date("2026-09-07T09:00:00Z") },
+    });
+
+    const r = await abordarLead(db, { leadId: "L1", autor: "SISTEMA", autorUserId: "u1", agora: AGORA });
+
+    expect(r.abordou).toBe(false);
+    expect(r.abordou === false && r.detalhe).toContain("DESCANSO_ATIVO");
+  });
+
+  it("o configurável só APERTA: descanso maior que o padrão vale; menor é ignorado", async () => {
+    // 24h configurado é menor que as 48h do desenho — o desenho manda.
+    const { db } = banco({
+      lead: { ...DE_LISTA, lastContactedAt: new Date("2026-09-06T13:00:00Z") },
+      config: { outboundLigado: true, pausadoEm: null, horasEntreAbordagens: 24 },
+    });
+
+    const r = await abordarLead(db, { leadId: "L1", autor: "SISTEMA", autorUserId: "u1", agora: AGORA });
+
+    expect(r.abordou, "o configurável afrouxou o descanso").toBe(false);
+    expect(r.abordou === false && r.detalhe).toContain("DESCANSO_ATIVO");
   });
 });

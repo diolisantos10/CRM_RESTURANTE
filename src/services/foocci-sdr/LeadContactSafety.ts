@@ -392,6 +392,26 @@ export interface ProspeccaoSafetyInput
  * pediu nada é mais delicado que responder quem escreveu, não menos — nenhuma
  * dessas travas afrouxa aqui.
  */
+/**
+ * ⭐ RECUSA DE PROSPECÇÃO MONTADA FORA DO PORTÃO — e o vocabulário continua aqui.
+ *
+ * O portão frio decide sobre o que ele recebe. Duas causas ele **não pode ver**,
+ * porque acontecem antes de qualquer campo ser preenchido: o lead diz vir de
+ * lista e não há lote que o autorize, ou o lote existe e não está liberado.
+ *
+ * Quem descobre isso é quem lê o banco (`abordar.ts`). Montar a recusa lá com um
+ * objeto literal criaria a **segunda definição** de bloqueio — exatamente o que
+ * o cabeçalho deste arquivo proíbe: *"um `if (lead.optOutAt)` solto em outro
+ * arquivo é a segunda definição, e é a que ninguém lembra de mudar"*. Por isso a
+ * frase é construída aqui, com os mesmos motivos do resto.
+ */
+export function recusaDeProspeccao(
+  reason: "PROSPECCAO_SEM_BASE_LEGAL" | "PROSPECCAO_DESLIGADA",
+  detail: string,
+): LeadSafetyDecision {
+  return bloqueia(reason, detail);
+}
+
 export function avaliarAbordagemDeProspeccao(
   input: ProspeccaoSafetyInput,
 ): LeadSafetyDecision {
