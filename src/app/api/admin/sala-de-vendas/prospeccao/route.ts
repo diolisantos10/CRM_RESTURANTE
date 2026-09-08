@@ -21,7 +21,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { guardarSalaDeVendas, somenteLeitura, vePelaOperacaoToda } from "../_guarda";
-import { abordarItemDaFila } from "@/services/salaDeVendas/prospeccao/abordarDaFila";
+import { abordarItemDaFila, abordarARodadaDoDia } from "@/services/salaDeVendas/prospeccao/abordarDaFila";
 import {
   conferirLista,
   importarLote,
@@ -52,9 +52,11 @@ function inteiroNaoNegativo(v: unknown): number | null {
 }
 
 interface Corpo {
-  acao?: "conferir" | "importar" | "abordar" | "liberar" | "pausarLote" | "interruptor";
+  acao?: "conferir" | "importar" | "abordar" | "rodada" | "liberar" | "pausarLote" | "interruptor";
   // abordar
   itemId?: string;
+  // rodada — teto DESTA rodada, além do teto do dia
+  teto?: number;
   // conferir / importar
   nome?: string;
   proveniencia?: string;
@@ -202,6 +204,46 @@ export async function POST(req: NextRequest) {
       { ok: false, error: fraseDaAbordagem(r.motivo, r.detalhe), motivo: r.motivo },
       { status: 409 },
     );
+  }
+
+  /**
+   * A RODADA DO DIA — o laço que faltava.
+   *
+   * ⚠️ O comentário da ação `abordar`, logo acima, argumenta contra aceitar uma
+   * lista: *"faria o freio valer para o lote inteiro a partir de uma leitura
+   * só"*. **A objeção está certa, e esta ação não a viola:** a rodada chama
+   * `abordarItemDaFila` uma vez por item, e ele relê `conferirRitmo` a cada
+   * chamada. O freio continua sendo lido por abordagem, não por rodada.
+   *
+   * O que muda é só quem aperta o botão. Sem isto, os 250 do CEO são 250
+   * cliques — medido em 08/09/2026: não existe cron de prospecção.
+   *
+   * Guardada como `liberar` e `interruptor`, e não como `abordar`: mandar a
+   * casa falar com duzentos estranhos de uma vez é da mesma natureza que
+   * autorizar a lista, não que tocar um contato.
+   */
+  if (c.acao === "rodada") {
+    if (!vePelaOperacaoToda(portao.sessao)) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Disparar a rodada é de quem responde pela marca — SDR conduz, não autoriza.",
+        },
+        { status: 403 },
+      );
+    }
+
+    const teto = typeof c.teto === "number" && Number.isInteger(c.teto) && c.teto > 0
+      ? c.teto
+      : undefined;
+
+    const r = await abordarARodadaDoDia(prisma, {
+      autorUserId: portao.sessao.userId,
+      canalPronto: canalDeVendasPronto(),
+      ...(teto !== undefined ? { teto } : {}),
+    });
+
+    return NextResponse.json({ ok: true, data: r });
   }
 
   // ── As duas ações que autorizam a casa a falar com estranhos ──
