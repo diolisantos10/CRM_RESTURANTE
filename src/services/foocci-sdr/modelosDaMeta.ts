@@ -78,6 +78,22 @@ export async function contaDoNumeroDeVendas(
   const id = foocciSalesPhoneNumberId();
   if (!id) return { ok: false, erro: "FOOCCI_SALES_PHONE_NUMBER_ID não está no ambiente" };
 
+  /**
+   * ── Caminho 0: alguém já sabe a resposta ──
+   *
+   * ⚠️ Eu evitei esta variável de propósito no #217 — *"menos uma coisa que
+   * depende de alguém lembrar"*. A derivação automática era melhor **se
+   * funcionasse**, e em 08/09/2026 ela foi medida com o token de produção e
+   * **não funciona**: nem o número expõe a conta, nem o token traz alvo.
+   *
+   * Doutrina 33 aplicada a mim mesmo: a preferência por derivar era uma
+   * afirmação sobre o sistema, e a medição a derrubou. A variável fica como
+   * saída de emergência — quem tem o id em mãos destrava em um minuto — e os
+   * caminhos automáticos continuam existindo para quando não houver ninguém.
+   */
+  const daMao = (process.env.FOOCCI_SALES_WABA_ID ?? "").trim();
+  if (daMao) return { ok: true, wabaId: daMao };
+
   // ── Caminho 1: perguntar ao próprio número ──
   const r = await graphDeVendas(`${id}?fields=whatsapp_business_account{id}`, token);
   if (!ehFalha(r)) {
@@ -106,6 +122,10 @@ export async function contaDoNumeroDeVendas(
   const doToken = await contaPeloToken(token);
   if (doToken.ok) return { ok: true, wabaId: doToken.wabaId };
 
+  // ── Caminho 3: pelo negócio dono do aplicativo ──
+  const doNegocio = await contaPeloNegocio(token, id);
+  if (doNegocio.ok) return { ok: true, wabaId: doNegocio.wabaId };
+
   /**
    * ⚠️ OS DOIS MOTIVOS, e não só o primeiro.
    *
@@ -122,7 +142,59 @@ export async function contaDoNumeroDeVendas(
     ok: false,
     erro:
       `pelo número: ${ehFalha(r) ? r.erro : "a Meta não devolveu a conta"}` +
-      ` · pelo token: ${doToken.erro}`,
+      ` · pelo token: ${doToken.erro}` +
+      ` · pelo negócio: ${doNegocio.erro}` +
+      ` · saída: defina FOOCCI_SALES_WABA_ID com o id da conta`,
+  };
+}
+
+/**
+ * ⭐ Caminho 3: o negócio dono do aplicativo lista as contas dele, e a gente
+ * escolhe **a que contém o nosso número** — não a primeira.
+ *
+ * ⚠️ Escolher a primeira seria o defeito clássico desta casa numa forma nova: o
+ * mesmo negócio pode ter a conta do produto (a dos restaurantes) e a da Sala.
+ * Listar os modelos da conta errada devolveria "não achado" para um modelo que
+ * existe, e a investigação iria procurar no lugar errado.
+ */
+async function contaPeloNegocio(token: string, phoneNumberId: string): Promise<ContaPeloToken> {
+  const cred = await MetaAppCredentialsService.getResolved().catch(() => null);
+  if (!cred?.appId) return { ok: false, erro: "sem appId para achar o negócio" };
+
+  const app = await graphDeVendas(`${cred.appId}?fields=business{id}`, token);
+  if (ehFalha(app)) return { ok: false, erro: `o aplicativo não disse o negócio: ${app.erro}` };
+
+  const negocio = (app as { business?: { id?: unknown } }).business;
+  const negocioId = negocio?.id != null ? String(negocio.id) : "";
+  if (!negocioId) return { ok: false, erro: "o aplicativo não está ligado a um negócio" };
+
+  const contas = await graphDeVendas(
+    `${negocioId}/owned_whatsapp_business_accounts?fields=id&limit=100`,
+    token,
+  );
+  if (ehFalha(contas)) return { ok: false, erro: `o negócio não listou as contas: ${contas.erro}` };
+
+  const linhas = (contas as { data?: unknown }).data;
+  const ids = (Array.isArray(linhas) ? linhas : [])
+    .map((c) => (c as { id?: unknown }).id)
+    .filter((v): v is string | number => v != null)
+    .map(String);
+
+  if (ids.length === 0) return { ok: false, erro: "o negócio não tem contas de WhatsApp" };
+
+  for (const wabaId of ids) {
+    const numeros = await graphDeVendas(`${wabaId}/phone_numbers?fields=id&limit=100`, token);
+    if (ehFalha(numeros)) continue;
+    const lista = (numeros as { data?: unknown }).data;
+    const temONosso = (Array.isArray(lista) ? lista : []).some(
+      (n) => String((n as { id?: unknown }).id) === phoneNumberId,
+    );
+    if (temONosso) return { ok: true, wabaId };
+  }
+
+  return {
+    ok: false,
+    erro: `nenhuma das ${ids.length} conta(s) do negócio contém o número de vendas`,
   };
 }
 
