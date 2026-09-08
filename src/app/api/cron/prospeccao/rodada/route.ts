@@ -40,7 +40,10 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { abordarARodadaDoDia } from "@/services/salaDeVendas/prospeccao/abordarDaFila";
+import {
+  abordarARodadaDoDia,
+  type ResultadoDaRodada,
+} from "@/services/salaDeVendas/prospeccao/abordarDaFila";
 import { canalDeVendasPronto } from "@/services/foocci-sdr/FoocciSalesChannel";
 import { preVooDoModelo } from "@/services/foocci-sdr/modelosDaMeta";
 
@@ -60,6 +63,21 @@ function conferirCron(req: NextRequest): { ok: true } | { ok: false; status: 401
     return { ok: false, status: 401, erro: "Unauthorized" };
   }
   return { ok: true };
+}
+
+/**
+ * Quantos itens saíram por cada motivo — a evidência que o número sozinho não dá.
+ *
+ * `ok` é o envio que aconteceu; o resto é o motivo da fila, sem tradução. Traduzir
+ * aqui faria o log dizer uma explicação que o serviço não deu.
+ */
+function contarMotivos(extrato: ResultadoDaRodada["extrato"]): Record<string, number> {
+  const conta: Record<string, number> = {};
+  for (const linha of extrato) {
+    const chave = linha.ok ? "ok" : linha.motivo ?? "(sem motivo)";
+    conta[chave] = (conta[chave] ?? 0) + 1;
+  }
+  return conta;
 }
 
 export async function POST(req: NextRequest) {
@@ -84,11 +102,19 @@ export async function POST(req: NextRequest) {
   // ⚠️ O resultado vai para o log SEMPRE, e não só quando dá errado. Uma rodada
   // que manda zero e uma que não rodou são indistinguíveis para quem olha de
   // fora — e é essa confusão que faz uma lista queimar sem ninguém perceber.
+  //
+  // ⭐ E vai COM OS MOTIVOS. Em 08/09/2026 a primeira rodada real devolveu
+  // `abordados: 0, pulados: 10, parouPor: filaAcabou` — e essa linha, sozinha,
+  // não diz **nada** sobre o que aconteceu com os dez. É o guardrail 6 quebrado
+  // no meu próprio código: *"alerta que diz 'algo falhou' sem o caso concreto é
+  // ruído que ninguém investiga"*. O extrato já trazia a resposta; o log a
+  // jogava fora.
   console.info("[cron/prospeccao/rodada] rodada concluída", {
     abordados: r.abordados,
     pulados: r.pulados,
     parouPor: r.parouPor,
     falha: r.falha,
+    porMotivo: contarMotivos(r.extrato),
   });
 
   return NextResponse.json({ ok: true, data: r });

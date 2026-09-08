@@ -224,3 +224,115 @@ describe("metaTokenHealth", () => {
     expect(r.answered).toBe(false);
   });
 });
+
+/**
+ * ⭐⭐ A CREDENCIAL DA SALA DE VENDAS — a que ninguém vigiava.
+ *
+ * ── O CASO REAL, 08/09/2026 ─────────────────────────────────────────────────
+ *
+ * A primeira rodada de prospecção voltou **zero abordados**, verde, sem falha. O
+ * pré-voo do modelo trouxe o motivo com as palavras da Meta: *"Session has
+ * expired on Tuesday, 25-Aug-26"* — **catorze dias vencido**.
+ *
+ * E esta varredura estava verde o tempo todo, porque ela lê
+ * `metaWhatsAppConfig`, a tabela dos RESTAURANTES. O número da Foocci mora no
+ * ambiente, não em tabela: ela perguntava à Meta sobre todos os tokens **menos
+ * o único que a operação comercial usa**.
+ *
+ * Estes casos existem para que isso não possa acontecer de novo em silêncio.
+ */
+describe("a credencial da Sala de Vendas entra na varredura", () => {
+  const guardado = { ...process.env };
+  afterEach(() => { process.env = { ...guardado }; });
+
+  beforeEach(() => {
+    findMany.mockResolvedValue([]);
+    process.env.FOOCCI_SALES_PHONE_NUMBER_ID = "123456";
+    process.env.FOOCCI_SALES_ACCESS_TOKEN = "EAAvendas";
+    process.env.FOOCCI_SDR_SEND_ENABLED = "true";
+  });
+
+  it("⭐ token vencido vira ATENÇÃO — o caso que passou catorze dias mudo", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => respostaDebugToken({
+      app_id: NOSSO_APP, is_valid: false, expires_at: emDias(-14), scopes: [REQUIRED_SCOPE],
+    })));
+
+    const r = await sweepMetaTokenHealth();
+
+    expect(r.salaDeVendas.isValid).toBe(false);
+    expect(r.needsAttention, "a varredura ficaria verde com a operação parada").toBe(true);
+    const linha = r.attention.find((a) => a.includes("Número de vendas"));
+    expect(linha, "o alerta não nomeia de quem é a credencial").toBeTruthy();
+    expect(linha, "não diz o que isso causa — guardrail 6").toContain("zero abordados");
+  });
+
+  it("⭐ a Sala NÃO é um restaurante: não entra em `results` nem conta em totalConfigs", async () => {
+    // Enfiá-la em `results` daria a ela um `restaurantId` que não existe, e faria
+    // `totalConfigs` mentir sobre quantos clientes têm WhatsApp.
+    vi.stubGlobal("fetch", vi.fn(async () => respostaDebugToken({
+      app_id: NOSSO_APP, is_valid: true, expires_at: 0, scopes: [REQUIRED_SCOPE],
+    })));
+
+    const r = await sweepMetaTokenHealth();
+
+    expect(r.totalConfigs).toBe(0);
+    expect(r.results).toEqual([]);
+    expect(r.salaDeVendas.restaurantId).toBe("(sala-de-vendas)");
+  });
+
+  it("vencimento próximo avisa ANTES — não existe renovação automática aqui", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => respostaDebugToken({
+      app_id: NOSSO_APP, is_valid: true, expires_at: emDias(5), scopes: [REQUIRED_SCOPE],
+    })));
+
+    const r = await sweepMetaTokenHealth();
+
+    expect(r.needsAttention).toBe(true);
+    // `emDias(5)` cai poucos milissegundos abaixo de 5 dias e o arredondamento
+    // para baixo devolve 4 — ancorar no número exato seria um teste frágil que
+    // fala do relógio, não da regra.
+    expect(r.salaDeVendas.expiresInDays).toBeLessThanOrEqual(5);
+    expect(r.attention.join(" ")).toContain("Número de vendas da Foocci");
+    expect(r.attention.join(" ")).toContain("vence em");
+  });
+
+  it("⭐ sem token no ambiente e com o envio LIGADO: atenção, nunca silêncio", async () => {
+    // Guardrail 1 e 2: não conseguir perguntar jamais vira "está tudo bem".
+    delete process.env.FOOCCI_SALES_ACCESS_TOKEN;
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("não deveria chamar"); }));
+
+    const r = await sweepMetaTokenHealth();
+
+    expect(r.salaDeVendas.answered).toBe(false);
+    expect(r.salaDeVendas.isValid, "concluiu algo sem perguntar").toBeNull();
+    expect(r.needsAttention).toBe(true);
+    expect(r.attention.join(" ")).toContain("FOOCCI_SALES_ACCESS_TOKEN");
+  });
+
+  it("Sala desligada e sem número configurado: é um estado, não um defeito", async () => {
+    delete process.env.FOOCCI_SALES_ACCESS_TOKEN;
+    delete process.env.FOOCCI_SALES_PHONE_NUMBER_ID;
+    process.env.FOOCCI_SDR_SEND_ENABLED = "false";
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("não deveria chamar"); }));
+
+    const r = await sweepMetaTokenHealth();
+
+    // ⚠️ `needsAttention` já é true aqui por OUTRO motivo — a varredura reclama
+    // quando nenhum restaurante tem WhatsApp. Medir isso confundiria as duas
+    // reclamações; o que este caso guarda é que a SALA não acrescenta a dela.
+    expect(
+      r.attention.filter((a) => a.includes("Número de vendas")),
+      "alerta sobre algo que ninguém ligou vira ruído",
+    ).toEqual([]);
+  });
+
+  it("🔒 o token da Sala não aparece no resultado da varredura", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => respostaDebugToken({
+      app_id: NOSSO_APP, is_valid: true, expires_at: 0, scopes: [REQUIRED_SCOPE],
+    })));
+
+    const r = await sweepMetaTokenHealth();
+
+    expect(JSON.stringify(r)).not.toContain("EAAvendas");
+  });
+});
