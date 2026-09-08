@@ -192,7 +192,16 @@ export async function montarFilaDeProspeccao(
  * O resultado de materializar.
  *
  * `materializado` fala só da gravação. **Permissão para abordar é outra
- * pergunta**, e quem responde é `avaliarAbordagemDeProspeccao` na hora do envio.
+ * pergunta** — e quem responde na hora do envio é `avaliarContatoDeLead`
+ * (`abordar.ts:213`), **não** `avaliarAbordagemDeProspeccao`.
+ *
+ * ⚠️ ESTA LINHA DIZIA O CONTRÁRIO, e a correção é de 08/09/2026. Não é
+ * preciosismo: os dois portões respondem a perguntas diferentes de propósito —
+ * o frio pergunta *"quem mandou abordar declarou por que temos este contato?"*,
+ * o morno pergunta *"esta pessoa entregou os dados, e há quanto tempo?"*. Um
+ * comentário afirmando que o envio usa o frio faz quem lê parar de procurar
+ * exatamente onde está a diferença. **A divergência entre os dois é assunto
+ * aberto** (ver `docs/pendencias.md`, 08/09) e não se resolve aqui.
  */
 export type ResultadoDaMaterializacao =
   | { materializado: true; leadId: string }
