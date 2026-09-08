@@ -80,6 +80,30 @@ function contarMotivos(extrato: ResultadoDaRodada["extrato"]): Record<string, nu
   return conta;
 }
 
+/**
+ * ⭐ UM CASO CONCRETO POR MOTIVO — e não a lista inteira.
+ *
+ * ── POR QUE ISTO EXISTE, e é a MESMA lição duas vezes ───────────────────────
+ *
+ * `porMotivo` sozinho devolveu `portaoRecusou: 10` na rodada de 08/09/2026.
+ * Verdadeiro, e inútil: o portão do lead tem **sete regras** (silêncio pedido,
+ * telefone, canal, histórico, consentimento, teto de tentativas, descanso,
+ * horário) e a linha não dizia qual delas barrou. Foi o guardrail 6 quase
+ * cumprido — que é o mesmo que não cumprido.
+ *
+ * Um exemplo por motivo, e não todos, porque numa rodada de 250 os detalhes
+ * repetem: o que muda a investigação é **qual regra**, não quantas vezes a
+ * mesma frase apareceu. A contagem já está em `porMotivo`.
+ */
+function exemploDeCadaMotivo(extrato: ResultadoDaRodada["extrato"]): Record<string, string> {
+  const exemplos: Record<string, string> = {};
+  for (const linha of extrato) {
+    if (linha.ok || !linha.motivo || !linha.detalhe) continue;
+    if (exemplos[linha.motivo] === undefined) exemplos[linha.motivo] = linha.detalhe;
+  }
+  return exemplos;
+}
+
 export async function POST(req: NextRequest) {
   const guarda = conferirCron(req);
   if (!guarda.ok) {
@@ -115,6 +139,7 @@ export async function POST(req: NextRequest) {
     parouPor: r.parouPor,
     falha: r.falha,
     porMotivo: contarMotivos(r.extrato),
+    exemploPorMotivo: exemploDeCadaMotivo(r.extrato),
   });
 
   return NextResponse.json({ ok: true, data: r });

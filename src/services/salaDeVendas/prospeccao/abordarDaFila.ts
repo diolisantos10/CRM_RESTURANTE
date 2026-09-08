@@ -263,8 +263,17 @@ export interface ResultadoDaRodada {
    * item aqui mandaria quem investiga procurar um culpado que não existe.
    */
   falha: { itemId: string | null; motivo: string; detalhe: string } | null;
-  /** Uma linha por item tentado, na ordem. É o extrato da rodada. */
-  extrato: Array<{ itemId: string; ok: boolean; motivo?: string }>;
+  /**
+   * Uma linha por item tentado, na ordem. É o extrato da rodada.
+   *
+   * ⚠️ `detalhe` existe porque `motivo` é a CLASSE, não a regra. Medido em
+   * 08/09/2026: a rodada devolveu `portaoRecusou: 10` — verdadeiro, e inútil.
+   * Existem sete regras dentro desse portão (opt-out, telefone, canal,
+   * histórico, consentimento, teto, descanso, horário) e a linha não dizia
+   * qual. O `detalhe` do portão já trazia a frase pronta, com o caso concreto;
+   * era esta camada que a descartava.
+   */
+  extrato: Array<{ itemId: string; ok: boolean; motivo?: string; detalhe?: string }>;
 }
 
 export async function abordarARodadaDoDia(
@@ -368,7 +377,10 @@ export async function abordarARodadaDoDia(
       // Sem quem responda, não sai. É o portão, não um defeito: um lote sem
       // `liberadoPor` é um lote que ninguém autorizou.
       pulados += 1;
-      extrato.push({ itemId: candidato.itemId, ok: false, motivo: "semResponsavel" });
+      extrato.push({
+        itemId: candidato.itemId, ok: false, motivo: "semResponsavel",
+        detalhe: `o lote ${candidato.loteId} não tem quem o liberou`,
+      });
       continue;
     }
 
@@ -391,7 +403,7 @@ export async function abordarARodadaDoDia(
     }
 
     const reacao = reagirA(r.motivo);
-    extrato.push({ itemId: candidato.itemId, ok: false, motivo: r.motivo });
+    extrato.push({ itemId: candidato.itemId, ok: false, motivo: r.motivo, detalhe: r.detalhe });
 
     if (reacao === "pula") {
       pulados += 1;

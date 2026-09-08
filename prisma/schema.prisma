@@ -5046,7 +5046,11 @@ model SiteLead {
   // (`src/services/foocci-sdr/LeadContactSafety.ts`).
   //
   /// Quando esta pessoa entregou os dados por vontade própria. Nulo em contato
-  /// da primeira safra — nesse caso o portão usa `createdAt`, que é a mesma data.
+  /// da primeira safra — e, desde 08/09/2026, **nulo é bloqueio**: o portão NÃO
+  /// usa mais `createdAt` no lugar. Este comentário prometia essa compensação e
+  /// ela deixou de existir; a promessa sai junto, e não fica de herança.
+  /// Consequência declarada: lead do site anterior a 14/08/2026 não é abordado
+  /// pelo portão de consentimento. Errar aqui é errar para o lado de não falar.
   /// NUNCA é preenchido "de ofício": consentimento sem ato é consentimento falso.
   consentAt            DateTime?
   /// Qual versão da política estava no ar naquele momento. Sem isso não há como

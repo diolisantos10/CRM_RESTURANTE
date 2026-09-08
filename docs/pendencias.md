@@ -1,6 +1,6 @@
 # Pendências — o que está aberto
 
-> Última atualização: 08/09/2026.
+> Última atualização: 08/09/2026 (segunda revisão do dia).
 
 ## ⛔ 08/09/2026 — A prospecção está PARADA por credencial vencida, e a decisão não é minha
 
@@ -28,6 +28,79 @@ está registrado no cabeçalho do `FoocciSalesChannel`.
 **E ficou uma pergunta sem resposta, por medir e não por deduzir:** os dez itens
 da fila foram *pulados* antes de chegar ao envio, e o log da rodada não dizia por
 quê. O #219 conserta isso; **a próxima rodada responde.**
+
+## ⚠️ 08/09/2026 — O que a revisão adversarial deixou ABERTO (decisão A no ar)
+
+A divergência entre os portões foi resolvida (decisão A do Diretor Geral). O
+`qualidade` revisou de forma adversarial e **não derrubou nenhuma trava** — mas
+deixou quatro coisas que não se consertam sem decidir:
+
+**1 · O `portaoRecusou: 10` provavelmente NÃO foi curado por esta mudança.**
+Dedução do `qualidade`, e ela é boa: como as sete regras comuns aos dois portões
+são idênticas, o que barrou os dez só pode ter sido consentimento. E um lead
+recém-materializado passava (idade zero). Logo os dez eram **leads
+pré-existentes**, casados por telefone (`selecao.ts`, ramo `DUPLICADO`) — e um
+lead pré-existente **conserva a `fonte` antiga**, então continua indo para o
+portão morno. **Não está medido, e a próxima rodada mede de graça** (o extrato já
+grava o `detalhe`). Não anunciar como resolvido antes disso.
+
+**2 · Lead do site anterior a 14/08/2026 ficou inabordável.** Consequência
+direta da trava 2: `consentAt` nulo agora é bloqueio. A migração daquele dia diz,
+com todas as letras, que contato antigo ficou com `consentAt` NULL. **Ninguém
+contou quantos são** — uma consulta responde (`SiteLead where consentAt is null
+and fonte != LISTA_PROSPECCAO`). Erra para o lado seguro, mas reprovar quem
+acertou desmoraliza o portão inteiro, e essa conta a casa já pagou duas vezes.
+
+**3 · `findFirst` + `orderBy criadoEm desc` responde a pergunta errada.** O
+portão pergunta *"existe algum lote autorizado que justifique este contato?"* — e
+o código responde *"qual foi o último lote em que este telefone apareceu?"*.
+Quando o mesmo telefone é reimportado em outro lote, a base legal declarada passa
+a ser decidida por data de importação, e itens do mesmo lote nascem no mesmo
+laço — colisão de milissegundo torna a declaração **não determinística**. O
+conserto natural (`lote: { situacao: "LIBERADO" }` no `where`) é **mais
+permissivo** que o código atual: é decisão, não correção óbvia.
+
+**4 · "Origem desconhecida cai no mais restritivo" é impreciso.** O morno não é
+mais restritivo: é **outro**. Ele é mais rígido no eixo do consentimento e mais
+frouxo no do interruptor — não aplica o liga/desliga da prospecção nem a base
+legal. Caso alcançável: com a prospecção pausada, um vendedor clicando "Abordar"
+num lead de `WHATSAPP_DIRETO` ainda envia. Defensável (não é prospecção), mas a
+frase, como estava escrita, ia virar premissa de alguém.
+
+## ⛔ 08/09/2026 — A fila e o envio consultam portões DIFERENTES, e ninguém decidiu isso
+
+**Medido, na segunda rodada real:** dez itens, dez `portaoRecusou`. Nenhum
+chegou ao envio — ou seja, **não foi o token**.
+
+**A causa estrutural, essa sim medida no código:**
+
+| | Portão consultado | A pergunta que ele faz |
+|---|---|---|
+| A fila (`selecao.ts:146`) | `avaliarAbordagemDeProspeccao` | *"quem mandou abordar declarou por que temos este contato?"* |
+| O envio (`abordar.ts:213`) | `avaliarContatoDeLead` | *"esta pessoa entregou os dados, e há quanto tempo?"* |
+
+O portão frio existe **exatamente** porque o morno não serve para lista fria: o
+cabeçalho dele diz que passar a data de liberação do lote como consentimento
+*"teria funcionado, passado nos testes e sido mentira — registraria como
+consentimento da pessoa um ato da empresa"*.
+
+**E o envio consulta o morno.** Um lead recém-materializado tem `consentAt`
+nulo, então o morno cai em `createdAt` — **o instante em que NÓS criamos a
+ficha** — e o trata como consentimento fresco. Ou seja: a mentira que o portão
+frio foi construído para evitar **passa** no envio, calada.
+
+**Isto NÃO se resolve afrouxando portão.** É desenho, e toca a base legal que a
+empresa declara para abordar estranho — sobe antes de qualquer linha ser mexida.
+
+⚠️ **Qual das regras do morno barrou os dez ainda não está medido.** A suspeita
+é `TETO_DE_TENTATIVAS` ou `DESCANSO_ATIVO`: a fila lê o lead pelo vínculo com o
+item, e `materializarLead` casa por telefone (`casamento.ts`) — então o envio
+pode estar olhando um lead **antigo, com histórico**, que a fila não viu. É
+suspeita; o #220 instrumenta para a próxima rodada responder.
+
+**Um comentário falso já foi corrigido no caminho:** `selecao.ts` afirmava que o
+portão do envio era o frio. Não era. É a doutrina 33 do kit aplicada ao próprio
+repositório — afirmação de manual que ninguém mediu.
 
 ## ⚠️ 08/09/2026 — A rodada não tem quem responda a quem responder
 
