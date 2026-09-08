@@ -98,6 +98,46 @@ export function primeiroNome(nome: string | null | undefined): string | null {
 }
 
 /**
+ * ⭐ A SAUDAÇÃO DO MODELO — e por que ela não é `primeiroNome` para todo mundo.
+ *
+ * ── O DEFEITO QUE ISTO EVITA, medido no arquivo de 4.880 contatos ───────────
+ *
+ * A lista de prospecção é de ESTABELECIMENTOS, não de pessoas. A coluna "Nome"
+ * traz `.it Pizza`, `100% Espetos`, `Bar do Zé`. Cortar no primeiro espaço, que
+ * é o certo para gente, produz:
+ *
+ *     "Olá .it"        "Olá 100%"        "Olá Bar"
+ *
+ * Isso é pior que não saudar: parece defeito, porque é. E a lista tem 4.880.
+ *
+ * ── COMO A DECISÃO É TOMADA SEM ADIVINHAR ───────────────────────────────────
+ *
+ * Não por heurística de texto ("parece nome de empresa?"), que erraria em
+ * "Marina Gambarini Restaurante" e em "Zé". Pela PROVENIÊNCIA, que o dado já
+ * carrega: `fonte = LISTA_PROSPECCAO` é uma lista de negócios; um lead do
+ * formulário do site é uma pessoa que digitou o próprio nome.
+ *
+ * O guarda contra telefone-como-nome continua valendo nos dois casos.
+ */
+export function saudacaoDoLead(lead: {
+  nome: string | null;
+  restaurante: string | null;
+  fonte: string | null;
+}): string | null {
+  if (lead.fonte === "LISTA_PROSPECCAO") {
+    // O estabelecimento inteiro. `restaurante` primeiro porque é o campo
+    // dedicado; `nome` cobre a lista cuja coluna se chamava "Nome" e trazia o
+    // estabelecimento — que é exatamente o arquivo de São Paulo.
+    const bruto = (lead.restaurante ?? lead.nome ?? "").trim();
+    if (!bruto) return null;
+    if (/^[\d\s()+-]+$/.test(bruto)) return null;
+    return bruto;
+  }
+
+  return primeiroNome(lead.nome);
+}
+
+/**
  * O texto que vai gravado na conversa junto com o modelo.
  *
  * A linha da conversa precisa dizer alguma coisa legível: uma bolha vazia na
@@ -116,6 +156,8 @@ interface LeadParaAbordar {
   consentAt: Date | null;
   createdAt: Date;
   lastContactedAt: Date | null;
+  restaurante: string | null;
+  fonte: string | null;
 }
 
 /**
@@ -127,7 +169,23 @@ interface LeadParaAbordar {
  */
 export async function abordarLead(
   db: Cliente,
-  params: { leadId: string; autorUserId: string; agora?: Date },
+  params: {
+    leadId: string;
+    /**
+     * Quem responde por esta mensagem.
+     *
+     * ⚠️ Sem padrão, de propósito — a mesma razão que `entrega.ts` dá para
+     * `quemMandou`: um padrão faria a chamada nova herdar "pessoa" por omissão,
+     * e a declaração voltaria a depender de quem escreve o código lembrar dela.
+     *
+     * `SISTEMA` é a rodada automática. Ela **não** é anônima: o responsável
+     * continua sendo uma pessoa — quem liberou o lote —, e é esse id que vem em
+     * `autorUserId`. A promessa do cabeçalho original está mantida.
+     */
+    autor: "HUMANO" | "SISTEMA";
+    autorUserId: string;
+    agora?: Date;
+  },
 ): Promise<ResultadoDaAbordagem> {
   const agora = params.agora ?? new Date();
 
@@ -136,6 +194,7 @@ export async function abordarLead(
     select: {
       id: true, nome: true, whatsapp: true, optOutAt: true,
       consentAt: true, createdAt: true, lastContactedAt: true,
+      restaurante: true, fonte: true,
     },
   })) as LeadParaAbordar | null;
 
@@ -180,7 +239,7 @@ export async function abordarLead(
   }
 
   const cfg = modeloConfigurado();
-  const nome = primeiroNome(lead.nome);
+  const nome = saudacaoDoLead(lead);
   const modelo: ModeloDeAbordagem = {
     nome: cfg.nome,
     idioma: cfg.idioma,
@@ -191,7 +250,7 @@ export async function abordarLead(
   const gravada = await registrarSaida(db, {
     leadId: lead.id,
     texto: resumoDoModelo(modelo),
-    autor: "HUMANO",
+    autor: params.autor,
     autorUserId: params.autorUserId,
     tipo: "TEMPLATE",
     templateNome: modelo.nome || null,

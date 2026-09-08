@@ -59,6 +59,18 @@ const DECLARADOS_SEM_VIGIA: Record<string, string> = {
   "kit-espelho.yml": "espelho de doutrina; roda no GitHub, não bate no produto",
   "manual-sync-nightly.yml": "sincronização de manual; roda no GitHub, não bate no produto",
   "meta-token-health.yml": "saúde de token Meta; sem carimbo de execução",
+  // ⚠️ DISPENSADO COM DATA DE VALIDADE, e o motivo é honesto: uma rodada que
+  // não abordou ninguém — fila vazia, que é o caso normal em dia sem lote
+  // liberado — não deixa linha nenhuma no banco. Um medidor de frescor sobre
+  // `LeadMensagem` acusaria "morreu" todo dia em que legitimamente não havia
+  // quem abordar, e alarme que grita sem motivo é alarme que ninguém lê.
+  //
+  // O que vigia esta rodada hoje é o próprio job: ele REPROVA quando a rodada
+  // para por falha, e o GitHub avisa. É vigia de fora, não do banco.
+  //
+  // Vira VIGIADO no dia em que a rodada carimbar a própria execução — e esse
+  // carimbo é a dívida que fica registrada aqui, não escondida.
+  "prospeccao-rodada.yml": "rodada de prospecção; sem carimbo de execução, e fila vazia não deixa rastro — vigiada pela reprovação do próprio job",
   "raiox-noturno.yml": "raio-x noturno; grava relatório, ainda sem leitura de frescor",
   "waiter-simulation-run.yml": "simulação do Garçom; grava corrida, ainda sem leitura de frescor",
   "waiter-training-real-conversations.yml": "intake de conversas reais; rastro por conversa",
