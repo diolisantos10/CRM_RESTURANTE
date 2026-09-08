@@ -46,7 +46,7 @@ export type ResultadoDaFila =
 
 export async function abordarItemDaFila(
   db: Cliente,
-  params: { itemId: string; autorUserId: string; agora?: Date },
+  params: { itemId: string; autor: "HUMANO" | "SISTEMA"; autorUserId: string; agora?: Date },
 ): Promise<ResultadoDaFila> {
   const agora = params.agora ?? new Date();
 
@@ -63,6 +63,7 @@ export async function abordarItemDaFila(
 
   const r = await abordarLead(db, {
     leadId: m.leadId,
+    autor: params.autor,
     autorUserId: params.autorUserId,
     agora,
   });
@@ -175,7 +176,22 @@ export interface ResultadoDaRodada {
 export async function abordarARodadaDoDia(
   db: Cliente,
   params: {
-    autorUserId: string;
+    /**
+     * Quem responde pela rodada. `HUMANO` é alguém apertando o botão;
+     * `SISTEMA` é o gatilho das 9h.
+     *
+     * ⚠️ `SISTEMA` **não é anônimo**, e isto é o coração do desenho. O
+     * cabeçalho de `abordarLead` promete que *"toda mensagem que sai em nome da
+     * empresa tem um responsável, e 'o sistema mandou' não é resposta"*. A
+     * rodada automática honra a promessa: o responsável de cada item é **quem
+     * liberou o lote dele** (`loteDeProspeccao.liberadoPor`) — uma pessoa, com
+     * nome, que autorizou a casa a falar com aquela lista.
+     *
+     * Lote sem `liberadoPor` não é abordado. Ninguém autorizou.
+     */
+    autor: "HUMANO" | "SISTEMA";
+    /** Obrigatório quando `autor` é HUMANO; ignorado quando é SISTEMA. */
+    autorUserId?: string;
     /** Teto DESTA rodada, além do teto do dia que a fila já aplica. */
     teto?: number;
     agora?: Date;
@@ -192,18 +208,42 @@ export async function abordarARodadaDoDia(
     ...(params.teto !== undefined ? { limite: params.teto } : {}),
   });
 
+  // Quem autorizou cada lote — uma consulta só, e não uma por item.
+  const responsavelDoLote = new Map<string, string | null>();
+  if (params.autor === "SISTEMA" && fila.liberados.length > 0) {
+    const lotes = await db.loteDeProspeccao.findMany({
+      where: { id: { in: [...new Set(fila.liberados.map((c) => c.loteId))] } },
+      select: { id: true, liberadoPor: true },
+    });
+    for (const l of lotes) responsavelDoLote.set(l.id, l.liberadoPor);
+  }
+
   const extrato: ResultadoDaRodada["extrato"] = [];
   let abordados = 0;
   let pulados = 0;
 
   for (const candidato of fila.liberados) {
+    const responsavel =
+      params.autor === "SISTEMA"
+        ? responsavelDoLote.get(candidato.loteId) ?? null
+        : params.autorUserId ?? null;
+
+    if (!responsavel) {
+      // Sem quem responda, não sai. É o portão, não um defeito: um lote sem
+      // `liberadoPor` é um lote que ninguém autorizou.
+      pulados += 1;
+      extrato.push({ itemId: candidato.itemId, ok: false, motivo: "semResponsavel" });
+      continue;
+    }
+
     if (params.teto !== undefined && abordados >= params.teto) {
       return { abordados, pulados, parouPor: "tetoDaRodada", falha: null, extrato };
     }
 
     const r = await abordarItemDaFila(db, {
       itemId: candidato.itemId,
-      autorUserId: params.autorUserId,
+      autor: params.autor,
+      autorUserId: responsavel,
       agora,
     });
 

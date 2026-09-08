@@ -127,7 +127,23 @@ interface LeadParaAbordar {
  */
 export async function abordarLead(
   db: Cliente,
-  params: { leadId: string; autorUserId: string; agora?: Date },
+  params: {
+    leadId: string;
+    /**
+     * Quem responde por esta mensagem.
+     *
+     * ⚠️ Sem padrão, de propósito — a mesma razão que `entrega.ts` dá para
+     * `quemMandou`: um padrão faria a chamada nova herdar "pessoa" por omissão,
+     * e a declaração voltaria a depender de quem escreve o código lembrar dela.
+     *
+     * `SISTEMA` é a rodada automática. Ela **não** é anônima: o responsável
+     * continua sendo uma pessoa — quem liberou o lote —, e é esse id que vem em
+     * `autorUserId`. A promessa do cabeçalho original está mantida.
+     */
+    autor: "HUMANO" | "SISTEMA";
+    autorUserId: string;
+    agora?: Date;
+  },
 ): Promise<ResultadoDaAbordagem> {
   const agora = params.agora ?? new Date();
 
@@ -191,7 +207,7 @@ export async function abordarLead(
   const gravada = await registrarSaida(db, {
     leadId: lead.id,
     texto: resumoDoModelo(modelo),
-    autor: "HUMANO",
+    autor: params.autor,
     autorUserId: params.autorUserId,
     tipo: "TEMPLATE",
     templateNome: modelo.nome || null,

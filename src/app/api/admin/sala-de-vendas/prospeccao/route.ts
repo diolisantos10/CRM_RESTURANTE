@@ -194,7 +194,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "itemId é obrigatório." }, { status: 400 });
     }
 
-    const r = await abordarItemDaFila(prisma, { itemId, autorUserId: portao.sessao.userId });
+    const r = await abordarItemDaFila(prisma, {
+      itemId,
+      autor: "HUMANO",
+      autorUserId: portao.sessao.userId,
+    });
 
     if (r.abordou) {
       return NextResponse.json({ ok: true, data: { leadId: r.leadId, mensagemId: r.mensagemId } });
@@ -238,6 +242,7 @@ export async function POST(req: NextRequest) {
       : undefined;
 
     const r = await abordarARodadaDoDia(prisma, {
+      autor: "HUMANO",
       autorUserId: portao.sessao.userId,
       canalPronto: canalDeVendasPronto(),
       ...(teto !== undefined ? { teto } : {}),

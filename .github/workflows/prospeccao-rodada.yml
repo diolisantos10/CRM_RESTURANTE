@@ -1,0 +1,72 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# A RODADA DAS 9h — a abordagem da lista fria, sem ninguém clicar.
+#
+# Palavras do CEO, 08/09/2026: "Apertar botão pra mandar mensagem? Isso não
+# existe! Estamos criando automação."
+#
+# ⚠️ ESTE ARQUIVO É O QUE FAZ A ROTA EXISTIR DE VERDADE. Uma rota de cron sem
+# quem a chame é a doença crônica desta casa — peça pronta, ninguém chamando —
+# e ela apareceu quatro vezes só no dia 08/09. O par rota+agendador nasce junto
+# de propósito.
+#
+# 12:00 UTC = 9h de São Paulo. Dias úteis: lista fria não se aborda no domingo.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Prospecção — rodada das 9h
+
+on:
+  schedule:
+    - cron: "0 12 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      teto:
+        description: "Teto DESTA rodada (vazio = o teto do dia, do banco)"
+        required: false
+        default: ""
+
+jobs:
+  rodada:
+    name: "Rodada de prospecção"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Montar a URL
+        id: params
+        run: |
+          BASE_URL="${{ secrets.FOOCCI_BASE_URL }}"
+          BASE_URL="${BASE_URL%/}"
+          if [[ -z "$BASE_URL" ]]; then echo "::error::FOOCCI_BASE_URL não configurado"; exit 1; fi
+          echo "url=${BASE_URL}/api/cron/prospeccao/rodada" >> "$GITHUB_OUTPUT"
+
+      - name: "POST rodada"
+        env:
+          ENDPOINT_URL: ${{ steps.params.outputs.url }}
+          CRON_SECRET:  ${{ secrets.CRON_SECRET }}
+          TETO:         ${{ github.event.inputs.teto }}
+        run: |
+          if [[ -n "$TETO" ]]; then BODY=$(jq -nc --argjson t "$TETO" '{teto:$t}'); else BODY='{}'; fi
+
+          curl --connect-timeout 20 --max-time 780 -sS -X POST "$ENDPOINT_URL" \
+            -H "Authorization: Bearer $CRON_SECRET" -H "Content-Type: application/json" \
+            -d "$BODY" -o /tmp/r.json -w "%{http_code}" > /tmp/code.txt || true
+
+          HTTP=$(cat /tmp/code.txt)
+          echo "← HTTP      : $HTTP"
+          echo "← abordados : $(jq -r '.data.abordados // "-"' /tmp/r.json)"
+          echo "← pulados   : $(jq -r '.data.pulados   // "-"' /tmp/r.json)"
+          echo "← parou por : $(jq -r '.data.parouPor  // "-"' /tmp/r.json)"
+          echo "← falha     : $(jq -rc '.data.falha    // "nenhuma"' /tmp/r.json)"
+
+          if [[ "$HTTP" -lt 200 || "$HTTP" -ge 300 ]]; then
+            echo "::error::a rodada não rodou (HTTP $HTTP)"; cat /tmp/r.json; exit 1
+          fi
+
+          # ⚠️ Rodada que PAROU POR FALHA reprova o job de propósito. Sem isto ela
+          # devolveria 200 com zero mensagens e ninguém olharia — que é
+          # exatamente a falha muda que esta operação não pode ter.
+          if [[ "$(jq -r '.data.parouPor' /tmp/r.json)" == "falha" ]]; then
+            echo "::error::a rodada parou na primeira falha — $(jq -rc '.data.falha' /tmp/r.json)"
+            exit 1
+          fi
+
+          echo "✅ rodada concluída"

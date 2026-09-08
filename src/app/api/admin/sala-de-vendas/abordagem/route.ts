@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
   const acesso = await podeVerOLead(portao.sessao, leadId, "abordar_lead");
   if (!acesso.ok) return acesso.resposta;
 
-  const r = await abordarLead(prisma, { leadId, autorUserId: portao.sessao.userId });
+  const r = await abordarLead(prisma, { leadId, autorUserId: portao.sessao.userId, autor: "HUMANO" });
 
   if (r.abordou) {
     return NextResponse.json({ ok: true, data: { mensagemId: r.mensagemId } });

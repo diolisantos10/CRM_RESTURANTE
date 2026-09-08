@@ -36,7 +36,9 @@ vi.mock("../freioDeRitmo", () => freio);
 
 import { abordarARodadaDoDia } from "./abordarDaFila";
 
-const db = {} as never;
+const db = {
+  loteDeProspeccao: { findMany: vi.fn(async () => [{ id: "lote1", liberadoPor: "quem_liberou" }]) },
+} as never;
 
 function fila(quantos: number) {
   return {
@@ -69,7 +71,7 @@ describe("o caminho feliz", () => {
   it("⭐ aborda a fila inteira e termina por 'filaAcabou'", async () => {
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(3));
 
-    const r = await abordarARodadaDoDia(db, { autorUserId: "u1", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
 
     expect(r.abordados).toBe(3);
     expect(r.pulados).toBe(0);
@@ -84,7 +86,7 @@ describe("o caminho feliz", () => {
     // a viola — é isto que este caso tranca.
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(4));
 
-    await abordarARodadaDoDia(db, { autorUserId: "u1", canalPronto: true });
+    await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
 
     expect(freio.conferirRitmo, "o freio foi lido uma vez para o lote inteiro").toHaveBeenCalledTimes(4);
   });
@@ -97,7 +99,7 @@ describe("⭐ o portão funcionando NÃO para a rodada", () => {
       .mockResolvedValueOnce({ abordou: false, motivo: "portaoRecusou", detalhe: "pediu silêncio" })
       .mockResolvedValue({ abordou: true, mensagemId: "m" });
 
-    const r = await abordarARodadaDoDia(db, { autorUserId: "u1", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
 
     expect(r.abordados, "um opt-out no topo travou a lista inteira").toBe(2);
     expect(r.pulados).toBe(1);
@@ -109,7 +111,7 @@ describe("⭐ o portão funcionando NÃO para a rodada", () => {
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(2));
     selecao.materializarLead.mockResolvedValueOnce({ materializado: false, motivo: "Item em situação DUPLICADO." });
 
-    const r = await abordarARodadaDoDia(db, { autorUserId: "u1", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
 
     expect(r.pulados).toBe(1);
     expect(r.abordados).toBe(1);
@@ -126,7 +128,7 @@ describe("⛔ o caminho quebrado PARA na primeira falha", () => {
       .mockResolvedValueOnce({ abordou: false, motivo: "aMetaRecusou", detalhe: "template not found" })
       .mockResolvedValue({ abordou: true, mensagemId: "mX" });
 
-    const r = await abordarARodadaDoDia(db, { autorUserId: "u1", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
 
     expect(r.parouPor).toBe("falha");
     expect(r.abordados).toBe(1);
@@ -147,7 +149,7 @@ describe("⛔ o caminho quebrado PARA na primeira falha", () => {
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(3));
     abordar.abordarLead.mockResolvedValue({ abordou: false, motivo: "naoConseguiuGravar", detalhe: "db" });
 
-    const r = await abordarARodadaDoDia(db, { autorUserId: "u1", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
 
     expect(r.parouPor).toBe("falha");
     expect(abordar.abordarLead).toHaveBeenCalledTimes(1);
@@ -161,7 +163,7 @@ describe("o freio encerra sem ser falha", () => {
       .mockResolvedValueOnce({ pode: true })
       .mockResolvedValue({ pode: false, detalhe: "teto do dia" });
 
-    const r = await abordarARodadaDoDia(db, { autorUserId: "u1", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
 
     expect(r.parouPor, "o teto do dia foi tratado como defeito").toBe("freio");
     expect(r.falha).toBeNull();
@@ -173,7 +175,7 @@ describe("o teto da rodada", () => {
   it("⭐ manda no máximo o que foi pedido, mesmo com fila maior", async () => {
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(10));
 
-    const r = await abordarARodadaDoDia(db, { autorUserId: "u1", canalPronto: true, teto: 3 });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, teto: 3 });
 
     expect(r.abordados).toBe(3);
     expect(r.parouPor).toBe("tetoDaRodada");
@@ -182,7 +184,7 @@ describe("o teto da rodada", () => {
 
   it("o teto também é passado para a fila, e não só conferido depois", async () => {
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(2));
-    await abordarARodadaDoDia(db, { autorUserId: "u1", canalPronto: true, teto: 10 });
+    await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, teto: 10 });
     expect(selecao.montarFilaDeProspeccao.mock.calls[0][1]).toMatchObject({ limite: 10 });
   });
 });
@@ -192,10 +194,54 @@ describe("fila vazia", () => {
     const erro = vi.spyOn(console, "error").mockImplementation(() => {});
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(0));
 
-    const r = await abordarARodadaDoDia(db, { autorUserId: "u1", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
 
     expect(r).toMatchObject({ abordados: 0, pulados: 0, parouPor: "filaAcabou", falha: null });
     expect(erro).not.toHaveBeenCalled();
     erro.mockRestore();
+  });
+});
+
+
+describe("⭐ a rodada AUTOMÁTICA — e ela não é anônima", () => {
+  /**
+   * `abordarLead` promete, no cabeçalho dele, que *"toda mensagem que sai em
+   * nome da empresa tem um responsável, e 'o sistema mandou' não é resposta
+   * para o dia em que alguém perguntar quem falou com aquela pessoa"*.
+   *
+   * A rodada das 9h não quebra essa promessa: o responsável de cada item é
+   * **quem liberou o lote dele** — uma pessoa, com nome, que autorizou a casa a
+   * falar com aquela lista. É isto que estes dois casos trancam.
+   */
+  it("⭐ o responsável de cada item é quem LIBEROU o lote", async () => {
+    selecao.montarFilaDeProspeccao.mockResolvedValue(fila(2));
+
+    await abordarARodadaDoDia(db, { autor: "SISTEMA", canalPronto: true });
+
+    expect(abordar.abordarLead).toHaveBeenCalledTimes(2);
+    for (const chamada of abordar.abordarLead.mock.calls) {
+      expect(chamada[1]).toMatchObject({ autor: "SISTEMA", autorUserId: "quem_liberou" });
+    }
+  });
+
+  it("⭐ lote SEM quem liberou não é abordado — ninguém autorizou", async () => {
+    selecao.montarFilaDeProspeccao.mockResolvedValue(fila(2));
+    (db as unknown as { loteDeProspeccao: { findMany: ReturnType<typeof vi.fn> } })
+      .loteDeProspeccao.findMany.mockResolvedValue([{ id: "lote1", liberadoPor: null }]);
+
+    const r = await abordarARodadaDoDia(db, { autor: "SISTEMA", canalPronto: true });
+
+    expect(r.abordados, "mandou mensagem sem ninguém responder por ela").toBe(0);
+    expect(r.pulados).toBe(2);
+    expect(r.extrato[0]).toMatchObject({ motivo: "semResponsavel" });
+    expect(abordar.abordarLead).not.toHaveBeenCalled();
+  });
+
+  it("a rodada humana continua usando quem clicou, e não o lote", async () => {
+    selecao.montarFilaDeProspeccao.mockResolvedValue(fila(1));
+
+    await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
+
+    expect(abordar.abordarLead.mock.calls[0][1]).toMatchObject({ autor: "HUMANO", autorUserId: "u1" });
   });
 });
