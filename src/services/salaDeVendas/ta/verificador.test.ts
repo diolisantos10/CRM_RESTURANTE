@@ -171,3 +171,46 @@ describe("uma resposta pode ter mais de um problema", () => {
     );
   });
 });
+
+/**
+ * ⛔ A TRAVA DE 07/09/2026 — o agente não nega ser um agente.
+ *
+ * Até esta data o ofício PROIBIA as palavras "IA" e "modelo", e a temperatura
+ * era justificada como "não ser reconhecido como robô em três mensagens".
+ * Somadas, produziam um agente instruído a esconder o que é.
+ *
+ * O CEO decidiu o contrário. A regra nova está no ofício — e **regra no prompt
+ * é aviso**. Esta é a trava.
+ */
+describe("negar ser um agente", () => {
+  it("⛔ reprova a negação, em várias formas", () => {
+    for (const t of [
+      "Não sou um robô não, pode falar comigo à vontade.",
+      "Sou uma pessoa de verdade, trabalho aqui no Foocci.",
+      "Sou humano sim!",
+      "Sou de carne e osso, pode confiar.",
+      "Você está falando com uma pessoa.",
+      "Não sou uma inteligência artificial.",
+    ]) {
+      const v = verificarResposta(t);
+      expect(v.aprovada, `deveria reprovar: "${t}"`).toBe(false);
+      expect(v.motivos).toContain("negouSerAgente");
+    }
+  });
+
+  it("⭐ ADMITIR passa — a trava é contra mentir, não contra falar do assunto", () => {
+    // Sem esta cena, a trava poderia estar barrando qualquer menção ao tema, e
+    // o agente ficaria impedido justamente de responder a pergunta com honestidade.
+    const v = verificarResposta(
+      "Sou o agente de atendimento do Foocci. Me conta: quantas unidades você tem?",
+    );
+    expect(v.aprovada).toBe(true);
+  });
+
+  it("sonda de controle: resposta comum, que nem toca no assunto, passa", () => {
+    // O agente não é obrigado a se anunciar em toda mensagem — só a não mentir
+    // quando perguntam. Se esta cena reprovasse, a trava estaria larga demais.
+    const v = verificarResposta("Que tipo de restaurante você tem, e quantas unidades?");
+    expect(v.aprovada).toBe(true);
+  });
+});

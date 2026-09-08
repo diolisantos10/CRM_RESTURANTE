@@ -44,6 +44,7 @@ export type MotivoDaReprovacao =
   | "garantiuResultado"
   | "integracaoInventada"
   | "fechouPeloCliente"
+  | "negouSerAgente"
   | "vazio";
 
 export interface Veredito {
@@ -116,6 +117,34 @@ const PROMETE_PRAZO =
 
 const GARANTE_RESULTADO =
   /\b(garant(?:o|imos|ido|ia)|com certeza (?:vai|voc[êe])|certamente (?:vai|aumenta)|prometo)\b|\baumenta\s+\d+\s*%|\b\d+\s*%\s+(?:a mais|de aumento|de faturamento)/i;
+
+/**
+ * ⛔ O AGENTE DIZENDO QUE É GENTE.
+ *
+ * ── POR QUE ISTO VIROU TRAVA EM 07/09/2026 ─────────────────────────────────
+ *
+ * Até hoje o `oficio.ts` PROIBIA o agente de dizer as palavras "IA" e "modelo",
+ * e o `cerebro.ts` justificava a temperatura 0.6 como "não ser reconhecido como
+ * robô em três mensagens". Somadas, as duas regras produziam um agente
+ * instruído a esconder o que é — sem que ninguém tivesse decidido isso.
+ *
+ * O CEO decidiu o contrário: *"não precisa enganar alguém... é só falar que é
+ * agente de atendimento do Foocci."* A regra nova está escrita no ofício, mas
+ * **regra no prompt é aviso, não trava**: o modelo pode não obedecer, e o
+ * cliente não tem como saber que foi enganado.
+ *
+ * Esta expressão é a trava. Ela pega a NEGAÇÃO — "sou pessoa", "não sou robô",
+ * "sou de carne e osso", "falando com um humano" — e reprova a resposta antes
+ * de sair. Uma resposta que simplesmente não toca no assunto passa normal: o
+ * agente não é obrigado a se anunciar em toda mensagem, só a não mentir quando
+ * perguntado.
+ */
+// ⚠️ SEM `\b` no fim, e isso é medido, não estilo: em JavaScript `\b` só
+// conhece letra ASCII, então `/rob[ôo]\b/` NÃO casa com "robô não" — a borda
+// depois do "ô" nunca acontece. A primeira versão desta trava passou batido
+// exatamente na frase mais provável de todas ("não sou um robô não").
+const NEGOU_SER_AGENTE =
+  /(?:n[ãa]o sou (?:um |uma )?(?:rob[ôo]|m[áa]quina|intelig[êe]ncia artificial|ia\b|bot|sistema|programa)|sou (?:uma )?pessoa(?: de verdade| real)?|sou (?:um |uma )?(?:humano|humana|atendente de verdade)|carne e osso|sou gente|est[áa] falando com (?:uma pessoa|um humano|gente))/i;
 
 const FECHOU_PELO_CLIENTE =
   /\b(j[áa] (?:deixei|deixamos|contratei|contratamos|ativei|ativamos)|acabei de contratar|deixei contratado|j[áa] est[áa] contratado)\b/i;
@@ -209,6 +238,18 @@ export function verificarResposta(texto: string): Veredito {
   if (fechou) {
     motivos.push("fechouPeloCliente");
     detalhes.push(`disse ter contratado pelo cliente ("${fechou[0].trim()}")`);
+  }
+
+  // 6. Negou ser um agente.
+  //
+  // ⚠️ Vem por último de propósito: as cinco de cima falam do NEGÓCIO (preço,
+  // prazo, promessa), e esta fala de QUEM ESTÁ FALANDO. Se um dia só uma
+  // reprovação puder ser mostrada, o vendedor precisa ver primeiro a que muda
+  // a proposta — mas nenhuma delas é mais grave que esta para quem recebe.
+  const negou = NEGOU_SER_AGENTE.exec(limpo);
+  if (negou) {
+    motivos.push("negouSerAgente");
+    detalhes.push(`negou ser um agente ("${negou[0].trim()}")`);
   }
 
   return {

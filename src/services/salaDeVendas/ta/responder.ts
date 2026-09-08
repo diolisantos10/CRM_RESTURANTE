@@ -89,11 +89,31 @@ export function lerSinaisDoTexto(mensagem: string): SinaisDaConversa {
   };
 }
 
-/** A saudação do primeiro contato. Uma vez só, e curta. */
+/**
+ * A saudação do primeiro contato. Uma vez só, e curta.
+ *
+ * ── ⛔ POR QUE "TA" SAIU DAQUI, EM 07/09/2026 ───────────────────────────────
+ *
+ * A saudação era *"Aqui é o TA, do Foocci."* — e "TA" é sigla interna que **o
+ * código nunca define em lugar nenhum**. Quem provou o defeito foi o próprio
+ * CEO, perguntando *"o que é TA?"*. Se o dono da empresa não sabe, o dono do
+ * restaurante também não vai saber: é vocabulário nosso vazando para o cliente
+ * — exatamente o que o bloco "O QUE NUNCA APARECE NA SUA FALA" proíbe em
+ * `oficio.ts`. A saudação violava a regra do arquivo ao lado.
+ *
+ * ── E POR QUE ELE DIZ QUE É AGENTE, LOGO NA PRIMEIRA FRASE ─────────────────
+ *
+ * Decisão do CEO na mesma conversa: *"não precisa enganar alguém... é só falar
+ * que é agente de atendimento do Foocci e seguir com a abordagem."*
+ *
+ * Dito **uma vez**, na abertura, e nunca mais. Repetir em toda mensagem seria
+ * robótico; esconder seria enganar. A pessoa fica sabendo com quem fala e a
+ * conversa segue.
+ */
 function abertura(nome?: string | null): string {
   return nome
-    ? `Oi, ${nome.split(" ")[0]}! Aqui é o TA, do Foocci.`
-    : "Oi! Aqui é o TA, do Foocci.";
+    ? `Oi, ${nome.split(" ")[0]}! Aqui é o agente de atendimento do Foocci.`
+    : "Oi! Aqui é o agente de atendimento do Foocci.";
 }
 
 /**

@@ -115,7 +115,12 @@ describe("o turno do TA", () => {
     const r = responder({ mensagem: "oi", nome: "Marcos Silva" });
 
     expect(r.texto).toContain("Marcos");
-    expect(r.texto).toContain("TA");
+    // ⛔ Era `toContain("TA")` até 07/09/2026. A sigla saiu da saudação porque o
+    // código nunca a define em lugar nenhum — quem provou foi o CEO,
+    // perguntando "o que é TA?". Se o dono da empresa não sabe, o dono do
+    // restaurante também não sabe.
+    expect(r.texto).toContain("agente de atendimento do Foocci");
+    expect(r.texto).not.toContain("TA,");
     expect(r.perguntouIndice).toBe(0);
     expect(r.handoff.deve).toBe(false);
     // Uma pergunta por mensagem — duas fazem a pessoa responder só a última.
