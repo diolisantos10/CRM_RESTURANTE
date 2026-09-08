@@ -263,3 +263,76 @@ describe("achar a conta quando o número não responde", () => {
     expect(r.pronto === false && r.causa).toBe("metaRecusou");
   });
 });
+
+/**
+ * ⭐ OS QUATRO CAMINHOS ATÉ A CONTA — e por que existem quatro.
+ *
+ * Medido em produção, 08/09/2026, com o token de usuário de sistema:
+ * o número não expõe a conta (`#100`) e o token não traz alvo. A derivação
+ * automática que eu defendi no #217 **foi medida e não funciona aqui** — então
+ * ela ganhou reservas, e uma saída de emergência para quem tem o id na mão.
+ */
+describe("os caminhos até a conta", () => {
+  it("⭐ FOOCCI_SALES_WABA_ID vence tudo, e não chama a Meta para descobrir", async () => {
+    process.env.FOOCCI_SALES_WABA_ID = "777";
+    const rede = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ data: [] }), { status: 200 }),
+    );
+    globalThis.fetch = rede as never;
+
+    await listarModelosDeVendas(TOKEN);
+
+    const urls = rede.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(urls[0], "gastou consulta para descobrir o que já estava dito").toContain("/777/message_templates");
+    delete process.env.FOOCCI_SALES_WABA_ID;
+  });
+
+  it("⭐ pelo negócio: escolhe a conta que CONTÉM o nosso número, não a primeira", async () => {
+    // O mesmo negócio tem a conta do produto e a da Sala. Pegar a primeira
+    // devolveria "modelo não achado" para um modelo que existe.
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "(#100)" } }), { status: 400 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { granular_scopes: [] } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ business: { id: "biz1" } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ id: "waba_produto" }, { id: "waba_sala" }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ id: "outro_numero" }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ id: "123456" }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [] }), { status: 200 })) as never;
+
+    await listarModelosDeVendas(TOKEN);
+
+    const urls = (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]));
+    expect(urls[urls.length - 1], "listou os modelos da conta errada").toContain("/waba_sala/message_templates");
+  });
+
+  it("⭐ os QUATRO motivos entram na frase quando todos falham", async () => {
+    // Guardrail 6: sem isto, a investigação repete o erro do caminho 1 e não
+    // sabe que os outros também falharam — foi o que custou contatos hoje.
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "(#100) campo inexistente" } }), { status: 400 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { granular_scopes: [] } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "sem negócio" } }), { status: 400 })) as never;
+
+    const r = await conferirModeloDeAbordagem(TOKEN);
+
+    expect(r.pronto).toBe(false);
+    const detalhe = r.pronto === false ? r.detalhe : "";
+    expect(detalhe).toContain("pelo número:");
+    expect(detalhe).toContain("pelo token:");
+    expect(detalhe).toContain("pelo negócio:");
+    expect(detalhe, "não diz o que fazer").toContain("FOOCCI_SALES_WABA_ID");
+  });
+
+  it("negócio sem conta que contenha o número: falha declarada, com a contagem", async () => {
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "(#100)" } }), { status: 400 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { granular_scopes: [] } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ business: { id: "biz1" } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ id: "w1" }, { id: "w2" }] }), { status: 200 }))
+      .mockResolvedValue(new Response(JSON.stringify({ data: [{ id: "nao_e_o_nosso" }] }), { status: 200 })) as never;
+
+    const r = await conferirModeloDeAbordagem(TOKEN);
+
+    expect(r.pronto === false && r.detalhe).toContain("nenhuma das 2 conta(s)");
+  });
+});
