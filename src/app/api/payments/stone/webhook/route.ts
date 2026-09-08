@@ -22,20 +22,49 @@ export async function POST(req: NextRequest) {
   const rawBody = await req.text();
   const signature = req.headers.get("x-stone-signature") ?? "";
 
-  // Enforce signature verification when secret is configured.
-  // In dev (no secret), skip — but warn loudly so it's never silently skipped in prod.
+  /**
+   * ─── ESTA PORTA ESTAVA ABERTA, E FOI MEDIDA ABERTA ───────────────────────
+   *
+   * Aqui existia `if (!secret) { console.error("CRITICAL"); }` — e SEGUIA EM
+   * FRENTE. Em 07/09/2026 conferi a lista de variáveis da produção no Railway:
+   * `STONE_WEBHOOK_SECRET` **não existe lá**. Ou seja, este endereço aceitava
+   * qualquer requisição da internet, sem assinatura nenhuma, e a partir do
+   * CORPO dela marcava o pagamento como PAID, o pedido como CONFIRMED, contava
+   * o cupom e registrava a receita no CRM. Diferente do Mercado Pago, ele **não
+   * reconsulta o provedor**: confia no que chegou.
+   *
+   * E era pior do que "porta da Stone aberta", porque a busca do pagamento
+   * (abaixo) não filtrava por provedor: um `providerReference` do MERCADO PAGO
+   * casava aqui. O webhook do Mercado Pago tem segredo configurado e verifica
+   * assinatura — este era o desvio em volta dele. Quem tem um pedido Pix em
+   * aberto conhece a própria referência: confirmava o próprio pedido sem pagar.
+   *
+   * ─── POR QUE FECHAR NÃO QUEBRA NADA, e isso foi medido também ────────────
+   * O checkout só produz link da Stone quando `STONE_CLIENT_ID` e
+   * `STONE_CLIENT_SECRET` existem (`api/pedido/[slug]/finalize/route.ts:784`).
+   * Nenhum dos dois está na produção. Nenhum link da Stone é criado hoje, então
+   * nenhum pagamento legítimo depende deste endereço. Guardrail 5 conferido: a
+   * proteção não é mais destrutiva que o problema que ela evita.
+   *
+   * O aviso ficou, e ele carrega a evidência (guardrail 6): quando o segredo
+   * faltar, o log diz que faltou — mas quem decide é o `return`, não o log.
+   * Prompt é aviso; código é trava.
+   */
   const secret = process.env.STONE_WEBHOOK_SECRET;
   if (!secret) {
-    if (process.env.NODE_ENV === "production") {
-      console.error(
-        "[webhook/stone] CRITICAL: STONE_WEBHOOK_SECRET is not set in production. " +
-          "All webhook events are being accepted without signature verification."
-      );
-    } else {
-      console.warn("[webhook/stone] Signature verification skipped (STONE_WEBHOOK_SECRET not set).");
-    }
-  } else if (!verifyWebhookSignature(rawBody, signature)) {
-    console.warn("[webhook/stone] Invalid signature — request rejected.");
+    console.error(
+      "[webhook/stone] RECUSADO: STONE_WEBHOOK_SECRET não está configurado. " +
+        "Sem o segredo não há como distinguir a Stone de qualquer chamador — " +
+        "o evento foi descartado sem tocar em pedido nenhum.",
+      { eventoDescartado: true, bytes: rawBody.length },
+    );
+    return NextResponse.json({ error: "Webhook not configured" }, { status: 401 });
+  }
+  if (!verifyWebhookSignature(rawBody, signature)) {
+    console.warn("[webhook/stone] Invalid signature — request rejected.", {
+      assinaturaRecebida: signature ? "presente" : "ausente",
+      bytes: rawBody.length,
+    });
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
 
@@ -64,8 +93,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing providerReference" }, { status: 400 });
   }
 
+  // `providerName` no filtro é metade do conserto: sem ele, uma referência do
+  // Mercado Pago era aceita por esta porta, contornando o webhook do MP — que é
+  // o que tem segredo e verifica assinatura.
   const payment = await prisma.payment.findFirst({
-    where: { providerReference },
+    where: { providerReference, providerName: "stone" },
     include: { order: { select: { id: true, status: true, restaurantId: true } } },
   });
 
