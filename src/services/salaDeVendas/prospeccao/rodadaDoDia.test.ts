@@ -504,3 +504,60 @@ describe("o responsável é conferido, não presumido", () => {
     expect(banco.loteDeProspeccao.findMany).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * ⭐ O DIAGNÓSTICO DO LOTE SEM RESPONSÁVEL — guardrail 6, terceira vez no dia.
+ *
+ * `semResponsavel: 10` é verdadeiro e não investiga nada: as duas causas
+ * possíveis pedem consertos opostos, e sem o rótulo cru no log a investigação
+ * exige acesso ao banco de produção — que quem lê o log não tem.
+ */
+describe("o lote sem responsável diz POR QUE", () => {
+  it("⭐ grita com o rótulo cru quando o id não foi preenchido", async () => {
+    const erro = vi.spyOn(console, "error").mockImplementation(() => {});
+    selecao.montarFilaDeProspeccao.mockResolvedValue(fila(1));
+    banco.loteDeProspeccao.findMany.mockResolvedValue([
+      { id: "lote1", liberadoPorUserId: null, liberadoPor: "Fulano de Tal" },
+    ]);
+
+    await abordarARodadaDoDia(db, { autor: "SISTEMA", canalPronto: true, preVoo: preVooOk });
+
+    const grito = erro.mock.calls.find((c) => String(c[0]).includes("sem responsável"));
+    expect(grito, "pulou dez contatos em silêncio").toBeTruthy();
+    expect((grito as unknown[])[1]).toMatchObject({
+      loteId: "lote1",
+      liberadoPorUserId: null,
+      idExisteEmUsers: false,
+      rotuloLiberadoPor: "Fulano de Tal",
+    });
+    erro.mockRestore();
+  });
+
+  it("distingue id ausente de id órfão — as duas causas pedem consertos opostos", async () => {
+    const erro = vi.spyOn(console, "error").mockImplementation(() => {});
+    selecao.montarFilaDeProspeccao.mockResolvedValue(fila(1));
+    banco.loteDeProspeccao.findMany.mockResolvedValue([
+      { id: "lote1", liberadoPorUserId: "u_removido", liberadoPor: "Fulano (u_removido)" },
+    ]);
+    banco.user.findMany.mockResolvedValue([]);
+
+    await abordarARodadaDoDia(db, { autor: "SISTEMA", canalPronto: true, preVoo: preVooOk });
+
+    const grito = erro.mock.calls.find((c) => String(c[0]).includes("sem responsável"));
+    expect((grito as unknown[])[1]).toMatchObject({
+      liberadoPorUserId: "u_removido",
+      idExisteEmUsers: false,
+    });
+    erro.mockRestore();
+  });
+
+  it("lote com responsável válido não grita", async () => {
+    const erro = vi.spyOn(console, "error").mockImplementation(() => {});
+    selecao.montarFilaDeProspeccao.mockResolvedValue(fila(1));
+
+    await abordarARodadaDoDia(db, { autor: "SISTEMA", canalPronto: true, preVoo: preVooOk });
+
+    expect(erro.mock.calls.find((c) => String(c[0]).includes("sem responsável"))).toBeFalsy();
+    erro.mockRestore();
+  });
+});

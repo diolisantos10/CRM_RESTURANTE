@@ -371,7 +371,9 @@ export async function abordarARodadaDoDia(
   if (params.autor === "SISTEMA" && fila.liberados.length > 0) {
     const lotes = await db.loteDeProspeccao.findMany({
       where: { id: { in: [...new Set(fila.liberados.map((c) => c.loteId))] } },
-      select: { id: true, liberadoPorUserId: true },
+      // `liberadoPor` (o rótulo) entra SÓ para o diagnóstico abaixo. Ele nunca
+      // vira `autorUserId` — foi assim que a rodada morreu em 08/09.
+      select: { id: true, liberadoPorUserId: true, liberadoPor: true },
     });
 
     const ids = [...new Set(lotes.map((l) => l.liberadoPorUserId).filter((v): v is string => !!v))];
@@ -385,7 +387,33 @@ export async function abordarARodadaDoDia(
 
     for (const l of lotes) {
       const id = l.liberadoPorUserId;
-      responsavelDoLote.set(l.id, id && existem.has(id) ? id : null);
+      const vale = !!id && existem.has(id);
+      responsavelDoLote.set(l.id, vale ? id : null);
+
+      /**
+       * ⚠️ O ALERTA CARREGA A PRÓPRIA EVIDÊNCIA — guardrail 6, terceira vez hoje.
+       *
+       * Em 08/09/2026 a rodada devolveu `semResponsavel: 10` e **não havia como
+       * saber por quê**: o preenchimento retroativo tinha lido `liberadoPor` e
+       * não casado, e o log não mostrava o rótulo que ele tentou ler. Sem isso,
+       * a investigação exige acesso ao banco de produção — que quem lê o log
+       * não tem.
+       *
+       * As duas causas possíveis produzem consertos opostos, e a linha abaixo
+       * distingue as duas: **rótulo em formato inesperado** (o `substring` da
+       * migração não achou parênteses) versus **id que não existe em `users`**
+       * (usuário removido). Uma pede outra extração; a outra pede outra pessoa.
+       */
+      if (!vale) {
+        console.error("[prospeccao] lote sem responsável que o banco reconheça", {
+          loteId: l.id,
+          liberadoPorUserId: id ?? null,
+          idExisteEmUsers: id ? existem.has(id) : false,
+          // O rótulo cru, para ver o FORMATO. É nome + id, o mesmo que a tela
+          // já mostra em "Liberado por …".
+          rotuloLiberadoPor: l.liberadoPor ?? null,
+        });
+      }
     }
   }
 
