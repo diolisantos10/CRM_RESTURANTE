@@ -129,7 +129,19 @@ export async function abordarItemDaFila(
  * compila** enquanto ninguém disser o que fazer com ele. É a diferença entre
  * uma lista que envelhece calada e uma que obriga a decisão.
  */
-type Reacao = "pula" | "encerra" | "falha";
+type Reacao = "pula" | "pulaComLimite" | "encerra" | "falha";
+
+/**
+ * Quantas recusas SEGUIDAS da Meta a rodada tolera antes de desistir.
+ *
+ * Três, e o número tem razão: uma recusa é uma linha ruim da lista; três
+ * seguidas não são coincidência — é o modelo, o token ou o número. Continuar
+ * depois disso não aborda ninguém e gasta a lista contra uma parede.
+ *
+ * O contador zera a cada envio que dá certo: o que importa é a SEQUÊNCIA, não
+ * o total. Uma lista com 20% de contatos ruins espalhados tem de rodar inteira.
+ */
+export const LIMITE_DE_RECUSAS = 3;
 
 /** Os motivos que a fila pode devolver, sem repetir a lista à mão. */
 type MotivoDaFila = Extract<ResultadoDaFila, { abordou: false }>["motivo"];
@@ -147,10 +159,30 @@ function reagirA(motivo: MotivoDaFila): Reacao {
     case "ritmo":
       return "encerra";
 
-    // O caminho está quebrado por razão nossa. Para, e grita.
+    /**
+     * ⭐ A META RECUSANDO NÃO MATA MAIS A RODADA NO PRIMEIRO — ordem do
+     * Diretor Geral, 08/09: *"se o parâmetro faltar, pule o contato e siga em
+     * vez de parar a rodada inteira. Um contato pulado custa um contato; uma
+     * rodada travada custa o dia."*
+     *
+     * O caso concreto que ele previu: o modelo aprovado tem `{{1}}`, o contato
+     * veio da lista sem nome, o código manda zero parâmetros e a Meta recusa.
+     * Com a regra antiga, **o primeiro contato sem nome derrubava os outros
+     * 249** — e o dia inteiro daria zero por causa de uma linha da planilha.
+     *
+     * ⚠️ Mas "pula sempre" seria o outro extremo, e pior: modelo com nome
+     * errado, token vencido ou número bloqueado fazem a Meta recusar TODOS —
+     * e a rodada gastaria a lista inteira batendo na mesma parede, em silêncio.
+     * Por isso a recusa da Meta é `pulaComLimite`: pula, conta, e para quando
+     * as recusas viram padrão em vez de exceção. Ver `LIMITE_DE_RECUSAS`.
+     */
+    case "aMetaRecusou":
+      return "pulaComLimite";
+
+    // O caminho está quebrado por razão NOSSA — banco, lead que sumiu. Não é
+    // uma linha ruim da lista: é a máquina. Para na primeira, e grita.
     case "leadNaoExiste":
     case "naoConseguiuGravar":
-    case "aMetaRecusou":
       return "falha";
 
     default: {
@@ -221,6 +253,8 @@ export async function abordarARodadaDoDia(
   const extrato: ResultadoDaRodada["extrato"] = [];
   let abordados = 0;
   let pulados = 0;
+  /** Recusas da Meta em sequência. Zera a cada envio que dá certo. */
+  let recusasSeguidas = 0;
 
   for (const candidato of fila.liberados) {
     const responsavel =
@@ -249,6 +283,7 @@ export async function abordarARodadaDoDia(
 
     if (r.abordou) {
       abordados += 1;
+      recusasSeguidas = 0;
       extrato.push({ itemId: candidato.itemId, ok: true });
       continue;
     }
@@ -263,6 +298,27 @@ export async function abordarARodadaDoDia(
 
     if (reacao === "encerra") {
       return { abordados, pulados, parouPor: "freio", falha: null, extrato };
+    }
+
+    if (reacao === "pulaComLimite") {
+      pulados += 1;
+      recusasSeguidas += 1;
+      if (recusasSeguidas < LIMITE_DE_RECUSAS) continue;
+
+      console.error("[prospeccao] rodada INTERROMPIDA — a Meta recusou seguidas vezes", {
+        recusasSeguidas,
+        ultimoItem: candidato.itemId,
+        motivo: r.motivo,
+        detalhe: r.detalhe,
+        jaAbordadosNestaRodada: abordados,
+      });
+      return {
+        abordados,
+        pulados,
+        parouPor: "falha",
+        falha: { itemId: candidato.itemId, motivo: r.motivo, detalhe: r.detalhe },
+        extrato,
+      };
     }
 
     // ⛔ Falha de verdade: o caminho está quebrado. A rodada morre aqui, e o

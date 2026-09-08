@@ -120,7 +120,20 @@ describe("⭐ o portão funcionando NÃO para a rodada", () => {
 });
 
 describe("⛔ o caminho quebrado PARA na primeira falha", () => {
-  it("⭐ a Meta recusou: para, e os seguintes NÃO são tentados", async () => {
+  /**
+   * ⚠️ ESTE CASO MUDOU DE REGRA EM 08/09, POR ORDEM — não por conveniência.
+   *
+   * Ele dizia: *"a Meta recusou: para, e os seguintes NÃO são tentados"*, e
+   * estava certo enquanto se supunha que recusa da Meta significava caminho
+   * quebrado. O Diretor Geral corrigiu a suposição: o caso mais provável é uma
+   * LINHA RUIM DA LISTA (contato sem nome, modelo com `{{1}}`), e aí *"um
+   * contato pulado custa um contato; uma rodada travada custa o dia"*.
+   *
+   * A intenção original — **não empurrar 250 em cima de um defeito** — continua
+   * de pé, e é o caso logo abaixo: três recusas seguidas param. O que mudou foi
+   * onde fica a fronteira entre exceção e padrão, não a proteção.
+   */
+  it("⭐ a Meta recusando uma vez NÃO para mais — pula e segue", async () => {
     const erro = vi.spyOn(console, "error").mockImplementation(() => {});
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(5));
     abordar.abordarLead
@@ -130,17 +143,10 @@ describe("⛔ o caminho quebrado PARA na primeira falha", () => {
 
     const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
 
-    expect(r.parouPor).toBe("falha");
-    expect(r.abordados).toBe(1);
-    expect(r.falha).toEqual({ itemId: "i2", motivo: "aMetaRecusou", detalhe: "template not found" });
-
-    // A prova que importa: os três restantes nunca foram tentados.
-    expect(abordar.abordarLead, "empurrou a lista em cima do defeito").toHaveBeenCalledTimes(2);
-
-    // Guardrail 6: o alerta carrega o item e o motivo.
-    const grito = erro.mock.calls.find((c) => String(c[0]).includes("rodada INTERROMPIDA"));
-    expect(grito, "parou calada").toBeTruthy();
-    expect((grito![1] as Record<string, unknown>).itemId).toBe("i2");
+    expect(r.parouPor).toBe("filaAcabou");
+    expect(r.abordados, "uma linha ruim custou os outros quatro contatos").toBe(4);
+    expect(r.pulados).toBe(1);
+    expect(abordar.abordarLead).toHaveBeenCalledTimes(5);
     erro.mockRestore();
   });
 
@@ -243,5 +249,80 @@ describe("⭐ a rodada AUTOMÁTICA — e ela não é anônima", () => {
     await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
 
     expect(abordar.abordarLead.mock.calls[0][1]).toMatchObject({ autor: "HUMANO", autorUserId: "u1" });
+  });
+});
+
+describe("⭐ a Meta recusando não mata mais a rodada no primeiro", () => {
+  /**
+   * Ordem do Diretor Geral, 08/09: *"se o parâmetro faltar, pule o contato e
+   * siga em vez de parar a rodada inteira. Um contato pulado custa um contato;
+   * uma rodada travada custa o dia."*
+   *
+   * O caso concreto: o modelo tem `{{1}}`, o contato veio da lista sem nome, o
+   * código manda zero parâmetros, a Meta recusa. Com a regra antiga, **o
+   * primeiro contato sem nome derrubava os outros 249**.
+   *
+   * E o outro extremo é pior: token vencido faz a Meta recusar TODOS, e "pula
+   * sempre" gastaria a lista inteira contra a mesma parede, em silêncio.
+   */
+  it("⭐ uma recusa isolada é pulada, e a rodada segue até o fim", async () => {
+    selecao.montarFilaDeProspeccao.mockResolvedValue(fila(4));
+    abordar.abordarLead
+      .mockResolvedValueOnce({ abordou: false, motivo: "aMetaRecusou", detalhe: "sem parâmetro" })
+      .mockResolvedValue({ abordou: true, mensagemId: "m" });
+
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
+
+    expect(r.parouPor, "um contato ruim derrubou a rodada inteira").toBe("filaAcabou");
+    expect(r.abordados).toBe(3);
+    expect(r.pulados).toBe(1);
+    expect(abordar.abordarLead).toHaveBeenCalledTimes(4);
+  });
+
+  it("⭐ TRÊS recusas seguidas param a rodada — vira padrão, não exceção", async () => {
+    const erro = vi.spyOn(console, "error").mockImplementation(() => {});
+    selecao.montarFilaDeProspeccao.mockResolvedValue(fila(10));
+    abordar.abordarLead.mockResolvedValue({ abordou: false, motivo: "aMetaRecusou", detalhe: "token" });
+
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
+
+    expect(r.parouPor).toBe("falha");
+    expect(r.pulados).toBe(3);
+    expect(abordar.abordarLead, "gastou a lista batendo na mesma parede").toHaveBeenCalledTimes(3);
+
+    const grito = erro.mock.calls.find((c) => String(c[0]).includes("recusou seguidas"));
+    expect(grito, "parou calada").toBeTruthy();
+    erro.mockRestore();
+  });
+
+  it("⭐ o contador zera a cada sucesso — o que importa é a SEQUÊNCIA", async () => {
+    // Lista com contatos ruins ESPALHADOS tem de rodar inteira. Sem o zeramento,
+    // a terceira recusa da lista mataria a rodada mesmo com envios no meio.
+    selecao.montarFilaDeProspeccao.mockResolvedValue(fila(6));
+    const recusa = { abordou: false, motivo: "aMetaRecusou", detalhe: "sem nome" };
+    const ok = { abordou: true, mensagemId: "m" };
+    abordar.abordarLead
+      .mockResolvedValueOnce(recusa).mockResolvedValueOnce(ok)
+      .mockResolvedValueOnce(recusa).mockResolvedValueOnce(ok)
+      .mockResolvedValueOnce(recusa).mockResolvedValueOnce(ok);
+
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
+
+    expect(r.parouPor).toBe("filaAcabou");
+    expect(r.abordados).toBe(3);
+    expect(r.pulados).toBe(3);
+  });
+
+  it("⭐ A METADE QUE NÃO MUDA: banco que não grava continua parando na PRIMEIRA", async () => {
+    // Recusa da Meta é uma linha ruim da lista; banco que não grava é a máquina.
+    // Tratar os dois igual seria perder a proteção que motivou a regra.
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    selecao.montarFilaDeProspeccao.mockResolvedValue(fila(5));
+    abordar.abordarLead.mockResolvedValue({ abordou: false, motivo: "naoConseguiuGravar", detalhe: "db" });
+
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
+
+    expect(r.parouPor).toBe("falha");
+    expect(abordar.abordarLead).toHaveBeenCalledTimes(1);
   });
 });
