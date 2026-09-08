@@ -29,6 +29,7 @@ import { materializarLead } from "./selecao";
 import { abordarLead, type ResultadoDaAbordagem } from "../abordar";
 import { conferirRitmo } from "../freioDeRitmo";
 import { montarFilaDeProspeccao } from "./selecao";
+import type { ConferenciaDoModelo, CausaDaConferencia } from "@/services/foocci-sdr/modelosDaMeta";
 
 type Cliente = PrismaClient | Prisma.TransactionClient;
 
@@ -192,15 +193,76 @@ function reagirA(motivo: MotivoDaFila): Reacao {
   }
 }
 
+/**
+ * ⭐ O PRÉ-VOO: a conferência do modelo ANTES do primeiro contato.
+ *
+ * ── POR QUE ELA EXISTE, E POR QUE NÃO BASTAVA O #216 ────────────────────────
+ *
+ * O #216 ensinou a rodada a pular a recusa da Meta e parar depois de três
+ * seguidas. Isso protege a lista, mas **paga o aprendizado em contatos**: se o
+ * modelo aprovado espera duas variáveis e o envio manda uma, TODOS os envios
+ * seriam recusados — e a rodada descobriria isso queimando três nomes de uma
+ * lista de 4.000 para aprender o que uma consulta à Graph responde de graça.
+ *
+ * Recusar aqui custa uma consulta. Descobrir lá custa três contatos e o dia.
+ *
+ * ── ⚠️ A REGRA DE QUANDO ABORTAR, E O PRINCÍPIO POR TRÁS DELA ──────────────
+ *
+ * **Aborta quando 100% dos envios falhariam. Segue quando a perda é parcial ou
+ * desconhecida.** Não é uma lista de causas decorada: é esse teste, aplicado a
+ * cada uma.
+ *
+ *   · sem nome de modelo, sem token, modelo inexistente, não aprovado, ou
+ *     esperando 2+ variáveis → **nenhuma** mensagem sairia. Aborta.
+ *   · a Graph não respondeu (`metaRecusou`) → eu **não sei** se o modelo está
+ *     bom. Rodar é a aposta certa: a leitura pode ter caído sem que o envio
+ *     tenha caído, e se o envio também estiver quebrado o #216 para em três.
+ *     Aterrar o dia por uma leitura que falhou seria a proteção mais destrutiva
+ *     que o problema (guardrail 5).
+ *
+ * ⚠️ Ao Diretor Geral eu enumerei três causas de aborto (`naoAchado`,
+ * `naoAprovado`, `variaveisNaoBatem`). `semNomeConfigurado` e `semToken` entram
+ * pelo mesmo princípio — são 100% de falha — e estão ditas aqui em vez de
+ * entrarem caladas.
+ */
+type ReacaoDoPreVoo = "aborta" | "segue";
+
+function reagirAoPreVoo(causa: CausaDaConferencia): ReacaoDoPreVoo {
+  switch (causa) {
+    // Nenhuma mensagem sairia. Gastar contato para provar isso é desperdício.
+    case "semNomeConfigurado":
+    case "semToken":
+    case "naoAchado":
+    case "naoAprovado":
+    case "variaveisNaoBatem":
+      return "aborta";
+
+    // Não consegui ler. Silêncio da Graph não é veredito sobre o modelo.
+    case "metaRecusou":
+      return "segue";
+
+    default: {
+      const naoTratada: never = causa;
+      return naoTratada;
+    }
+  }
+}
+
 export interface ResultadoDaRodada {
   /** Quantas mensagens saíram. */
   abordados: number;
   /** Quantos itens o portão barrou por regra — não é defeito. */
   pulados: number;
   /** Por que a rodada terminou. `filaAcabou` e `freio` são fins normais. */
-  parouPor: "filaAcabou" | "tetoDaRodada" | "freio" | "falha";
-  /** Preenchido só quando `parouPor === "falha"`. */
-  falha: { itemId: string; motivo: string; detalhe: string } | null;
+  parouPor: "filaAcabou" | "tetoDaRodada" | "freio" | "falha" | "preVoo";
+  /**
+   * Preenchido quando `parouPor` é `falha` ou `preVoo`.
+   *
+   * `itemId` é `null` no pré-voo — e o `null` é informação, não buraco: quer
+   * dizer que a rodada parou **antes de tentar qualquer contato**. Inventar um
+   * item aqui mandaria quem investiga procurar um culpado que não existe.
+   */
+  falha: { itemId: string | null; motivo: string; detalhe: string } | null;
   /** Uma linha por item tentado, na ordem. É o extrato da rodada. */
   extrato: Array<{ itemId: string; ok: boolean; motivo?: string }>;
 }
@@ -228,9 +290,49 @@ export async function abordarARodadaDoDia(
     teto?: number;
     agora?: Date;
     canalPronto: boolean;
+    /**
+     * ⭐ A conferência do modelo, **obrigatória e injetada**.
+     *
+     * Ela é parâmetro em vez de chamada interna por uma razão só, e ela é a
+     * doença crônica desta casa: *peça pronta, ninguém chamando*. Com o tipo
+     * exigindo, **um chamador novo não compila** sem dizer o que faz o pré-voo
+     * dele — em vez de nascer mudo e ninguém perceber por semanas.
+     *
+     * Em produção vale `preVooDoModelo` (`foocci-sdr/modelosDaMeta`). Nos
+     * testes, uma função que devolve o veredito que o caso quer provar — e é
+     * por isso que ela é injetável: conferir o modelo não pode exigir rede.
+     */
+    preVoo: () => Promise<ConferenciaDoModelo>;
   },
 ): Promise<ResultadoDaRodada> {
   const agora = params.agora ?? new Date();
+
+  // ⚠️ ANTES de montar a fila. Não por custo — montar a fila é uma leitura —
+  // mas porque a ordem é a mensagem: nada desta rodada começa antes de o modelo
+  // estar conferido.
+  const conferencia = await params.preVoo();
+  if (!conferencia.pronto && reagirAoPreVoo(conferencia.causa) === "aborta") {
+    console.error("[prospeccao] rodada NÃO COMEÇOU — o modelo de abordagem reprovou no pré-voo", {
+      causa: conferencia.causa,
+      detalhe: conferencia.detalhe,
+    });
+    return {
+      abordados: 0,
+      pulados: 0,
+      parouPor: "preVoo",
+      falha: { itemId: null, motivo: conferencia.causa, detalhe: conferencia.detalhe },
+      extrato: [],
+    };
+  }
+
+  if (!conferencia.pronto) {
+    // Segue, mas não em silêncio: a rodada vai rodar SEM ter conferido o
+    // modelo, e quem lê o log depois precisa saber disso sem adivinhar.
+    console.warn("[prospeccao] a rodada segue SEM conferir o modelo — a Graph não respondeu", {
+      causa: conferencia.causa,
+      detalhe: conferencia.detalhe,
+    });
+  }
 
   const fila = await montarFilaDeProspeccao(db, {
     canalPronto: params.canalPronto,

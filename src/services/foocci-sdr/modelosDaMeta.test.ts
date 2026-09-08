@@ -17,7 +17,7 @@ vi.mock("@/services/whatsapp/metaFlag", () => ({
   metaGraphUrl: (c: string) => `https://graph.facebook.com/v21.0/${c}`,
 }));
 
-import { conferirModeloDeAbordagem, listarModelosDeVendas } from "./modelosDaMeta";
+import { conferirModeloDeAbordagem, listarModelosDeVendas, preVooDoModelo } from "./modelosDaMeta";
 
 const TOKEN = "token-de-teste";
 const guardado = { ...process.env };
@@ -148,5 +148,41 @@ describe("⭐ a conferência antes do disparo", () => {
 
     expect(r.pronto).toBe(true);
     if (r.pronto) expect(r.modelo.idioma).toBe("en_US");
+  });
+});
+
+/**
+ * ⭐ O PRÉ-VOO — a versão que a produção chama, com o token do ambiente.
+ *
+ * O caso que importa aqui é o do token AUSENTE. O caminho mudo seria devolver
+ * "está tudo bem, não consegui conferir" — guardrail 1: ausência de informação
+ * não é informação. A rodada sairia achando que passou pela conferência.
+ */
+describe("o pré-voo com o token do ambiente", () => {
+  it("⭐ sem FOOCCI_SALES_ACCESS_TOKEN: reprova por `semToken`, e NÃO chama a Meta", async () => {
+    delete process.env.FOOCCI_SALES_ACCESS_TOKEN;
+    const rede = vi.fn();
+    globalThis.fetch = rede as never;
+
+    const r = await preVooDoModelo();
+
+    expect(r).toEqual({
+      pronto: false,
+      causa: "semToken",
+      detalhe: "FOOCCI_SALES_ACCESS_TOKEN não está no ambiente",
+    });
+    expect(rede, "tentou falar com a Meta sem credencial").not.toHaveBeenCalled();
+  });
+
+  it("com token, confere de verdade — e o token não aparece no retorno", async () => {
+    process.env.FOOCCI_SALES_ACCESS_TOKEN = "segredo-do-numero";
+    metaResponde([
+      { name: "foocci_abordagem_v1", language: "pt_BR", status: "APPROVED", components: corpo("Olá {{1}}") },
+    ]);
+
+    const r = await preVooDoModelo();
+
+    expect(r.pronto).toBe(true);
+    expect(JSON.stringify(r), "🔒 o token vazou no retorno").not.toContain("segredo-do-numero");
   });
 });

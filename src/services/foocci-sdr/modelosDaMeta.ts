@@ -34,7 +34,7 @@
 import { metaGraphUrl } from "@/services/whatsapp/metaFlag";
 import { maskGraphResponse } from "@/services/whatsapp/providers/metaPayload";
 import { countBodyVariables } from "@/services/whatsapp/MetaTemplateService";
-import { foocciSalesPhoneNumberId } from "./FoocciSalesChannel";
+import { foocciSalesPhoneNumberId, comOTokenDeVendas } from "./FoocciSalesChannel";
 import { modeloConfigurado } from "@/services/salaDeVendas/abordar";
 
 export interface ModeloNaMeta {
@@ -118,7 +118,20 @@ export async function listarModelosDeVendas(
 
 export type ConferenciaDoModelo =
   | { pronto: true; modelo: ModeloNaMeta; parametrosQueMandamos: number }
-  | { pronto: false; causa: "semNomeConfigurado" | "naoAchado" | "naoAprovado" | "variaveisNaoBatem" | "metaRecusou"; detalhe: string };
+  | {
+      pronto: false;
+      causa:
+        | "semNomeConfigurado"
+        | "semToken"
+        | "naoAchado"
+        | "naoAprovado"
+        | "variaveisNaoBatem"
+        | "metaRecusou";
+      detalhe: string;
+    };
+
+/** As causas de reprovação, para quem precisa reagir a cada uma. */
+export type CausaDaConferencia = Extract<ConferenciaDoModelo, { pronto: false }>["causa"];
 
 /**
  * ⭐ A CONFERÊNCIA QUE SE FAZ ANTES DE DISPARAR, e não durante.
@@ -181,4 +194,24 @@ export async function conferirModeloDeAbordagem(token: string): Promise<Conferen
   }
 
   return { pronto: true, modelo: achado, parametrosQueMandamos: 1 };
+}
+
+/**
+ * ⭐ O PRÉ-VOO — a conferência com o token do ambiente, pronta para ser chamada.
+ *
+ * `conferirModeloDeAbordagem` recebe o token porque assim ela é testável sem
+ * ambiente. Esta é a versão que a produção usa: o token vem emprestado de
+ * `comOTokenDeVendas` e não passa pelas mãos de ninguém.
+ *
+ * ⚠️ **Sem token, a resposta é `semToken` — e não uma aprovação.** O caminho
+ * mudo seria devolver "está tudo bem, não consegui conferir": é exatamente o
+ * guardrail 1 (ausência de informação não é informação), e é o que faria a
+ * rodada sair achando que passou pela conferência.
+ */
+export function preVooDoModelo(): Promise<ConferenciaDoModelo> {
+  return comOTokenDeVendas<ConferenciaDoModelo>(conferirModeloDeAbordagem, () => ({
+    pronto: false,
+    causa: "semToken",
+    detalhe: "FOOCCI_SALES_ACCESS_TOKEN não está no ambiente",
+  }));
 }

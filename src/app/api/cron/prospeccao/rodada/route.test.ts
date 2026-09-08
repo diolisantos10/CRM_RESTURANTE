@@ -90,3 +90,22 @@ describe("a rodada", () => {
     expect(json.data).toMatchObject({ abordados: 2, pulados: 1, parouPor: "filaAcabou" });
   });
 });
+
+/**
+ * ⭐ A LIGAÇÃO, e não só a peça.
+ *
+ * A doença crônica desta casa é *peça pronta, ninguém chamando* — quatro vezes
+ * só em 08/09. O pré-voo é um parâmetro obrigatório, então esquecer não compila;
+ * mas passar uma função qualquer compila. Este caso trava que a rota manda **a
+ * conferência de verdade**, e não um stub que aprova tudo.
+ */
+describe("o gatilho leva o pré-voo do modelo — não uma função qualquer", () => {
+  it("passa `preVooDoModelo`, o mesmo que lê a Meta", async () => {
+    const { preVooDoModelo } = await import("@/services/foocci-sdr/modelosDaMeta");
+
+    await bater("Bearer segredo");
+
+    const params = rodada.abordarARodadaDoDia.mock.calls[0][1] as { preVoo: unknown };
+    expect(params.preVoo, "a rodada das 9h roda sem conferir o modelo").toBe(preVooDoModelo);
+  });
+});
