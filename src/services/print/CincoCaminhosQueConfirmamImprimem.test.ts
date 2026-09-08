@@ -24,8 +24,9 @@
  * ocular, na loja.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { NextRequest } from "next/server";
+import crypto from "node:crypto";
 import { restoreNulFromPg } from "@/lib/pg-text";
 import { pedidoAindaPrecisaDeComanda } from "./comandaDoPagamento";
 
@@ -88,7 +89,20 @@ vi.mock("@/lib/prisma", () => ({ prisma: db }));
 const tenant = vi.hoisted(() => ({ getTenantContext: vi.fn() }));
 vi.mock("@/lib/tenant", () => tenant);
 
-vi.mock("@/lib/stone", () => ({ verifyWebhookSignature: vi.fn(() => true) }));
+/**
+ * ⚠️ O `@/lib/stone` NÃO é mais dublê aqui, e a mudança tem data e motivo.
+ *
+ * Este arquivo mockava `verifyWebhookSignature` para devolver `true` sempre —
+ * o que era inofensivo enquanto a rota aceitava qualquer chamador. Em 08/09 o
+ * #202 fechou aquela porta (sem `STONE_WEBHOOK_SECRET`, 401 antes de tocar no
+ * banco), e os dois PRs, verdes separados, colidiram no merge: este caso
+ * passou a bater num 401 e nunca chegava a enfileirar comanda nenhuma.
+ *
+ * A correção não é reabrir a porta no teste — seria provar a impressão por um
+ * caminho que a produção não tem mais. É **entrar pela porta certa**: segredo
+ * no ambiente e corpo assinado de verdade, como a Stone faria.
+ */
+const SEGREDO_DA_STONE = "segredo-de-teste-da-stone";
 vi.mock("@/lib/audit", () => ({ auditLog: vi.fn() }));
 vi.mock("@/services/crm/CustomerMetricsSyncService", () => ({
   CustomerMetricsSyncService: { syncOrderToCustomerMetrics: vi.fn(async () => null) },
@@ -105,12 +119,23 @@ import { PATCH as stoneMarkPaid } from "@/app/api/payments/stone/[orderId]/mark-
 import { PATCH as mpMarkPaid }    from "@/app/api/payments/mercadopago/[orderId]/mark-paid/route";
 import { POST as confirmManual }  from "@/app/api/orders/[id]/confirm-manual-payment/route";
 
+const segredoGuardado = process.env.STONE_WEBHOOK_SECRET;
+
+afterEach(() => {
+  if (segredoGuardado === undefined) delete process.env.STONE_WEBHOOK_SECRET;
+  else process.env.STONE_WEBHOOK_SECRET = segredoGuardado;
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
+  process.env.STONE_WEBHOOK_SECRET = SEGREDO_DA_STONE;
 
   tenant.getTenantContext.mockReturnValue({ restaurantId: "rest_1", role: "OWNER", userId: "u1" });
 
-  db.payment.findFirst.mockResolvedValue({
+  // O #202 passou a exigir `providerName: "stone"` no `where`. O dublê responde
+  // como o banco responderia: só devolve a linha quando o filtro bate.
+  db.payment.findFirst.mockImplementation(async (args: { where?: { providerName?: string } }) =>
+    args?.where?.providerName && args.where.providerName !== "stone" ? null : {
     id: "pay_1", orderId: "ord_1", status: "LINK_SENT",
     order: { id: "ord_1", status: "AWAITING_PAYMENT", restaurantId: "rest_1" },
   });
@@ -180,10 +205,18 @@ function reqJson(url: string, body: unknown, headers: Record<string, string> = {
 
 describe("os cinco caminhos que confirmam o pagamento mandam imprimir", () => {
   it("⭐ 1. webhook da Stone — quem paga com Stone passa a ter comanda", async () => {
+    const corpo = JSON.stringify({ event_type: "payment.approved", id: "ref_1" });
+    const assinatura = crypto
+      .createHmac("sha256", SEGREDO_DA_STONE)
+      .update(corpo, "utf8")
+      .digest("hex");
+
     const res = await stoneWebhook(
-      reqJson("https://foocci.com.br/api/payments/stone/webhook", {
-        event_type: "payment.approved", id: "ref_1",
-      }, { "x-stone-signature": "assinada" }),
+      new NextRequest("https://foocci.com.br/api/payments/stone/webhook", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-stone-signature": assinatura },
+        body: corpo,
+      }),
     );
     expect(res.status).toBe(200);
     const fila = await comandaGravada();
