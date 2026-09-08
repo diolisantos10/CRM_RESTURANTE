@@ -17,6 +17,11 @@ vi.mock("@/services/whatsapp/metaFlag", () => ({
   metaGraphUrl: (c: string) => `https://graph.facebook.com/v21.0/${c}`,
 }));
 
+const credenciais = vi.hoisted(() => ({ getResolved: vi.fn() }));
+vi.mock("@/services/meta/MetaAppCredentialsService", () => ({
+  MetaAppCredentialsService: credenciais,
+}));
+
 import { conferirModeloDeAbordagem, listarModelosDeVendas, preVooDoModelo } from "./modelosDaMeta";
 
 const TOKEN = "token-de-teste";
@@ -37,6 +42,7 @@ beforeEach(() => {
   process.env.FOOCCI_SALES_PHONE_NUMBER_ID = "123456";
   process.env.FOOCCI_SDR_MODELO_ABORDAGEM = "foocci_abordagem_v1";
   process.env.FOOCCI_SDR_MODELO_IDIOMA = "pt_BR";
+  credenciais.getResolved.mockResolvedValue({ appId: "app1", appSecret: "segredo" });
 });
 afterEach(() => { process.env = { ...guardado }; });
 
@@ -184,5 +190,76 @@ describe("o pré-voo com o token do ambiente", () => {
 
     expect(r.pronto).toBe(true);
     expect(JSON.stringify(r), "🔒 o token vazou no retorno").not.toContain("segredo-do-numero");
+  });
+});
+
+/**
+ * ⭐ A CONTA LIDA DO TOKEN — o caminho que salva o pré-voo quando o número não fala.
+ *
+ * ── MEDIDO EM PRODUÇÃO, 08/09/2026 ──────────────────────────────────────────
+ *
+ * Com o token de usuário de sistema, perguntar ao número devolve
+ * `(#100) Tried accessing nonexisting field (whatsapp_business_account)`.
+ * O pré-voo ficava cego, seguia, e a rodada descobria o problema do modelo
+ * **queimando três contatos** — exatamente o custo que ele existe para evitar.
+ */
+describe("achar a conta quando o número não responde", () => {
+  it("⭐ cai para o `debug_token` e lê os alvos da permissão", async () => {
+    globalThis.fetch = vi.fn()
+      // 1ª: o número recusa, como na produção
+      .mockResolvedValueOnce(new Response(
+        JSON.stringify({ error: { message: "(#100) Tried accessing nonexisting field (whatsapp_business_account)" } }),
+        { status: 400 },
+      ))
+      // 2ª: o token diz quais contas ele alcança
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          granular_scopes: [
+            { scope: "whatsapp_business_messaging", target_ids: ["111"] },
+            { scope: "whatsapp_business_management", target_ids: ["999"] },
+          ],
+        },
+      }), { status: 200 }))
+      // 3ª: a listagem de modelos, já com a conta certa
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: [{ name: "foocci_abordagem_v1", language: "pt_BR", status: "APPROVED", components: corpo("Olá {{1}}, tudo bem?") }],
+      }), { status: 200 })) as never;
+
+    const r = await conferirModeloDeAbordagem(TOKEN);
+
+    expect(r.pronto, JSON.stringify(r)).toBe(true);
+    const urls = (globalThis.fetch as unknown as { mock: { calls: string[][] } }).mock.calls.map((c) => c[0]);
+    expect(urls[2], "listou os modelos da conta errada").toContain("/999/message_templates");
+  });
+
+  it("prefere `management` a `messaging` — é a permissão que enxerga modelos", async () => {
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "(#100)" } }), { status: 400 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          granular_scopes: [
+            { scope: "whatsapp_business_messaging", target_ids: ["111"] },
+            { scope: "whatsapp_business_management", target_ids: ["999"] },
+          ],
+        },
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [] }), { status: 200 })) as never;
+
+    await listarModelosDeVendas(TOKEN);
+
+    const urls = (globalThis.fetch as unknown as { mock: { calls: string[][] } }).mock.calls.map((c) => c[0]);
+    expect(urls[2]).toContain("/999/");
+  });
+
+  it("sem credencial de aplicativo, a falha continua sendo falha — não vira aprovação", async () => {
+    credenciais.getResolved.mockRejectedValue(new Error("sem app"));
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: "(#100) campo inexistente" } }), { status: 400 }),
+    ) as never;
+
+    const r = await conferirModeloDeAbordagem(TOKEN);
+
+    expect(r.pronto).toBe(false);
+    expect(r.pronto === false && r.causa).toBe("metaRecusou");
   });
 });
