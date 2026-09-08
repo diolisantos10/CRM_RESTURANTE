@@ -12,6 +12,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getTenantContext } from "@/lib/tenant";
 import { Decimal } from "@prisma/client/runtime/library";
+import { enfileirarComandaDoPagamento } from "@/services/print/comandaDoPagamento";
 
 const bodySchema = z.object({
   reason: z.string().min(1),
@@ -93,6 +94,16 @@ export async function POST(
         notes: order.notes ? `${order.notes}\n${noteAppend}` : noteAppend,
       },
     });
+  });
+
+  // ⚠️ A PIOR DAS CINCO. Esta é a alavanca que o lojista puxa exatamente quando o
+  // pagamento não confirmou sozinho — o momento em que ele MAIS precisa que o
+  // papel saia era o momento em que o papel nunca saía.
+  enfileirarComandaDoPagamento({
+    restaurantId,
+    orderId,
+    statusDoPedido: order.status,
+    origem:         "confirm-manual-payment",
   });
 
   return NextResponse.json({ success: true });

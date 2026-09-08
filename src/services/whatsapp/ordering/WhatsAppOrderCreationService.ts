@@ -110,6 +110,17 @@ export async function createOrderFromSession(
         data:  { status: "CONFIRMED" },
       }),
     ]);
+
+    // A quinta porta, e ela não estava na lista do raio-x — apareceu ao
+    // recensear todo ponto que escreve CONFIRMED em `order`. O pedido por texto
+    // no WhatsApp confirmava na hora (dinheiro/maquininha) e nunca imprimia.
+    const { enfileirarComandaDoPagamento } = await import("@/services/print/comandaDoPagamento");
+    enfileirarComandaDoPagamento({
+      restaurantId:   session.restaurantId,
+      orderId:        created.orderId,
+      statusDoPedido: "CONFIRMED",
+      origem:         "whatsapp pedido por texto",
+    });
   }
 
   // Close any OPEN /pedido draft for this customer so abandonment recovery never fires

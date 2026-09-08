@@ -17,6 +17,7 @@ import { auditLog } from "@/lib/audit";
 import { CustomerMetricsSyncService } from "@/services/crm/CustomerMetricsSyncService";
 import { CustomerCouponService } from "@/services/crm/CustomerCouponService";
 import { SaiposIntegrationService } from "@/services/integrations/SaiposIntegrationService";
+import { enfileirarComandaDoPagamento } from "@/services/print/comandaDoPagamento";
 
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
@@ -133,6 +134,17 @@ export async function POST(req: NextRequest) {
       eventType: eventType ?? "unknown",
       newStatus: "PAID",
     },
+  });
+
+  // A COZINHA ANTES DO RESTO. Este caminho nunca enfileirou comanda: quem pagava
+  // com Stone tinha o pedido confirmado, a receita no CRM, o Saipos avisado — e
+  // nenhum papel na cozinha. Vem antes do cupom e do CRM de propósito: se algo
+  // ali embaixo falhar, a comida já está sendo feita.
+  enfileirarComandaDoPagamento({
+    restaurantId:   payment.order.restaurantId,
+    orderId:        payment.orderId,
+    statusDoPedido: payment.order.status,
+    origem:         "stone webhook",
   });
 
   // Idempotent coupon usage count: increment Promotion.usedCount only once per order,
