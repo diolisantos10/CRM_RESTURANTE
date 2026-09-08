@@ -30,6 +30,7 @@ import {
   indiceEtapa,
 } from "./foocciCrmFunnel";
 import { normalizaWhatsapp, rotuloDaOrigem, canalDoContato, linkWhatsapp } from "./leadOrigin";
+import { pediuSilencio } from "@/services/foocci-sdr/LeadContactSafety";
 import { extractLeadCode, LEAD_CODE_LEN } from "@/lib/site/leadCode";
 
 /** Quem pode aparecer como autor. Texto livre viraria "admin"/"Admin"/"adm". */
@@ -198,7 +199,16 @@ export interface ContatoResumo {
    */
   codigo: string | null;
   whatsapp: string;
+  /**
+   * ⚠️ `null` QUANDO A PESSOA PEDIU SILÊNCIO — e a nulidade é a trava, não o aviso.
+   *
+   * A tela já sabia tratar `null` (mostra o número sem link). Zerar aqui fecha o
+   * caminho no servidor: nenhuma tela futura consegue oferecer o clique, nem por
+   * esquecimento. Prompt é aviso; código é trava (guardrail 4).
+   */
   whatsappLink: string | null;
+  /** Pediu para não receber mensagem. Definitivo, por qualquer canal. */
+  pediuSilencio: boolean;
   restaurante: string | null;
   cidade: string | null;
   tipo: string | null;
@@ -253,7 +263,8 @@ export async function listarContatos(f: ListarContatosFiltro = {}): Promise<Cont
     nome: l.nome,
     codigo: l.codigo,
     whatsapp: l.whatsapp,
-    whatsappLink: linkWhatsapp(l.whatsapp),
+    whatsappLink: pediuSilencio(l.optOutAt) ? null : linkWhatsapp(l.whatsapp),
+    pediuSilencio: pediuSilencio(l.optOutAt),
     restaurante: l.restaurante,
     cidade: l.cidade,
     tipo: l.tipo,
@@ -344,7 +355,8 @@ export async function getDossie(leadId: string): Promise<DossieContato | null> {
     nome: l.nome,
     codigo: l.codigo,
     whatsapp: l.whatsapp,
-    whatsappLink: linkWhatsapp(l.whatsapp),
+    whatsappLink: pediuSilencio(l.optOutAt) ? null : linkWhatsapp(l.whatsapp),
+    pediuSilencio: pediuSilencio(l.optOutAt),
     restaurante: l.restaurante,
     cidade: l.cidade,
     tipo: l.tipo,
