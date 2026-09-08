@@ -539,3 +539,77 @@ describe("a ponte nunca derruba quem a chama", () => {
     ).resolves.toMatchObject({ falou: false });
   });
 });
+
+describe("⭐ o aviso de que vem gente não pode falhar calado", () => {
+  /**
+   * ─── A FALHA MUDA MAIS CARA DA SALA ───────────────────────────────────────
+   * `atender.ts` jogava fora o retorno de `entregarMensagem` no aviso de
+   * handoff. É o pedido de gente: o lead pediu uma pessoa, pediu desconto ou
+   * ficou bravo. O TA para de vender de propósito e manda UMA coisa — "alguém
+   * já vem". Se essa única mensagem não sai, o lead fica em **silêncio
+   * absoluto** e o funil registra o handoff como se tivesse dado certo.
+   * Ninguém consegue distinguir "avisado e esperando" de "abandonado sem saber".
+   *
+   * ─── E ESTE ARQUIVO JÁ PROVAVA O CENÁRIO SEM PERCEBER ────────────────────
+   * O cabeçalho diz: *"nada aqui entrega mensagem"*. Ou seja, **todos** os casos
+   * deste arquivo já rodavam pelo caminho da entrega que falha — e nenhum
+   * olhava. O defeito estava debaixo de 500 linhas de teste verde.
+   */
+  it("⭐ quando o aviso não sai, o log GRITA com o lead e o motivo", async () => {
+    const erro = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = banco();
+
+    const r = await atenderComOTA(db as never, {
+      leadId: "l1",
+      mensagem: "quero falar com uma pessoa, por favor",
+      agora: AGORA,
+    });
+
+    expect(r).toMatchObject({ chamouGente: true });
+
+    const gritos = erro.mock.calls.filter((c) => String(c[0]).includes("aviso de que vem gente"));
+    expect(gritos.length, "o aviso não saiu e ninguém foi avisado disso").toBe(1);
+
+    // Guardrail 6: o alerta carrega a própria evidência. "Algo falhou" sem o
+    // caso concreto é ruído que ninguém investiga.
+    const prova = gritos[0]![1] as Record<string, unknown>;
+    expect(prova.leadId, "o alerta não diz de qual lead se trata").toBe("l1");
+    expect(prova.motivo, "o alerta não diz por que não saiu").toBeTruthy();
+
+    erro.mockRestore();
+  });
+
+  /**
+   * ⚠️ UMA MUTAÇÃO SOBREVIVEU AQUI, E EU NÃO A MATEI. Fica escrito por quê.
+   *
+   * Troquei `if (!entregaDoAviso.entregue)` por `if (true)` — ou seja, o alerta
+   * passaria a gritar TAMBÉM quando o aviso chega ao lead — e os 29 casos
+   * continuaram verdes.
+   *
+   * A razão é o próprio cabeçalho deste arquivo: *"nada aqui entrega mensagem"*.
+   * Neste banco de mentira a entrega **sempre** falha, então `!entregue` é
+   * sempre verdadeiro e as duas versões se comportam igual. **Em produção elas
+   * não se comportam igual**: com `if (true)` o log gritaria em todo handoff
+   * bem-sucedido, e alerta que grita sempre é alerta que ninguém lê — que é
+   * exatamente a doença que este conserto existe para tratar.
+   *
+   * O que mataria a mutação é um caso em que a entrega DÁ CERTO, e ele não cabe
+   * neste arquivo: exigiria as chaves da Meta, `FOOCCI_SDR_SEND_ENABLED`,
+   * `FOOCCI_SDR_IA_RESPONDE_SOZINHA`, `leadMensagem.findUnique` e o `fetch` da
+   * Graph — um segundo arranjo inteiro, que mudaria o banco compartilhado pelos
+   * outros 27 casos. Está anotado como dívida, e não disfarçado de coberto.
+   */
+  it("⭐ A METADE LEGÍTIMA: turno normal não grita — o alerta é do aviso, não de toda entrega", async () => {
+    // Sem esta, bastaria um console.error incondicional para o caso acima passar
+    // — e o log viraria ruído em todo turno, que é como um alerta morre.
+    const erro = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = banco();
+
+    await atenderComOTA(db as never, { leadId: "l1", mensagem: PERGUNTA, agora: AGORA });
+
+    const gritos = erro.mock.calls.filter((c) => String(c[0]).includes("aviso de que vem gente"));
+    expect(gritos.length, "gritou num turno que não teve handoff nenhum").toBe(0);
+
+    erro.mockRestore();
+  });
+});

@@ -548,7 +548,39 @@ async function executarTurno(
 
         // "maquina": ninguém leu este aviso antes de ele sair. Quem decide se
         // ele pode sair é `FOOCCI_SDR_IA_RESPONDE_SOZINHA`, não esta linha.
-        if (avisoGravado.ok) await entregarMensagem(db, avisoGravado.mensagemId, "maquina");
+        if (avisoGravado.ok) {
+          const entregaDoAviso = await entregarMensagem(db, avisoGravado.mensagemId, "maquina");
+
+          /**
+           * ⚠️ O RETORNO DESTA LINHA ERA JOGADO FORA — e era a falha muda mais
+           * cara da Sala.
+           *
+           * Aqui é o pedido de gente: o lead pediu uma pessoa, pediu desconto ou
+           * ficou bravo. O TA para de vender de propósito e manda UMA coisa —
+           * "alguém já vem". Se essa única mensagem não sai, acontece o pior
+           * arranjo possível: o lead fica em silêncio absoluto, e o sistema
+           * registra o handoff como se tivesse dado certo. Ninguém no funil vê
+           * diferença entre "avisado e esperando" e "abandonado sem saber".
+           *
+           * O turno NÃO falha por causa disto, e é deliberado: a mensagem está
+           * gravada, aparece na tela e o motivo fica na própria linha. Derrubar o
+           * turno faria a Meta reentregar a fala do cliente e o TA responder duas
+           * vezes — a mesma razão dada na entrega da resposta de venda, abaixo.
+           *
+           * O que muda é que agora ele GRITA, com o caso concreto junto
+           * (guardrail 6): alerta que diz "algo falhou" sem o lead e sem o motivo
+           * é ruído que ninguém investiga.
+           */
+          if (!entregaDoAviso.entregue) {
+            console.error("[ta] o aviso de que vem gente NÃO chegou ao lead", {
+              leadId: lead.id,
+              handoffId: h.handoffId,
+              mensagemId: avisoGravado.mensagemId,
+              motivo: entregaDoAviso.motivo,
+              detalhe: entregaDoAviso.detalhe,
+            });
+          }
+        }
       }
 
       return { falou: false, chamouGente: true, handoffId: h.handoffId, motivo: h.motivo };
