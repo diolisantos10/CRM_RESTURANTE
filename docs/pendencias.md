@@ -1,6 +1,59 @@
 # Pendências — o que está aberto
 
-> Última atualização: 08/09/2026 (segunda revisão do dia).
+> Última atualização: 08/09/2026, fim do dia.
+
+## ⛔ 08/09/2026 — A prospecção para num dado só: o id da conta (WABA)
+
+**O caminho inteiro funciona.** Medido em produção, na ordem: token vivo →
+portão frio liberou → responsável resolvido → mensagem gravada → **envio
+disparado para a Meta**. A Meta recusou com:
+
+> `(#132000) Number of parameters does not match the expected number of params`
+
+O modelo aprovado espera um número de `{{n}}` diferente do 1 que o código manda.
+**Quantos, ninguém sabe** — e para saber é preciso listar os modelos, o que exige
+o id da conta (WABA).
+
+**Os três caminhos automáticos foram medidos e os três falham** com o token de
+usuário de sistema que está em produção:
+
+| Caminho | O que a Meta respondeu |
+|---|---|
+| pelo número | `(#100) Tried accessing nonexisting field (whatsapp_business_account)` |
+| pelo token (`debug_token`) | permissões presentes (`management`, `messaging`), **nenhuma com alvo** |
+| pelo negócio do aplicativo | `(#100) Tried accessing nonexisting field (business)` |
+
+E o webhook do WhatsApp **não guarda** o `entry[].id` (que é o id da conta), então
+não há fonte interna para recuperar.
+
+**Duas saídas, as duas dependem de quem tem o Business Manager:**
+
+1. **`FOOCCI_SALES_WABA_ID`** no ambiente — o pré-voo passa a ler os modelos
+   sozinho, para sempre, e diz o número de parâmetros sem ninguém digitar.
+2. **O texto do modelo aprovado**, com os `{{n}}` no lugar — destrava o ajuste
+   imediato dos parâmetros.
+
+⚠️ **A saída descartada:** adivinhar a ordem dos parâmetros. Modelo que espera
+dois e recebe chute manda *"Olá São Paulo, tudo bem?"* para um restaurante — e
+isso não é um contato perdido, é a marca.
+
+## ⚠️ 08/09/2026 — Seis contatos queimados, e a lição de método
+
+Disparei a rodada **quatro vezes** investigando. Duas chegaram ao envio e
+gastaram três contatos cada — **seis de 4.000**.
+
+O pré-voo existe exatamente para não pagar isso. Mas descobrir que **ele** estava
+cego também custou contatos, porque a única forma de executá-lo era disparando a
+rodada inteira.
+
+> **A peça que evita gasto não pode ser testável só gastando.**
+
+Consertado no mesmo dia (#226): a conferência roda isolada, só leitura, com um
+teste travando que nenhuma função de envio é chamada. Todo diagnóstico depois
+disso custou zero.
+
+**Proposta de doutrina ao Diretor Geral**, junto com a 33.
+
 
 ## ⛔ 08/09/2026 — A prospecção está PARADA por credencial vencida, e a decisão não é minha
 
