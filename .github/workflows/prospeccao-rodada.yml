@@ -64,8 +64,19 @@ jobs:
           # ⚠️ Rodada que PAROU POR FALHA reprova o job de propósito. Sem isto ela
           # devolveria 200 com zero mensagens e ninguém olharia — que é
           # exatamente a falha muda que esta operação não pode ter.
-          if [[ "$(jq -r '.data.parouPor' /tmp/r.json)" == "falha" ]]; then
+          PAROU=$(jq -r '.data.parouPor' /tmp/r.json)
+
+          if [[ "$PAROU" == "falha" ]]; then
             echo "::error::a rodada parou na primeira falha — $(jq -rc '.data.falha' /tmp/r.json)"
+            exit 1
+          fi
+
+          # ⚠️ `preVoo` reprova o job pelo MESMO motivo, e é o caso mais silencioso
+          # dos dois: zero mensagens, zero erros, e a conferência dizendo que o
+          # modelo não serve. Sem esta linha, o dia inteiro daria verde sem ter
+          # falado com ninguém — e é assim que uma operação some sem ninguém ver.
+          if [[ "$PAROU" == "preVoo" ]]; then
+            echo "::error::o modelo de abordagem reprovou ANTES do primeiro contato — $(jq -rc '.data.falha' /tmp/r.json)"
             exit 1
           fi
 

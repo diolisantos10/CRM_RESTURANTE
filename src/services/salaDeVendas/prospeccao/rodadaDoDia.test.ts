@@ -57,6 +57,19 @@ function fila(quantos: number) {
   };
 }
 
+/**
+ * O pré-voo APROVANDO — o padrão destes casos, que são sobre o laço.
+ *
+ * ⚠️ Ele é explícito em toda chamada, e não um default da função, porque o tipo
+ * exige: chamador novo não compila sem dizer qual é o pré-voo dele. Aqui isso
+ * custa uma linha por caso; em produção evita a rodada nascer sem conferência.
+ */
+const preVooOk = async () => ({
+  pronto: true as const,
+  modelo: { nome: "abordagem_foocci", idioma: "pt_BR", status: "APPROVED", variaveis: 1 },
+  parametrosQueMandamos: 1,
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   freio.conferirRitmo.mockResolvedValue({ pode: true });
@@ -71,7 +84,7 @@ describe("o caminho feliz", () => {
   it("⭐ aborda a fila inteira e termina por 'filaAcabou'", async () => {
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(3));
 
-    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, preVoo: preVooOk });
 
     expect(r.abordados).toBe(3);
     expect(r.pulados).toBe(0);
@@ -86,7 +99,7 @@ describe("o caminho feliz", () => {
     // a viola — é isto que este caso tranca.
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(4));
 
-    await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
+    await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, preVoo: preVooOk });
 
     expect(freio.conferirRitmo, "o freio foi lido uma vez para o lote inteiro").toHaveBeenCalledTimes(4);
   });
@@ -99,7 +112,7 @@ describe("⭐ o portão funcionando NÃO para a rodada", () => {
       .mockResolvedValueOnce({ abordou: false, motivo: "portaoRecusou", detalhe: "pediu silêncio" })
       .mockResolvedValue({ abordou: true, mensagemId: "m" });
 
-    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, preVoo: preVooOk });
 
     expect(r.abordados, "um opt-out no topo travou a lista inteira").toBe(2);
     expect(r.pulados).toBe(1);
@@ -111,7 +124,7 @@ describe("⭐ o portão funcionando NÃO para a rodada", () => {
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(2));
     selecao.materializarLead.mockResolvedValueOnce({ materializado: false, motivo: "Item em situação DUPLICADO." });
 
-    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, preVoo: preVooOk });
 
     expect(r.pulados).toBe(1);
     expect(r.abordados).toBe(1);
@@ -141,7 +154,7 @@ describe("⛔ o caminho quebrado PARA na primeira falha", () => {
       .mockResolvedValueOnce({ abordou: false, motivo: "aMetaRecusou", detalhe: "template not found" })
       .mockResolvedValue({ abordou: true, mensagemId: "mX" });
 
-    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, preVoo: preVooOk });
 
     expect(r.parouPor).toBe("filaAcabou");
     expect(r.abordados, "uma linha ruim custou os outros quatro contatos").toBe(4);
@@ -155,7 +168,7 @@ describe("⛔ o caminho quebrado PARA na primeira falha", () => {
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(3));
     abordar.abordarLead.mockResolvedValue({ abordou: false, motivo: "naoConseguiuGravar", detalhe: "db" });
 
-    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, preVoo: preVooOk });
 
     expect(r.parouPor).toBe("falha");
     expect(abordar.abordarLead).toHaveBeenCalledTimes(1);
@@ -169,7 +182,7 @@ describe("o freio encerra sem ser falha", () => {
       .mockResolvedValueOnce({ pode: true })
       .mockResolvedValue({ pode: false, detalhe: "teto do dia" });
 
-    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, preVoo: preVooOk });
 
     expect(r.parouPor, "o teto do dia foi tratado como defeito").toBe("freio");
     expect(r.falha).toBeNull();
@@ -181,7 +194,7 @@ describe("o teto da rodada", () => {
   it("⭐ manda no máximo o que foi pedido, mesmo com fila maior", async () => {
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(10));
 
-    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, teto: 3 });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, preVoo: preVooOk, teto: 3 });
 
     expect(r.abordados).toBe(3);
     expect(r.parouPor).toBe("tetoDaRodada");
@@ -190,7 +203,7 @@ describe("o teto da rodada", () => {
 
   it("o teto também é passado para a fila, e não só conferido depois", async () => {
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(2));
-    await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, teto: 10 });
+    await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, preVoo: preVooOk, teto: 10 });
     expect(selecao.montarFilaDeProspeccao.mock.calls[0][1]).toMatchObject({ limite: 10 });
   });
 });
@@ -200,7 +213,7 @@ describe("fila vazia", () => {
     const erro = vi.spyOn(console, "error").mockImplementation(() => {});
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(0));
 
-    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, preVoo: preVooOk });
 
     expect(r).toMatchObject({ abordados: 0, pulados: 0, parouPor: "filaAcabou", falha: null });
     expect(erro).not.toHaveBeenCalled();
@@ -222,7 +235,7 @@ describe("⭐ a rodada AUTOMÁTICA — e ela não é anônima", () => {
   it("⭐ o responsável de cada item é quem LIBEROU o lote", async () => {
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(2));
 
-    await abordarARodadaDoDia(db, { autor: "SISTEMA", canalPronto: true });
+    await abordarARodadaDoDia(db, { autor: "SISTEMA", canalPronto: true, preVoo: preVooOk });
 
     expect(abordar.abordarLead).toHaveBeenCalledTimes(2);
     for (const chamada of abordar.abordarLead.mock.calls) {
@@ -235,7 +248,7 @@ describe("⭐ a rodada AUTOMÁTICA — e ela não é anônima", () => {
     (db as unknown as { loteDeProspeccao: { findMany: ReturnType<typeof vi.fn> } })
       .loteDeProspeccao.findMany.mockResolvedValue([{ id: "lote1", liberadoPor: null }]);
 
-    const r = await abordarARodadaDoDia(db, { autor: "SISTEMA", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "SISTEMA", canalPronto: true, preVoo: preVooOk });
 
     expect(r.abordados, "mandou mensagem sem ninguém responder por ela").toBe(0);
     expect(r.pulados).toBe(2);
@@ -246,7 +259,7 @@ describe("⭐ a rodada AUTOMÁTICA — e ela não é anônima", () => {
   it("a rodada humana continua usando quem clicou, e não o lote", async () => {
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(1));
 
-    await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
+    await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, preVoo: preVooOk });
 
     expect(abordar.abordarLead.mock.calls[0][1]).toMatchObject({ autor: "HUMANO", autorUserId: "u1" });
   });
@@ -271,7 +284,7 @@ describe("⭐ a Meta recusando não mata mais a rodada no primeiro", () => {
       .mockResolvedValueOnce({ abordou: false, motivo: "aMetaRecusou", detalhe: "sem parâmetro" })
       .mockResolvedValue({ abordou: true, mensagemId: "m" });
 
-    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, preVoo: preVooOk });
 
     expect(r.parouPor, "um contato ruim derrubou a rodada inteira").toBe("filaAcabou");
     expect(r.abordados).toBe(3);
@@ -284,7 +297,7 @@ describe("⭐ a Meta recusando não mata mais a rodada no primeiro", () => {
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(10));
     abordar.abordarLead.mockResolvedValue({ abordou: false, motivo: "aMetaRecusou", detalhe: "token" });
 
-    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, preVoo: preVooOk });
 
     expect(r.parouPor).toBe("falha");
     expect(r.pulados).toBe(3);
@@ -306,7 +319,7 @@ describe("⭐ a Meta recusando não mata mais a rodada no primeiro", () => {
       .mockResolvedValueOnce(recusa).mockResolvedValueOnce(ok)
       .mockResolvedValueOnce(recusa).mockResolvedValueOnce(ok);
 
-    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, preVoo: preVooOk });
 
     expect(r.parouPor).toBe("filaAcabou");
     expect(r.abordados).toBe(3);
@@ -320,9 +333,101 @@ describe("⭐ a Meta recusando não mata mais a rodada no primeiro", () => {
     selecao.montarFilaDeProspeccao.mockResolvedValue(fila(5));
     abordar.abordarLead.mockResolvedValue({ abordou: false, motivo: "naoConseguiuGravar", detalhe: "db" });
 
-    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true });
+    const r = await abordarARodadaDoDia(db, { autor: "HUMANO", autorUserId: "u1", canalPronto: true, preVoo: preVooOk });
 
     expect(r.parouPor).toBe("falha");
     expect(abordar.abordarLead).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * ⭐ O PRÉ-VOO — a conferência do modelo antes do primeiro contato.
+ *
+ * O que estes casos guardam é UM princípio, e não uma lista de causas:
+ * **aborta quando 100% dos envios falhariam; segue quando a perda é parcial ou
+ * desconhecida.** Se alguém trocar a regra por outra, é aqui que quebra.
+ *
+ * O que o cliente "lê" continua sendo receber ou não receber — por isso todo
+ * caso mede quantas chamadas de envio de fato aconteceram, e não o veredito.
+ */
+describe("a rodada confere o modelo antes de gastar o primeiro contato", () => {
+  const reprova = (causa: string, detalhe = "d") =>
+    async () => ({ pronto: false as const, causa: causa as never, detalhe });
+
+  beforeEach(() => {
+    selecao.montarFilaDeProspeccao.mockResolvedValue(fila(5));
+    abordar.abordarLead.mockResolvedValue({ abordou: true, mensagemId: "m" });
+  });
+
+  it("⭐ modelo esperando 2 variáveis: NINGUÉM é abordado — nem os três do limite", async () => {
+    // Sem o pré-voo, o #216 descobriria isto queimando três nomes da lista.
+    // Este é o caso que justifica a peça inteira existir.
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await abordarARodadaDoDia(db, {
+      autor: "HUMANO", autorUserId: "u1", canalPronto: true,
+      preVoo: reprova("variaveisNaoBatem", "o modelo espera 2 variáveis e o envio manda 1"),
+    });
+
+    expect(r.parouPor).toBe("preVoo");
+    expect(r.abordados).toBe(0);
+    expect(abordar.abordarLead, "gastou contato para aprender o que a consulta já dizia")
+      .not.toHaveBeenCalled();
+  });
+
+  it.each(["semNomeConfigurado", "semToken", "naoAchado", "naoAprovado", "variaveisNaoBatem"])(
+    "aborta em %s — porque nenhuma mensagem sairia",
+    async (causa) => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const r = await abordarARodadaDoDia(db, {
+        autor: "HUMANO", autorUserId: "u1", canalPronto: true, preVoo: reprova(causa),
+      });
+
+      expect(r.parouPor).toBe("preVoo");
+      expect(abordar.abordarLead).not.toHaveBeenCalled();
+    },
+  );
+
+  it("⭐ a Graph não respondeu: a rodada SEGUE — não sei não é o mesmo que está errado", async () => {
+    // Guardrail 5: aterrar o dia por uma LEITURA que caiu seria a proteção mais
+    // destrutiva que o problema. Se o envio também estiver quebrado, o #216 para
+    // em três — a lista continua protegida por baixo.
+    const aviso = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const r = await abordarARodadaDoDia(db, {
+      autor: "HUMANO", autorUserId: "u1", canalPronto: true,
+      preVoo: reprova("metaRecusou", "HTTP_500"),
+    });
+
+    expect(r.parouPor).toBe("filaAcabou");
+    expect(r.abordados).toBe(5);
+    expect(
+      aviso.mock.calls.find((c) => String(c[0]).includes("SEM conferir o modelo")),
+      "rodou sem conferência e não disse a ninguém",
+    ).toBeTruthy();
+    aviso.mockRestore();
+  });
+
+  it("o motivo do aborto sobe inteiro, e o itemId é null porque não houve item", async () => {
+    // Quem investiga precisa da causa e do detalhe. `itemId` inventado mandaria
+    // procurar um culpado que não existe.
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await abordarARodadaDoDia(db, {
+      autor: "HUMANO", autorUserId: "u1", canalPronto: true,
+      preVoo: reprova("naoAprovado", '"abordagem_foocci" está REJECTED na Meta'),
+    });
+
+    expect(r.falha).toEqual({
+      itemId: null,
+      motivo: "naoAprovado",
+      detalhe: '"abordagem_foocci" está REJECTED na Meta',
+    });
+  });
+
+  it("a fila nem é montada quando o pré-voo reprova — a rodada não começa", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await abordarARodadaDoDia(db, {
+      autor: "HUMANO", autorUserId: "u1", canalPronto: true, preVoo: reprova("naoAchado"),
+    });
+
+    expect(selecao.montarFilaDeProspeccao).not.toHaveBeenCalled();
   });
 });

@@ -42,6 +42,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { abordarARodadaDoDia } from "@/services/salaDeVendas/prospeccao/abordarDaFila";
 import { canalDeVendasPronto } from "@/services/foocci-sdr/FoocciSalesChannel";
+import { preVooDoModelo } from "@/services/foocci-sdr/modelosDaMeta";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -76,6 +77,7 @@ export async function POST(req: NextRequest) {
   const r = await abordarARodadaDoDia(prisma, {
     autor: "SISTEMA",
     canalPronto: canalDeVendasPronto(),
+    preVoo: preVooDoModelo,
     ...(teto !== undefined ? { teto } : {}),
   });
 

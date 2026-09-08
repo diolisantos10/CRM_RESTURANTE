@@ -34,6 +34,7 @@ import {
 } from "@/services/salaDeVendas/prospeccao/lote";
 import { montarFilaDeProspeccao } from "@/services/salaDeVendas/prospeccao/selecao";
 import { canalDeVendasPronto } from "@/services/foocci-sdr/FoocciSalesChannel";
+import { preVooDoModelo } from "@/services/foocci-sdr/modelosDaMeta";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -245,6 +246,7 @@ export async function POST(req: NextRequest) {
       autor: "HUMANO",
       autorUserId: portao.sessao.userId,
       canalPronto: canalDeVendasPronto(),
+      preVoo: preVooDoModelo,
       ...(teto !== undefined ? { teto } : {}),
     });
 

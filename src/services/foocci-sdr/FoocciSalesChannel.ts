@@ -73,6 +73,33 @@ function foocciSalesAccessToken(): string | null {
   return v && v.trim() ? v.trim() : null;
 }
 
+/**
+ * ⭐ O EMPRÉSTIMO DO TOKEN — a única forma de outro módulo LER a Graph com ele.
+ *
+ * O getter acima é privado de propósito: o cabeçalho deste arquivo promete que
+ * *"o token nunca é logado, nem mascarado, nem devolvido em resposta de API"*,
+ * e `foocciSalesPhoneNumberId` está exportado porque é presença, **nunca o
+ * segredo**. Exportar o getter para atender um chamador novo desfaria a
+ * promessa em uma linha, e o próximo chamador não teria mais nada a desfazer.
+ *
+ * Aqui o token entra na função e não sai: quem chama recebe o RESULTADO da
+ * consulta, nunca a credencial. É o guardrail 4 — prompt é aviso, código é
+ * trava — aplicado a um segredo que já circula em três arquivos.
+ *
+ * `semToken` é obrigatório porque a ausência da variável precisa de uma
+ * resposta explícita do chamador. Sem isso, "não tenho token" viraria `null`
+ * indistinguível de "consultei e não achei" — e ausência de informação não é
+ * informação (guardrail 1).
+ */
+export async function comOTokenDeVendas<T>(
+  usarOToken: (token: string) => Promise<T>,
+  semToken: () => T,
+): Promise<T> {
+  const token = foocciSalesAccessToken();
+  if (!token) return semToken();
+  return usarOToken(token);
+}
+
 /** O canal existe? (recebe e, se autorizado, envia). */
 export function isFoocciSalesChannelConfigured(): boolean {
   return (
