@@ -1,0 +1,184 @@
+/**
+ * OS MODELOS APROVADOS, LIDOS DA META — a Sala para de depender de alguém colar.
+ *
+ * ── DE ONDE VEIO ESTA PEÇA ──────────────────────────────────────────────────
+ *
+ * Pergunta do CEO, 08/09/2026: *"Como podemos fazer igual o Foocci, que já puxa
+ * os modelos aprovados sozinho?"*
+ *
+ * Ele estava certo. O produto já lê os modelos do restaurante direto da Graph
+ * (`MetaTemplateService.syncFromMeta`), com nome, idioma, status e — o que mais
+ * importa aqui — **quantas variáveis cada um espera**. A Sala não usava nada
+ * disso: o nome do modelo dela vinha de uma variável de ambiente e o texto vivia
+ * só na Meta, sem ninguém conferir se um batia com o outro.
+ *
+ * ── O RISCO QUE ISTO EXISTE PARA MATAR ──────────────────────────────────────
+ *
+ * `abordarLead` manda **um** parâmetro: a saudação. Se o modelo aprovado tiver
+ * `{{1}}` e `{{2}}`, **todo** envio é recusado pela Meta — e a rodada descobre
+ * isso contato a contato, queimando a lista para aprender o que uma consulta
+ * responde antes de começar.
+ *
+ * Ler da Meta também mata a dependência de memória: texto colado envelhece no
+ * dia em que alguém aprova outro modelo e esquece de avisar. **A fonte da
+ * verdade é a Meta, e ela responde de graça.**
+ *
+ * ── O QUE ESTE ARQUIVO NÃO FAZ ──────────────────────────────────────────────
+ *
+ * Não escreve nada na Meta, não cria modelo, não envia mensagem. Duas leituras:
+ * resolver a conta a partir do número de vendas, e listar os modelos dela.
+ *
+ * 🔒 O token vai no cabeçalho e não sai em nenhum retorno.
+ */
+
+import { metaGraphUrl } from "@/services/whatsapp/metaFlag";
+import { maskGraphResponse } from "@/services/whatsapp/providers/metaPayload";
+import { countBodyVariables } from "@/services/whatsapp/MetaTemplateService";
+import { foocciSalesPhoneNumberId } from "./FoocciSalesChannel";
+import { modeloConfigurado } from "@/services/salaDeVendas/abordar";
+
+export interface ModeloNaMeta {
+  nome: string;
+  idioma: string;
+  /** Como a Meta chama: APPROVED, PENDING, REJECTED… */
+  status: string;
+  /** Quantas variáveis `{{n}}` o corpo espera. Zero = modelo sem variável. */
+  variaveis: number;
+}
+
+type Falha = { ok: false; erro: string };
+
+async function graphDeVendas(caminho: string, token: string): Promise<unknown | Falha> {
+  const res = await fetch(metaGraphUrl(caminho), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const json: unknown = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = (json as { error?: { message?: string } }).error?.message;
+    return { ok: false, erro: maskGraphResponse(err ?? `HTTP_${res.status}`) };
+  }
+  return json;
+}
+
+function ehFalha(x: unknown): x is Falha {
+  return typeof x === "object" && x !== null && (x as Falha).ok === false;
+}
+
+/**
+ * A conta (WABA) dona do número de vendas.
+ *
+ * O ambiente da Sala guarda o `phone_number_id`, não a conta — e a listagem de
+ * modelos é da conta. A Graph faz a ponte, e é por isso que este passo existe
+ * em vez de mais uma variável para alguém preencher errado.
+ */
+export async function contaDoNumeroDeVendas(
+  token: string,
+): Promise<{ ok: true; wabaId: string } | Falha> {
+  const id = foocciSalesPhoneNumberId();
+  if (!id) return { ok: false, erro: "FOOCCI_SALES_PHONE_NUMBER_ID não está no ambiente" };
+
+  const r = await graphDeVendas(`${id}?fields=whatsapp_business_account{id}`, token);
+  if (ehFalha(r)) return r;
+
+  const waba = (r as { whatsapp_business_account?: { id?: unknown } }).whatsapp_business_account;
+  const wabaId = waba?.id != null ? String(waba.id) : "";
+  if (!wabaId) {
+    return { ok: false, erro: "a Meta não devolveu a conta do número de vendas" };
+  }
+  return { ok: true, wabaId };
+}
+
+/** Todos os modelos da conta do número de vendas, como a Meta os vê agora. */
+export async function listarModelosDeVendas(
+  token: string,
+): Promise<{ ok: true; modelos: ModeloNaMeta[] } | Falha> {
+  const conta = await contaDoNumeroDeVendas(token);
+  if (!conta.ok) return conta;
+
+  const r = await graphDeVendas(
+    `${conta.wabaId}/message_templates?fields=name,language,status,components&limit=200`,
+    token,
+  );
+  if (ehFalha(r)) return r;
+
+  const linhas = (r as { data?: unknown }).data;
+  const modelos: ModeloNaMeta[] = (Array.isArray(linhas) ? linhas : []).flatMap((t) => {
+    const tpl = t as { name?: unknown; language?: unknown; status?: unknown; components?: unknown };
+    if (!tpl.name) return [];
+    return [{
+      nome: String(tpl.name),
+      idioma: String(tpl.language ?? "pt_BR"),
+      status: String(tpl.status ?? "UNKNOWN").toUpperCase(),
+      variaveis: countBodyVariables(tpl.components),
+    }];
+  });
+
+  return { ok: true, modelos };
+}
+
+export type ConferenciaDoModelo =
+  | { pronto: true; modelo: ModeloNaMeta; parametrosQueMandamos: number }
+  | { pronto: false; causa: "semNomeConfigurado" | "naoAchado" | "naoAprovado" | "variaveisNaoBatem" | "metaRecusou"; detalhe: string };
+
+/**
+ * ⭐ A CONFERÊNCIA QUE SE FAZ ANTES DE DISPARAR, e não durante.
+ *
+ * Responde, numa consulta: o modelo configurado existe na Meta? está aprovado?
+ * quantas variáveis ele espera, e isso bate com o que o código manda?
+ *
+ * `parametrosQueMandamos` é **1** — a saudação (`abordarLead` monta
+ * `parametros: [saudação]`, ou `[]` quando o contato não tem nome).
+ *
+ * ── POR QUE 0 e 1 PASSAM, e 2 NÃO ───────────────────────────────────────────
+ *
+ * Com `{{1}}`, o contato COM nome vai; o sem nome é recusado pela Meta e a
+ * rodada pula (a defesa que o #216 instalou). É perda parcial e conhecida.
+ * Com duas ou mais variáveis, **nenhum** contato passa — 100% de recusa, e a
+ * rodada só descobriria isso queimando três contatos até bater o limite.
+ *
+ * Recusar aqui custa uma consulta. Descobrir lá custa a janela do dia.
+ */
+export async function conferirModeloDeAbordagem(token: string): Promise<ConferenciaDoModelo> {
+  const cfg = modeloConfigurado();
+  if (!cfg.nome) {
+    return {
+      pronto: false,
+      causa: "semNomeConfigurado",
+      detalhe: "FOOCCI_SDR_MODELO_ABORDAGEM não está no ambiente",
+    };
+  }
+
+  const lista = await listarModelosDeVendas(token);
+  if (!lista.ok) return { pronto: false, causa: "metaRecusou", detalhe: lista.erro };
+
+  const achado = lista.modelos.find((m) => m.nome === cfg.nome && m.idioma === cfg.idioma)
+    // Idioma diferente do configurado ainda é um achado — e o detalhe diz qual,
+    // porque "não achei" mandaria procurar o modelo errado.
+    ?? lista.modelos.find((m) => m.nome === cfg.nome);
+
+  if (!achado) {
+    return {
+      pronto: false,
+      causa: "naoAchado",
+      detalhe: `"${cfg.nome}" não está entre os ${lista.modelos.length} modelos da conta`,
+    };
+  }
+
+  if (achado.status !== "APPROVED") {
+    return {
+      pronto: false,
+      causa: "naoAprovado",
+      detalhe: `"${achado.nome}" está ${achado.status} na Meta`,
+    };
+  }
+
+  if (achado.variaveis > 1) {
+    return {
+      pronto: false,
+      causa: "variaveisNaoBatem",
+      detalhe: `o modelo espera ${achado.variaveis} variáveis e o envio manda 1`,
+    };
+  }
+
+  return { pronto: true, modelo: achado, parametrosQueMandamos: 1 };
+}
