@@ -51,12 +51,15 @@ const db = {
   loteDeProspeccao: {
     findMany: vi.fn(async () => [{ id: "lote1", liberadoPorUserId: "u_liberou" }]),
   },
-  user: { findMany: vi.fn(async () => [{ id: "u_liberou" }]) },
+  /** ⚠️ `internalUser`: a chave estrangeira de `autorUserId` aponta para
+   *  `internal_users`, não para `users`. Conferir contra a tabela errada não
+   *  casava nada — foi o defeito de 08/09/2026, medido em produção. */
+  internalUser: { findMany: vi.fn(async () => [{ id: "u_liberou" }]) },
 } as never;
 
 const banco = db as unknown as {
   loteDeProspeccao: { findMany: ReturnType<typeof vi.fn> };
-  user: { findMany: ReturnType<typeof vi.fn> };
+  internalUser: { findMany: ReturnType<typeof vi.fn> };
 };
 
 function fila(quantos: number) {
@@ -94,7 +97,7 @@ beforeEach(() => {
   // `clearAllMocks` zera as implementações do duplo de banco; sem restaurá-las,
   // todo caso a partir do segundo veria lote e usuário inexistentes.
   banco.loteDeProspeccao.findMany.mockResolvedValue([{ id: "lote1", liberadoPorUserId: "u_liberou" }]);
-  banco.user.findMany.mockResolvedValue([{ id: "u_liberou" }]);
+  banco.internalUser.findMany.mockResolvedValue([{ id: "u_liberou" }]);
   freio.conferirRitmo.mockResolvedValue({ pode: true });
   selecao.materializarLead.mockImplementation(async (_db: unknown, itemId: string) => ({
     materializado: true,
@@ -473,7 +476,7 @@ describe("o responsável é conferido, não presumido", () => {
     banco.loteDeProspeccao.findMany.mockResolvedValue([
       { id: "lote1", liberadoPorUserId: "u_que_foi_removido" },
     ]);
-    banco.user.findMany.mockResolvedValue([]); // ninguém com esse id
+    banco.internalUser.findMany.mockResolvedValue([]); // ninguém com esse id
 
     const r = await abordarARodadaDoDia(db, { autor: "SISTEMA", canalPronto: true, preVoo: preVooOk });
 
@@ -490,7 +493,7 @@ describe("o responsável é conferido, não presumido", () => {
 
     await abordarARodadaDoDia(db, { autor: "SISTEMA", canalPronto: true, preVoo: preVooOk });
 
-    expect(banco.user.findMany, "consulta inútil por uma lista vazia").not.toHaveBeenCalled();
+    expect(banco.internalUser.findMany, "consulta inútil por uma lista vazia").not.toHaveBeenCalled();
   });
 
   it("HUMANO não passa por essa conferência — o id vem da sessão dele", async () => {
@@ -539,7 +542,7 @@ describe("o lote sem responsável diz POR QUE", () => {
     banco.loteDeProspeccao.findMany.mockResolvedValue([
       { id: "lote1", liberadoPorUserId: "u_removido", liberadoPor: "Fulano (u_removido)" },
     ]);
-    banco.user.findMany.mockResolvedValue([]);
+    banco.internalUser.findMany.mockResolvedValue([]);
 
     await abordarARodadaDoDia(db, { autor: "SISTEMA", canalPronto: true, preVoo: preVooOk });
 

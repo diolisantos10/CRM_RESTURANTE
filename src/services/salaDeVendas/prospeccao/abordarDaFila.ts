@@ -361,7 +361,10 @@ export async function abordarARodadaDoDia(
    * chave estrangeira para `users`, e o Postgres recusou — HTTP 500, levando
    * junto os outros nove contatos da rodada.
    *
-   * ⭐ E o id é CONFERIDO contra `users` antes de valer. Confiar na coluna
+   * ⭐ E o id é CONFERIDO contra `internal_users` antes de valer — a tabela da
+   * chave estrangeira, medida no schema (`LeadMensagem.autorUser` é relação com
+   * `InternalUser`). A primeira versão conferia contra `users` e não casava
+   * nada: a gente da Sala de Vendas não mora lá. Confiar na coluna
    * porque ela "deveria" ter um id é o mesmo erro uma camada adiante: id órfão
    * (usuário removido, preenchimento retroativo que não casou) voltaria a
    * estourar chave estrangeira na hora de gravar. Aqui ele vira
@@ -380,9 +383,9 @@ export async function abordarARodadaDoDia(
     const existem = new Set(
       ids.length === 0
         ? []
-        : (await db.user.findMany({ where: { id: { in: ids } }, select: { id: true } })).map(
-            (u) => u.id,
-          ),
+        : (
+            await db.internalUser.findMany({ where: { id: { in: ids } }, select: { id: true } })
+          ).map((u) => u.id),
     );
 
     for (const l of lotes) {
