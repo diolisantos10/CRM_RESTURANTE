@@ -113,9 +113,25 @@ export interface LeadSafetyInput {
   /** Preenchido = pediu silêncio. Terminal. */
   optOutAt: Date | null;
   /**
-   * Quando a pessoa entregou os dados. Para contato da primeira safra, o
-   * chamador passa `createdAt` — é literalmente o instante do envio do
-   * formulário. `null` significa "não sei", e não sei é NÃO.
+   * Quando a pessoa entregou os dados. `null` significa "não sei", e não sei é
+   * NÃO — bloqueio, nunca presunção.
+   *
+   * ⛔ **NUNCA passe `createdAt` aqui.** Este doc dizia o contrário até
+   * 08/09/2026 — mandava o chamador usar `createdAt` "para contato da primeira
+   * safra". A instrução era verdadeira para lead de formulário, onde as duas
+   * datas coincidem, e **falsa e perigosa** para qualquer lead que a própria
+   * casa cria: aí `createdAt` é o instante em que **NÓS** montamos a ficha, e o
+   * portão o lia como consentimento fresquíssimo, de idade zero.
+   *
+   * Foi assim que lead de lista fria atravessou este portão liberado, com a
+   * data da nossa própria importação no lugar do consentimento de alguém. A
+   * linha `consentAt ?? createdAt` foi removida de `abordar.ts` no mesmo dia, e
+   * este parágrafo sobreviveu a ela por três horas — continuando a mandar o
+   * próximo chamador fazer exatamente o que tinha acabado de ser proibido.
+   *
+   * **Sem registro de consentimento, o portão certo é outro** — quem vem de
+   * lista atravessa `avaliarAbordagemDeProspeccao`, que troca esta pergunta
+   * pela base legal declarada no lote.
    */
   consentimentoEm: Date | null;
   /**
@@ -405,6 +421,20 @@ export interface ProspeccaoSafetyInput
  * arquivo é a segunda definição, e é a que ninguém lembra de mudar"*. Por isso a
  * frase é construída aqui, com os mesmos motivos do resto.
  */
+/**
+ * A recusa por silêncio pedido, montada fora do portão — mesma frase, mesmo
+ * motivo, um dono só.
+ *
+ * Ela existe porque o silêncio precisa ser conferido **antes** de qualquer
+ * outra coisa, inclusive antes de descobrir qual portão o lead atravessa. Sem
+ * isto, o chamador teria de escrever `bloqueia("LEAD_OPT_OUT", …)` no arquivo
+ * dele — e aí "esta pessoa pediu para não receber mensagens" passaria a existir
+ * em dois lugares, com o segundo sendo o que ninguém lembra de mudar.
+ */
+export function recusaDeSilencio(): LeadSafetyDecision {
+  return bloqueia("LEAD_OPT_OUT", "Esta pessoa pediu para não receber mensagens.");
+}
+
 export function recusaDeProspeccao(
   reason: "PROSPECCAO_SEM_BASE_LEGAL" | "PROSPECCAO_DESLIGADA",
   detail: string,

@@ -192,16 +192,16 @@ export async function montarFilaDeProspeccao(
  * O resultado de materializar.
  *
  * `materializado` fala só da gravação. **Permissão para abordar é outra
- * pergunta** — e quem responde na hora do envio é `avaliarContatoDeLead`
- * (`abordar.ts:213`), **não** `avaliarAbordagemDeProspeccao`.
+ * pergunta**, e quem responde na hora do envio é `escolherPortaoDoLead`
+ * (`abordar.ts`): lead de `LISTA_PROSPECCAO` atravessa
+ * `avaliarAbordagemDeProspeccao`; qualquer outra origem, inclusive a não
+ * classificada, atravessa `avaliarContatoDeLead`.
  *
- * ⚠️ ESTA LINHA DIZIA O CONTRÁRIO, e a correção é de 08/09/2026. Não é
- * preciosismo: os dois portões respondem a perguntas diferentes de propósito —
- * o frio pergunta *"quem mandou abordar declarou por que temos este contato?"*,
- * o morno pergunta *"esta pessoa entregou os dados, e há quanto tempo?"*. Um
- * comentário afirmando que o envio usa o frio faz quem lê parar de procurar
- * exatamente onde está a diferença. **A divergência entre os dois é assunto
- * aberto** (ver `docs/pendencias.md`, 08/09) e não se resolve aqui.
+ * ⚠️ ESTE PARÁGRAFO JÁ MENTIU DUAS VEZES NO MESMO DIA, 08/09/2026. Primeiro
+ * dizia que o envio usava o portão frio (não usava). Corrigido para dizer que
+ * usava o morno — e **a correção envelheceu em três horas**, quando o envio
+ * passou a escolher pela origem. Sem número de linha desta vez: linha citada é
+ * a parte que apodrece primeiro.
  */
 export type ResultadoDaMaterializacao =
   | { materializado: true; leadId: string }
@@ -402,7 +402,7 @@ async function contarTentativas(db: Cliente, leadId: string): Promise<number> {
  * de horário desta obra já é medida em `America/Sao_Paulo`; o teto tem que
  * concordar com ela.
  */
-async function contarAbordagensDeHoje(db: Cliente, agora: Date): Promise<number> {
+export async function contarAbordagensDeHoje(db: Cliente, agora: Date): Promise<number> {
   const inicioDoDia = inicioDoDiaEmSaoPaulo(agora);
 
   return db.siteLead.count({

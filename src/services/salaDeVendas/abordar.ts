@@ -38,9 +38,12 @@ import {
   avaliarContatoDeLead,
   avaliarAbordagemDeProspeccao,
   recusaDeProspeccao,
+  recusaDeSilencio,
+  pediuSilencio,
   REGRA,
   type LeadSafetyDecision,
 } from "@/services/foocci-sdr/LeadContactSafety";
+import { contarAbordagensDeHoje } from "./prospeccao/selecao";
 import {
   canalDeVendasPronto,
   enviarModeloDeVendas,
@@ -213,8 +216,34 @@ type PortaoDoLead =
 
 async function escolherPortaoDoLead(
   db: Cliente,
-  lead: { id: string; fonte: string | null },
+  lead: { id: string; fonte: string | null; optOutAt: Date | null },
+  agora: Date,
 ): Promise<PortaoDoLead> {
+  /**
+   * ⚠️ O SILÊNCIO PEDIDO VEM ANTES DE TUDO — inclusive antes de saber qual é o
+   * portão. Achado da revisão adversarial do `qualidade`, 08/09/2026.
+   *
+   * A primeira versão desta função devolvia recusas próprias (lote pausado,
+   * lote inexistente) ANTES de qualquer portão rodar. Consequência medida: um
+   * lead que pediu silêncio, num lote pausado, era barrado com
+   * `PROSPECCAO_DESLIGADA` em vez de `LEAD_OPT_OUT`.
+   *
+   * O bloqueio acontecia — mas o motivo mentia, e é o motivo que as camadas de
+   * cima classificam (`bloqueioPassaSozinho`, `reagirA`) e que a pessoa lê na
+   * tela. Alguém liberaria o lote achando que resolveu.
+   *
+   * `LeadContactSafety.ts` escreve a regra que isso violava: *"o motivo
+   * devolvido é sempre o primeiro que se aplica — e é por isso que 'ela pediu
+   * para parar' nunca é encoberto por 'está fora do horário'"*. Nem por "o lote
+   * está pausado".
+   */
+  if (pediuSilencio(lead.optOutAt)) {
+    return {
+      portao: "recusado",
+      decisao: recusaDeSilencio(),
+    };
+  }
+
   if (lead.fonte !== FONTE_DE_LISTA) return { portao: "morno" };
 
   // O lote é quem declara a base legal. Sem ele, não há o que declarar.
@@ -245,12 +274,31 @@ async function escolherPortaoDoLead(
 
   const config = await db.prospeccaoConfig.findUnique({ where: { id: "singleton" } });
 
+  /**
+   * ⭐ O TETO DO DIA DA PROSPECÇÃO, lido AQUI e não só na fila.
+   *
+   * Achado da revisão adversarial: o doc de `prospeccaoLiberada` promete *"e
+   * ainda cabe no teto do dia?"*, e a primeira versão desta função não
+   * respondia essa parte. Quem entra pelo botão "Abordar" do painel **não passa
+   * pela fila** — então o teto que o dono configurou (hoje, dez por dia) não
+   * valia para ele.
+   *
+   * A contagem é **a mesma função da fila**, importada, e não uma segunda
+   * escrita aqui. O cabeçalho dela diz por quê: *"o teto só é teto se todo
+   * mundo ler do mesmo lugar"*. Duas contagens do mesmo teto é como se manda o
+   * dobro sem ninguém perceber.
+   */
+  const ligada = Boolean(config?.outboundLigado) && !config?.pausadoEm;
+  const tetoDoDia = config?.limiteDiario ?? 0;
+  const usadosHoje = ligada ? await contarAbordagensDeHoje(db, agora) : 0;
+
   return {
     portao: "frio",
     baseLegal: item.lote.proveniencia ?? "",
-    // Mesma leitura da fila: sem configuração a resposta é "desligada", nunca
-    // "sem limite". O teto do dia em si é a trava 2, e não esta.
-    prospeccaoLiberada: Boolean(config?.outboundLigado) && !config?.pausadoEm,
+    // Sem configuração a resposta é "desligada", nunca "sem limite" — a mesma
+    // leitura da fila, e a inversão oposta ("0 = sem limite") é a que esvazia
+    // uma lista de 4.000 num dia.
+    prospeccaoLiberada: ligada && usadosHoje < tetoDoDia,
     // ── O CONFIGURÁVEL SÓ APERTA, NUNCA AFROUXA ── idêntico à fila, e de
     // propósito: se as duas leituras divergirem, a que manda é a que vier por
     // último — e seria esta, no caminho que fala com estranhos.
@@ -308,7 +356,7 @@ export async function abordarLead(
   });
 
   // ── Trava 1: o portão do lead, ESCOLHIDO PELA ORIGEM ───────────────────
-  const escolha = await escolherPortaoDoLead(db, lead);
+  const escolha = await escolherPortaoDoLead(db, lead, agora);
 
   const decisao =
     escolha.portao === "recusado"
