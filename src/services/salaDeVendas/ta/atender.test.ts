@@ -579,6 +579,26 @@ describe("⭐ o aviso de que vem gente não pode falhar calado", () => {
     erro.mockRestore();
   });
 
+  /**
+   * ⚠️ UMA MUTAÇÃO SOBREVIVEU AQUI, E EU NÃO A MATEI. Fica escrito por quê.
+   *
+   * Troquei `if (!entregaDoAviso.entregue)` por `if (true)` — ou seja, o alerta
+   * passaria a gritar TAMBÉM quando o aviso chega ao lead — e os 29 casos
+   * continuaram verdes.
+   *
+   * A razão é o próprio cabeçalho deste arquivo: *"nada aqui entrega mensagem"*.
+   * Neste banco de mentira a entrega **sempre** falha, então `!entregue` é
+   * sempre verdadeiro e as duas versões se comportam igual. **Em produção elas
+   * não se comportam igual**: com `if (true)` o log gritaria em todo handoff
+   * bem-sucedido, e alerta que grita sempre é alerta que ninguém lê — que é
+   * exatamente a doença que este conserto existe para tratar.
+   *
+   * O que mataria a mutação é um caso em que a entrega DÁ CERTO, e ele não cabe
+   * neste arquivo: exigiria as chaves da Meta, `FOOCCI_SDR_SEND_ENABLED`,
+   * `FOOCCI_SDR_IA_RESPONDE_SOZINHA`, `leadMensagem.findUnique` e o `fetch` da
+   * Graph — um segundo arranjo inteiro, que mudaria o banco compartilhado pelos
+   * outros 27 casos. Está anotado como dívida, e não disfarçado de coberto.
+   */
   it("⭐ A METADE LEGÍTIMA: turno normal não grita — o alerta é do aviso, não de toda entrega", async () => {
     // Sem esta, bastaria um console.error incondicional para o caso acima passar
     // — e o log viraria ruído em todo turno, que é como um alerta morre.
