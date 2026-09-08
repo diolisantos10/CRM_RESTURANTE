@@ -65,7 +65,16 @@ function mapMetaStatus(raw: unknown): string {
 }
 
 /** Counts {{n}} placeholders in the BODY component (the highest n = variable count). */
-function countBodyVariables(components: unknown): number {
+/**
+ * Quantas variáveis `{{n}}` o CORPO do modelo espera.
+ *
+ * Exportada em 08/09/2026 para a Sala de Vendas: ela precisa da MESMA contagem
+ * para conferir, antes de disparar, se o modelo aprovado bate com os parâmetros
+ * que o código manda. Reescrever essa contagem lá seria criar uma segunda
+ * verdade sobre o mesmo `{{1}}` — e as duas discordariam no primeiro modelo com
+ * variável no cabeçalho.
+ */
+export function countBodyVariables(components: unknown): number {
   if (!Array.isArray(components)) return 0;
   const body = components.find((c) => String((c as { type?: unknown })?.type).toUpperCase() === "BODY");
   const text = (body as { text?: unknown })?.text;
