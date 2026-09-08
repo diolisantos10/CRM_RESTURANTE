@@ -1,6 +1,47 @@
 # Pendências — o que está aberto
 
-> Última atualização: 07/09/2026.
+> Última atualização: 08/09/2026.
+
+## ⛔ 08/09/2026 — A prospecção está PARADA por credencial vencida, e a decisão não é minha
+
+**Medido, não suposto.** Liguei `FOOCCI_SDR_SEND_ENABLED`, subi o pré-voo do
+modelo (#218) e disparei a primeira rodada real de 10. Ela voltou **verde, com
+zero abordados** — e o pré-voo trouxe o motivo com as palavras da Meta:
+
+> `Error validating access token: Session has expired on Tuesday, 25-Aug-26 21:00:00 PDT.`
+
+**`FOOCCI_SALES_ACCESS_TOKEN` está vencido desde 25/08.** Catorze dias. Nenhuma
+mensagem sairia — nem dez, nem 250, com ou sem modelo aprovado. Ninguém foi
+abordado e nada foi queimado.
+
+**O que trava:** eu não tenho acesso ao Business Manager. Só quem tem gera o
+token. As duas saídas estão com o Diretor Geral: **(A)** token de usuário de
+sistema, permanente — recomendada, mata a classe de falha; **(B)** token novo de
+60 dias pelo painel — dois minutos, e volta a vencer.
+
+⚠️ Quando o token chegar: o token tem de ser gerado no ativo do **número real**,
+não na caixa do número de teste do painel. Foi assim que erramos em 26/08, e
+está registrado no cabeçalho do `FoocciSalesChannel`.
+
+**Assim que ele chegar, é pôr no Railway e disparar. Nada mais falta.**
+
+**E ficou uma pergunta sem resposta, por medir e não por deduzir:** os dez itens
+da fila foram *pulados* antes de chegar ao envio, e o log da rodada não dizia por
+quê. O #219 conserta isso; **a próxima rodada responde.**
+
+## ⚠️ 08/09/2026 — A rodada não tem quem responda a quem responder
+
+`FOOCCI_SDR_IA_RESPONDE_SOZINHA` continua **desligada**, e é certo que continue:
+ninguém autorizou a máquina a falar sozinha com estranho. Mas isso quer dizer que
+**resposta de lead abordado não é respondida automaticamente** — só pelo painel,
+por gente.
+
+Com dez contatos isso é gerenciável, e foi por isso que o CEO dimensionou o teste
+em dez. Com 250 por dia, não é: a ordem permanente do Diretor Geral diz que
+*"mensagem sem resposta queima o contato e a marca, e a lista tem 4.000"*.
+
+**Isto precisa de decisão antes de a rodada crescer de 10 para 250** — e a
+decisão não é técnica: é quem atende, e a que horas.
 
 ## ⚠️ 07/09/2026 — Os cinco caminhos voltaram a imprimir; a NFC-e deles ainda não sai
 

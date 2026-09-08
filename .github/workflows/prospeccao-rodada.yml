@@ -57,6 +57,15 @@ jobs:
           echo "← parou por : $(jq -r '.data.parouPor  // "-"' /tmp/r.json)"
           echo "← falha     : $(jq -rc '.data.falha    // "nenhuma"' /tmp/r.json)"
 
+          # ⭐ POR MOTIVO — sem isto, "pulados: 10" é um número sem informação.
+          # Aconteceu na primeira rodada real (08/09/2026): dez pulados, nenhuma
+          # falha, e nada no job dizia o que barrou os dez. O extrato sempre teve
+          # a resposta; o job é que a jogava fora. Guardrail 6.
+          echo "← por motivo:"
+          jq -r '[.data.extrato[]? | if .ok then "ok" else (.motivo // "(sem motivo)") end]
+                 | group_by(.) | map("  · \(.[0]): \(length)") | .[]' /tmp/r.json 2>/dev/null \
+            || echo "  (extrato indisponível)"
+
           if [[ "$HTTP" -lt 200 || "$HTTP" -ge 300 ]]; then
             echo "::error::a rodada não rodou (HTTP $HTTP)"; cat /tmp/r.json; exit 1
           fi

@@ -33,6 +33,11 @@ import { MetaConfigService } from "./MetaConfigService";
 import { metaGraphUrl } from "./metaFlag";
 import { MetaAppCredentialsService } from "@/services/meta/MetaAppCredentialsService";
 import { maskGraphResponse } from "./providers/metaPayload";
+import {
+  comOTokenDeVendas,
+  foocciSalesPhoneNumberId,
+  isFoocciSdrSendEnabled,
+} from "@/services/foocci-sdr/FoocciSalesChannel";
 
 /** A partir de quantos dias para o vencimento a credencial vira pergunta para humano. */
 export const TOKEN_WARN_DAYS = 30;
@@ -72,6 +77,111 @@ export interface MetaTokenHealthSweep {
   needsAttention: boolean;
   /** Por quê — o alerta carrega a própria evidência (guardrail 6). */
   attention:      string[];
+  /**
+   * ⭐ A credencial da SALA DE VENDAS — o número da Foocci, não o de um cliente.
+   *
+   * Campo separado de propósito: ela não é um restaurante e não tem linha em
+   * `metaWhatsAppConfig`. Enfiá-la em `results` faria `totalConfigs` mentir e
+   * daria a ela um `restaurantId` que não existe.
+   */
+  salaDeVendas:   MetaTokenHealthOne;
+}
+
+/**
+ * O "dono" da credencial da Sala, no lugar onde os outros trazem `restaurantId`.
+ *
+ * Não é um id de restaurante e nunca deve virar um: os parênteses existem para
+ * que ninguém a use como chave de banco por engano.
+ */
+export const DONO_DA_SALA_DE_VENDAS = "(sala-de-vendas)";
+
+/**
+ * ⭐⭐ A CREDENCIAL QUE NINGUÉM VIGIAVA — e é a que carrega a prospecção inteira.
+ *
+ * ── COMO ISTO FOI DESCOBERTO, em 08/09/2026 ─────────────────────────────────
+ *
+ * A primeira rodada de prospecção real disparou e voltou **zero abordados**. O
+ * pré-voo do modelo respondeu, com as palavras da Meta:
+ *
+ *   *"Error validating access token: Session has expired on Tuesday,
+ *   25-Aug-26 21:00:00 PDT."*
+ *
+ * **O token da Sala estava vencido havia catorze dias.** Nenhuma mensagem sairia
+ * naquele dia — nem dez, nem duzentos e cinquenta, com ou sem modelo aprovado.
+ *
+ * ── ⚠️ E A VARREDURA DIÁRIA ESTAVA VERDE O TEMPO TODO ───────────────────────
+ *
+ * Ela varre `metaWhatsAppConfig`, que é a tabela dos **restaurantes**. O número
+ * da Foocci não mora em tabela nenhuma: mora em `FOOCCI_SALES_ACCESS_TOKEN`, no
+ * ambiente. Então a varredura perguntava à Meta sobre todos os tokens **menos o
+ * único que a operação comercial depende** — e passava, todo dia, sem mentir e
+ * sem ajudar.
+ *
+ * Este arquivo nasceu porque *"o Instagram ficou treze dias mudo em julho porque
+ * um token expirou sem avisar ninguém"*. Catorze dias depois, a mesma coisa
+ * aconteceu no número de vendas, com a varredura ligada. **Vigia que olha para
+ * o lado errado é indistinguível de vigia que não existe.**
+ */
+export async function conferirCredencialDaSala(
+  warnDays = TOKEN_WARN_DAYS,
+): Promise<{ one: MetaTokenHealthOne; attention: string[] }> {
+  const numero = foocciSalesPhoneNumberId();
+  const enviando = isFoocciSdrSendEnabled();
+  const attention: string[] = [];
+
+  const vazio: MetaTokenHealthOne = {
+    restaurantId: DONO_DA_SALA_DE_VENDAS,
+    displayPhoneNumber: numero,
+    answered: false, isValid: null, expiresAt: null, expiresInDays: null,
+    neverExpires: false, appIdMatches: null, tokenAppId: null,
+    scopes: [], hasRequiredScope: null, error: null,
+  };
+
+  const health = await comOTokenDeVendas(
+    (token) => inspectMetaToken(token),
+    () => ({
+      answered: false as const, isValid: null, expiresAt: null, expiresInDays: null,
+      neverExpires: false, appIdMatches: null, tokenAppId: null,
+      scopes: [] as string[], hasRequiredScope: null,
+      error: "FOOCCI_SALES_ACCESS_TOKEN não está no ambiente",
+    }),
+  );
+
+  const one: MetaTokenHealthOne = { ...vazio, ...health };
+  const quem = `Número de vendas da Foocci${numero ? ` (phone_number_id ${numero})` : ""}`;
+
+  // ⚠️ Sem token, a Sala não fala com ninguém. Só vira alerta quando o envio
+  // está LIGADO — desligada, "sem credencial" é um estado, não um defeito.
+  if (!one.answered) {
+    if (enviando || numero) {
+      attention.push(
+        `${quem}: NÃO consegui perguntar à Meta se a credencial está viva — ${one.error ?? "motivo não informado"}.`
+        + ` Enquanto isso valer, a prospecção manda zero e o log diz "fila acabou".`,
+      );
+    }
+    return { one, attention };
+  }
+
+  if (one.isValid === false) {
+    attention.push(
+      `${quem}: a credencial está MORTA segundo a Meta${one.error ? ` — ${one.error}` : ""}.`
+      + ` A prospecção NÃO envia nada, e a rodada termina verde com zero abordados.`,
+    );
+  } else if (!one.neverExpires && one.expiresInDays !== null && one.expiresInDays <= warnDays) {
+    attention.push(
+      `${quem}: a credencial vence em ${one.expiresInDays} dia(s) (${one.expiresAt}).`
+      + ` Não existe renovação automática — passando disso, a operação comercial para sem aviso.`,
+    );
+  }
+
+  if (one.hasRequiredScope === false) {
+    attention.push(
+      `${quem}: a credencial não carrega a permissão \`${REQUIRED_SCOPE}\`.`
+      + ` Permissões vistas: ${one.scopes.join(", ") || "(nenhuma)"}. Sem ela o número não aborda ninguém.`,
+    );
+  }
+
+  return { one, attention };
 }
 
 /**
@@ -221,11 +331,18 @@ export async function sweepMetaTokenHealth(warnDays = TOKEN_WARN_DAYS): Promise<
     );
   }
 
+  // ⭐ A credencial da Sala entra na MESMA varredura, e não num job separado que
+  // alguém esqueceria de agendar. Ela é o único token que a operação comercial
+  // usa, e foi o único que ninguém olhava.
+  const sala = await conferirCredencialDaSala(warnDays);
+  attention.push(...sala.attention);
+
   return {
     totalConfigs:   rows.length,
     answered:       results.filter((r) => r.answered).length,
     results,
     needsAttention: attention.length > 0,
     attention,
+    salaDeVendas:   sala.one,
   };
 }

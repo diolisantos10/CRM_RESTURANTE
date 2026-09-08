@@ -109,3 +109,36 @@ describe("o gatilho leva o pré-voo do modelo — não uma função qualquer", (
     expect(params.preVoo, "a rodada das 9h roda sem conferir o modelo").toBe(preVooDoModelo);
   });
 });
+
+/**
+ * ⭐ O LOG CARREGA A PRÓPRIA EVIDÊNCIA — guardrail 6.
+ *
+ * Na primeira rodada real (08/09/2026) o log disse
+ * `abordados: 0, pulados: 10, parouPor: 'filaAcabou'` — e essa linha, sozinha,
+ * **não diz nada** sobre o que barrou os dez. O extrato sempre teve a resposta;
+ * o log é que a jogava fora. Alerta sem o caso concreto é ruído que ninguém
+ * investiga, e foi ruído no meu próprio código.
+ */
+describe("o log da rodada diz POR QUE, não só quantos", () => {
+  it("quebra os pulados por motivo, e conta os enviados como `ok`", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    rodada.abordarARodadaDoDia.mockResolvedValue({
+      abordados: 1, pulados: 3, parouPor: "filaAcabou", falha: null,
+      extrato: [
+        { itemId: "i1", ok: true },
+        { itemId: "i2", ok: false, motivo: "portaoRecusou" },
+        { itemId: "i3", ok: false, motivo: "portaoRecusou" },
+        { itemId: "i4", ok: false, motivo: "semResponsavel" },
+      ],
+    });
+
+    await bater("Bearer segredo");
+
+    const linha = info.mock.calls.find((c) => String(c[0]).includes("rodada concluída"));
+    expect(linha, "a rodada terminou sem dizer nada").toBeTruthy();
+    expect((linha as unknown[])[1]).toMatchObject({
+      porMotivo: { ok: 1, portaoRecusou: 2, semResponsavel: 1 },
+    });
+    info.mockRestore();
+  });
+});
