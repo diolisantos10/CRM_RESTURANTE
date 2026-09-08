@@ -104,31 +104,48 @@ export async function contaDoNumeroDeVendas(
    * um campo que muda de nome entre versões da Graph.
    */
   const doToken = await contaPeloToken(token);
-  if (doToken) return { ok: true, wabaId: doToken };
+  if (doToken.ok) return { ok: true, wabaId: doToken.wabaId };
 
+  /**
+   * ⚠️ OS DOIS MOTIVOS, e não só o primeiro.
+   *
+   * A versão anterior devolvia só o erro do caminho 1 quando os dois falhavam.
+   * Medido em produção, 08/09/2026: o log repetia `(#100) campo inexistente` —
+   * o erro do caminho 1 — e **o caminho 2 falhava em silêncio**. Investigar
+   * ficou impossível sem ler o código, e o custo do não-saber foi pago em
+   * contatos queimados: três por rodada.
+   *
+   * Guardrail 6 pela quarta vez no mesmo dia, e a única forma de parar de
+   * repeti-lo é a frase carregar TUDO que se tentou.
+   */
   return {
     ok: false,
-    erro: ehFalha(r) ? r.erro : "a Meta não devolveu a conta do número de vendas",
+    erro:
+      `pelo número: ${ehFalha(r) ? r.erro : "a Meta não devolveu a conta"}` +
+      ` · pelo token: ${doToken.erro}`,
   };
 }
 
-/** As contas que o token alcança, lidas do próprio token. */
-async function contaPeloToken(token: string): Promise<string | null> {
-  const { appId, appSecret } = await MetaAppCredentialsService.getResolved().catch(() => ({
-    appId: "",
-    appSecret: "",
-  }));
-  if (!appId || !appSecret) return null;
+type ContaPeloToken = { ok: true; wabaId: string } | { ok: false; erro: string };
 
-  const appToken = `${appId}|${appSecret}`;
+/** As contas que o token alcança, lidas do próprio token. */
+async function contaPeloToken(token: string): Promise<ContaPeloToken> {
+  const cred = await MetaAppCredentialsService.getResolved().catch(() => null);
+  if (!cred?.appId || !cred?.appSecret) {
+    return { ok: false, erro: "sem credencial de aplicativo (appId/appSecret) para abrir o token" };
+  }
+
+  const appToken = `${cred.appId}|${cred.appSecret}`;
   const r = await graphDeVendas(
     `debug_token?input_token=${encodeURIComponent(token)}&access_token=${encodeURIComponent(appToken)}`,
     token,
   );
-  if (ehFalha(r)) return null;
+  if (ehFalha(r)) return { ok: false, erro: `debug_token recusou: ${r.erro}` };
 
   const escopos = (r as { data?: { granular_scopes?: unknown } }).data?.granular_scopes;
-  if (!Array.isArray(escopos)) return null;
+  if (!Array.isArray(escopos)) {
+    return { ok: false, erro: "o token não trouxe `granular_scopes`" };
+  }
 
   // A permissão de gerenciar é a que enxerga modelos; a de mensagens serve de
   // reserva, porque em contas antigas só ela vem com alvo.
@@ -137,10 +154,19 @@ async function contaPeloToken(token: string): Promise<string | null> {
       const linha = e as { scope?: unknown; target_ids?: unknown };
       if (linha.scope !== nome) continue;
       const alvos = Array.isArray(linha.target_ids) ? linha.target_ids : [];
-      if (alvos.length > 0) return String(alvos[0]);
+      if (alvos.length > 0) return { ok: true, wabaId: String(alvos[0]) };
     }
   }
-  return null;
+
+  // O que EXISTE no token entra na frase: é o que diz se falta permissão ou
+  // se ela está lá sem alvo — dois consertos diferentes.
+  const vistos = escopos
+    .map((e) => (e as { scope?: unknown }).scope)
+    .filter((v): v is string => typeof v === "string");
+  return {
+    ok: false,
+    erro: `nenhuma permissão de WhatsApp com alvo. Permissões no token: ${vistos.join(", ") || "(nenhuma)"}`,
+  };
 }
 
 /** Todos os modelos da conta do número de vendas, como a Meta os vê agora. */
