@@ -26,6 +26,7 @@ import { prisma } from "@/lib/prisma";
 import { ConversationStatus } from "@prisma/client";
 import { MetaAppCredentialsService } from "@/services/meta/MetaAppCredentialsService";
 import { verifyMetaChallenge, validateMetaSignature, normalizeMetaWebhook } from "@/services/whatsapp/providers/metaWebhook";
+import { foocciSalesPhoneNumberId } from "@/services/foocci-sdr/FoocciSalesChannel";
 import { MetaConfigService } from "@/services/whatsapp/MetaConfigService";
 import { WhatsAppBrainRuntimeService, isWhatsAppBrainEnabled } from "@/services/whatsapp/brain/WhatsAppBrainRuntimeService";
 import { isSupportPhoneNumberId, handleInboundSupport } from "@/services/support/SupportWhatsAppService";
@@ -78,8 +79,69 @@ const ACTIVE_STATUSES: ConversationStatus[] = [
   ConversationStatus.AI_ATENDENDO, ConversationStatus.HUMANO_ASSUMIU,
 ];
 
+/**
+ * Os ids de conta (WABA) que este envelope traz PARA O NOSSO NÚMERO DE VENDAS.
+ *
+ * Exportada e pura de propósito: é a única parte que tem regra, e ela precisa ser
+ * testável sem montar um webhook inteiro. A peça que descobre um dado não pode
+ * exigir uma chamada real para ser conferida — foi essa a lição de 08/09/2026,
+ * quando a conferência que existia para economizar contato só rodava gastando três.
+ *
+ * Devolve vazio quando o número de vendas não está configurado, quando a
+ * notificação é de outro número, ou quando o envelope não tem `id` — nunca joga.
+ */
+export function wabasDaSalaNoEnvelope(payload: unknown, numeroDeVendas: string | null): string[] {
+  if (!numeroDeVendas) return [];
+  const envelope = payload as {
+    entry?: Array<{ id?: unknown; changes?: Array<{ value?: { metadata?: { phone_number_id?: unknown } } }> }>;
+  };
+  const achados: string[] = [];
+  for (const e of envelope?.entry ?? []) {
+    const daSala = (e?.changes ?? []).some(
+      (c) => String(c?.value?.metadata?.phone_number_id ?? "") === numeroDeVendas,
+    );
+    const id = e?.id != null ? String(e.id).trim() : "";
+    if (daSala && id && !achados.includes(id)) achados.push(id);
+  }
+  return achados;
+}
+
 async function processMetaWebhook(payload: unknown): Promise<void> {
   const norm = normalizeMetaWebhook(payload);
+
+  // ── O ID DA CONTA (WABA) DA SALA DE VENDAS — que sempre chegou e sempre foi jogado fora ──
+  //
+  // ⚠️ MEDIDO EM 08/09/2026, e é a razão de esta peça existir. A Sala não conseguia
+  // listar os modelos aprovados da Meta porque não sabia a QUAL CONTA perguntar, e os
+  // três caminhos da Graph foram medidos e falham com o token de produção (#227, #228).
+  // A conclusão escrita naquele dia foi *"não há fonte interna"* — e ela estava certa
+  // sobre o BANCO e errada sobre o CANAL.
+  //
+  // `entry[].id` É o id da conta, e ele vem em TODA notificação da Meta. O tipo logo
+  // abaixo, na leitura de coexistência, declarava só `changes` — então o campo nunca
+  // foi lido por ninguém. Não é dado que falta: é dado que a gente descarta.
+  //
+  // Doutrina 33 aplicada à nossa própria casa: incapacidade declarada em documento
+  // tem de ser medida como código. "Não há fonte interna" era afirmação de manual, e
+  // custou uma noite inteira de caça a um número que passa por aqui todo dia.
+  //
+  // 🔒 SÓ LOG, DE PROPÓSITO. Gravar em tabela exigiria migração, e migração em
+  // produção às cinco da manhã, sem o Diretor do produto, é risco maior que o
+  // problema (guardrail 5). O id não é segredo — é o endereço público da conta —
+  // então o log é lugar honesto para ele. Quem lê o log escreve `FOOCCI_SALES_WABA_ID`
+  // no ambiente, e a Sala passa a ler os modelos sozinha.
+  //
+  // ⚠️ E POR ISSO ESTA PEÇA É PROVISÓRIA POR ESCRITO: o conserto definitivo é
+  // persistir e alimentar `contaDoNumeroDeVendas` direto, sem humano no meio. Enquanto
+  // isso não existir, isto aqui é o que transforma um pedido de DADO ("copie o id da
+  // tela") num pedido de GESTO ("mande um oi para o número") — e gesto não se digita
+  // errado.
+  for (const waba of wabasDaSalaNoEnvelope(payload, foocciSalesPhoneNumberId())) {
+    console.info(
+      `[webhook/meta/whatsapp] ⭐ WABA DA SALA DE VENDAS: ${waba} — escreva este valor em ` +
+      `FOOCCI_SALES_WABA_ID e a conferência de modelos para de depender de humano nenhum`,
+    );
+  }
 
   // ── Coexistência: eco da mensagem que o ATENDENTE mandou do celular ─────────
   //
