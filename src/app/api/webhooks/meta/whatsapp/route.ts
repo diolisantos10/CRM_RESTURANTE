@@ -27,6 +27,7 @@ import { ConversationStatus } from "@prisma/client";
 import { MetaAppCredentialsService } from "@/services/meta/MetaAppCredentialsService";
 import { verifyMetaChallenge, validateMetaSignature, normalizeMetaWebhook } from "@/services/whatsapp/providers/metaWebhook";
 import { foocciSalesPhoneNumberId } from "@/services/foocci-sdr/FoocciSalesChannel";
+import { wabasDaSalaNoEnvelope } from "./wabaDaSala";
 import { MetaConfigService } from "@/services/whatsapp/MetaConfigService";
 import { WhatsAppBrainRuntimeService, isWhatsAppBrainEnabled } from "@/services/whatsapp/brain/WhatsAppBrainRuntimeService";
 import { isSupportPhoneNumberId, handleInboundSupport } from "@/services/support/SupportWhatsAppService";
@@ -78,33 +79,6 @@ const ACTIVE_STATUSES: ConversationStatus[] = [
   ConversationStatus.OPEN, ConversationStatus.BOT, ConversationStatus.HUMAN,
   ConversationStatus.AI_ATENDENDO, ConversationStatus.HUMANO_ASSUMIU,
 ];
-
-/**
- * Os ids de conta (WABA) que este envelope traz PARA O NOSSO NÚMERO DE VENDAS.
- *
- * Exportada e pura de propósito: é a única parte que tem regra, e ela precisa ser
- * testável sem montar um webhook inteiro. A peça que descobre um dado não pode
- * exigir uma chamada real para ser conferida — foi essa a lição de 08/09/2026,
- * quando a conferência que existia para economizar contato só rodava gastando três.
- *
- * Devolve vazio quando o número de vendas não está configurado, quando a
- * notificação é de outro número, ou quando o envelope não tem `id` — nunca joga.
- */
-export function wabasDaSalaNoEnvelope(payload: unknown, numeroDeVendas: string | null): string[] {
-  if (!numeroDeVendas) return [];
-  const envelope = payload as {
-    entry?: Array<{ id?: unknown; changes?: Array<{ value?: { metadata?: { phone_number_id?: unknown } } }> }>;
-  };
-  const achados: string[] = [];
-  for (const e of envelope?.entry ?? []) {
-    const daSala = (e?.changes ?? []).some(
-      (c) => String(c?.value?.metadata?.phone_number_id ?? "") === numeroDeVendas,
-    );
-    const id = e?.id != null ? String(e.id).trim() : "";
-    if (daSala && id && !achados.includes(id)) achados.push(id);
-  }
-  return achados;
-}
 
 async function processMetaWebhook(payload: unknown): Promise<void> {
   const norm = normalizeMetaWebhook(payload);

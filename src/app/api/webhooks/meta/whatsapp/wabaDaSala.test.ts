@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { wabasDaSalaNoEnvelope } from "./route";
+import { wabasDaSalaNoEnvelope } from "./wabaDaSala";
 
 const VENDAS = "1300518453142518";
 
