@@ -206,48 +206,36 @@ function reagirA(motivo: MotivoDaFila): Reacao {
  *
  * Recusar aqui custa uma consulta. Descobrir lá custa três contatos e o dia.
  *
- * ── ⚠️ A REGRA DE QUANDO ABORTAR, E O PRINCÍPIO POR TRÁS DELA ──────────────
+ * ── ⚠️ A REGRA: MODELO NÃO CONFERIDO, RODADA NÃO SAI ───────────────────────
  *
- * **Aborta quando 100% dos envios falhariam. Segue quando a perda é parcial ou
- * desconhecida.** Não é uma lista de causas decorada: é esse teste, aplicado a
- * cada uma.
+ * **Só sai quando a conferência diz `pronto`.** Qualquer outro veredito aborta,
+ * inclusive *"não consegui ler"*.
  *
- *   · sem nome de modelo, sem token, modelo inexistente, não aprovado, ou
- *     esperando 2+ variáveis → **nenhuma** mensagem sairia. Aborta.
- *   · a Graph não respondeu (`metaRecusou`) → eu **não sei** se o modelo está
- *     bom. Rodar é a aposta certa: a leitura pode ter caído sem que o envio
- *     tenha caído, e se o envio também estiver quebrado o #216 para em três.
- *     Aterrar o dia por uma leitura que falhou seria a proteção mais destrutiva
- *     que o problema (guardrail 5).
+ * ── COMO ESTA REGRA CHEGOU AQUI, porque ela já foi outra ────────────────────
  *
- * ⚠️ Ao Diretor Geral eu enumerei três causas de aborto (`naoAchado`,
- * `naoAprovado`, `variaveisNaoBatem`). `semNomeConfigurado` e `semToken` entram
- * pelo mesmo princípio — são 100% de falha — e estão ditas aqui em vez de
- * entrarem caladas.
+ * Ela nasceu com uma exceção que eu defendi: `metaRecusou` (a Graph não
+ * respondeu) **seguia**, porque *"não sei não é o mesmo que está errado"*, e
+ * aterrar o dia por uma leitura instável seria a proteção mais destrutiva que o
+ * problema.
+ *
+ * O argumento era bom **e a premissa dele caiu**. Naquele momento, disparar a
+ * rodada era a única forma de aprender qualquer coisa sobre o modelo: seguir
+ * comprava informação. Desde o #226 existe a conferência isolada
+ * (`api/cron/prospeccao/pre-voo`), que responde a mesma pergunta **de graça**.
+ * Seguir às cegas parou de comprar informação e passou a só pagar em contato.
+ *
+ * E os custos nunca foram simétricos: **rodada abortada roda de novo; contato
+ * queimado não volta.** Em 08/09/2026 a exceção custou seis nomes de uma lista
+ * de 4.000, gastos para reaprender uma frase que a consulta grátis já dizia.
+ *
+ * ── E POR QUE NÃO EXISTE MAIS UMA TABELA DE CAUSAS ─────────────────────────
+ *
+ * Existia — `reagirAoPreVoo`, com um `switch` exaustivo classificando cada
+ * veredito. Ela desapareceu quando **todas** as causas passaram a abortar:
+ * tabela cuja resposta é sempre a mesma não classifica nada, só dá aparência de
+ * critério a uma linha só. No dia em que um veredito merecer seguir, ela volta
+ * — com o caso que a justifica ao lado.
  */
-type ReacaoDoPreVoo = "aborta" | "segue";
-
-function reagirAoPreVoo(causa: CausaDaConferencia): ReacaoDoPreVoo {
-  switch (causa) {
-    // Nenhuma mensagem sairia. Gastar contato para provar isso é desperdício.
-    case "semNomeConfigurado":
-    case "semToken":
-    case "naoAchado":
-    case "naoAprovado":
-    case "variaveisNaoBatem":
-      return "aborta";
-
-    // Não consegui ler. Silêncio da Graph não é veredito sobre o modelo.
-    case "metaRecusou":
-      return "segue";
-
-    default: {
-      const naoTratada: never = causa;
-      return naoTratada;
-    }
-  }
-}
-
 export interface ResultadoDaRodada {
   /** Quantas mensagens saíram. */
   abordados: number;
@@ -320,7 +308,7 @@ export async function abordarARodadaDoDia(
   // mas porque a ordem é a mensagem: nada desta rodada começa antes de o modelo
   // estar conferido.
   const conferencia = await params.preVoo();
-  if (!conferencia.pronto && reagirAoPreVoo(conferencia.causa) === "aborta") {
+  if (!conferencia.pronto) {
     console.error("[prospeccao] rodada NÃO COMEÇOU — o modelo de abordagem reprovou no pré-voo", {
       causa: conferencia.causa,
       detalhe: conferencia.detalhe,
@@ -334,14 +322,6 @@ export async function abordarARodadaDoDia(
     };
   }
 
-  if (!conferencia.pronto) {
-    // Segue, mas não em silêncio: a rodada vai rodar SEM ter conferido o
-    // modelo, e quem lê o log depois precisa saber disso sem adivinhar.
-    console.warn("[prospeccao] a rodada segue SEM conferir o modelo — a Graph não respondeu", {
-      causa: conferencia.causa,
-      detalhe: conferencia.detalhe,
-    });
-  }
 
   const fila = await montarFilaDeProspeccao(db, {
     canalPronto: params.canalPronto,
