@@ -403,8 +403,11 @@ describe("a rodada confere o modelo antes de gastar o primeiro contato", () => {
       .not.toHaveBeenCalled();
   });
 
-  it.each(["semNomeConfigurado", "semToken", "naoAchado", "naoAprovado", "variaveisNaoBatem"])(
-    "aborta em %s — porque nenhuma mensagem sairia",
+  it.each([
+    "semNomeConfigurado", "semToken", "naoAchado",
+    "naoAprovado", "variaveisNaoBatem", "metaRecusou",
+  ])(
+    "aborta em %s — só sai quando a conferência diz `pronto`",
     async (causa) => {
       vi.spyOn(console, "error").mockImplementation(() => {});
       const r = await abordarARodadaDoDia(db, {
@@ -416,23 +419,32 @@ describe("a rodada confere o modelo antes de gastar o primeiro contato", () => {
     },
   );
 
-  it("⭐ a Graph não respondeu: a rodada SEGUE — não sei não é o mesmo que está errado", async () => {
-    // Guardrail 5: aterrar o dia por uma LEITURA que caiu seria a proteção mais
-    // destrutiva que o problema. Se o envio também estiver quebrado, o #216 para
-    // em três — a lista continua protegida por baixo.
-    const aviso = vi.spyOn(console, "warn").mockImplementation(() => {});
+  /**
+   * ⚠️ ESTE CASO DIZIA O CONTRÁRIO — *"a Graph não respondeu: a rodada SEGUE"* —
+   * e a regra foi revertida em 09/09/2026. O caso antigo não foi apagado: virou
+   * este, com o motivo da virada dentro.
+   *
+   * **O que mudou não foi a opinião, foi o mundo.** Quando "segue" foi escrito,
+   * disparar a rodada era a ÚNICA forma de aprender qualquer coisa sobre o
+   * modelo — seguir comprava informação. Desde o #226 a mesma resposta sai da
+   * conferência isolada, **de graça**. Seguir às cegas parou de comprar
+   * informação e passou a só pagar em contato.
+   *
+   * E os custos são assimétricos: rodada abortada roda de novo; contato
+   * queimado não volta. Em 08/09 foram seis, de uma lista de 4.000.
+   */
+  it("⭐ a Graph não respondeu: a rodada ABORTA — não sei virou caro quando ficou grátis saber", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
     const r = await abordarARodadaDoDia(db, {
       autor: "HUMANO", autorUserId: "u1", canalPronto: true,
       preVoo: reprova("metaRecusou", "HTTP_500"),
     });
 
-    expect(r.parouPor).toBe("filaAcabou");
-    expect(r.abordados).toBe(5);
-    expect(
-      aviso.mock.calls.find((c) => String(c[0]).includes("SEM conferir o modelo")),
-      "rodou sem conferência e não disse a ninguém",
-    ).toBeTruthy();
-    aviso.mockRestore();
+    expect(r.parouPor).toBe("preVoo");
+    expect(r.abordados).toBe(0);
+    expect(abordar.abordarLead, "gastou contato para reaprender o que a consulta grátis diz")
+      .not.toHaveBeenCalled();
+    expect(r.falha).toMatchObject({ motivo: "metaRecusou", detalhe: "HTTP_500" });
   });
 
   it("o motivo do aborto sobe inteiro, e o itemId é null porque não houve item", async () => {
