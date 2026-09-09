@@ -11,6 +11,70 @@
 
 ---
 
+## 2026-09-08 — O portão do envio é escolhido pela ORIGEM do lead
+
+**Decisão do Diretor Geral**, executada com três travas e revisada de forma
+adversarial pelo `qualidade` antes de subir.
+
+A fila consultava `avaliarAbordagemDeProspeccao` (frio) e o envio consultava
+`avaliarContatoDeLead` (morno). Dez itens saíam liberados da fila e os dez
+morriam no envio. Perguntar *"quando esta pessoa entregou os dados?"* a quem
+nunca preencheu formulário **não é rigor — é a pergunta errada**.
+
+**Fica decidido:** o envio escolhe o portão pela `fonte` do lead.
+`LISTA_PROSPECCAO` atravessa o frio, com a base legal declarada no lote;
+**qualquer outra origem, inclusive a não classificada, atravessa o morno.**
+
+**As três travas, e cada uma tem caso próprio em teste:**
+
+1. **Origem desconhecida cai no morno.** Se alguém criar uma fonte nova e
+   esquecer de classificá-la, o erro tem de ser *"não falamos com quem
+   podíamos"*, nunca o contrário.
+2. **`consentAt` nulo nunca mais cai em `createdAt`.** Essa linha lia o instante
+   em que **nós** criamos a ficha como consentimento fresquíssimo — a mentira
+   que o portão frio foi construído para não contar, entrando pela porta dos
+   fundos. Agora é bloqueio, não presunção.
+3. **Opt-out e teto do dia valem nos dois portões.** Opt-out é a regra 1 dos
+   dois **e vem antes de tudo** (a primeira versão deixava "lote pausado"
+   encobrir "pediu silêncio" — achado da revisão). O teto mora fora dos portões
+   e roda depois de qualquer um: duas contagens do mesmo teto é como se manda o
+   dobro sem ninguém perceber.
+
+**Recusa de afrouxar o portão morno: mantida.** Nada foi afrouxado; o que mudou
+foi **qual pergunta se faz a quem**.
+
+**Atravessa três domínios:** `meta` (credencial e modelo), `canais` (a mensagem
+que sai) e a Sala de Vendas (a lista que se gasta) — e toca a **base legal
+declarada** para abordar estranho, que é por isso que a decisão foi do Diretor
+Geral e não minha.
+
+---
+
+## 2026-09-08 — Rótulo de tela nunca vira chave de banco
+
+**Decisão do Diretor** (conserto de defeito medido em produção).
+
+`liberadoPor` guarda `Nome (userId)` — uma string montada para a tela. Ela era
+entregue a `LeadMensagem.autorUserId`, que tem chave estrangeira. A primeira
+rodada real em que o portão liberou morreu com `Foreign key constraint
+violated`, HTTP 500, e derrubou os outros nove contatos junto.
+
+**Fica decidido:** quem responde por uma mensagem é gravado como **id**
+(`liberadoPorUserId`), conferido contra a tabela da chave estrangeira **antes**
+de valer. Id órfão vira item pulado com motivo, nunca rodada morta.
+
+**E a regra geral, que é maior que o caso:** quando um campo existe para ser
+lido por gente, ele não serve para ser lido por máquina. Os dois usos pedem
+colunas diferentes, e juntá-los só parece economia até o dia do `500`.
+
+⚠️ **A origem do erro fica registrada porque ela se repetiu:** eu escrevi, num
+comentário, que a chave estrangeira apontava para `users` — sem conferir. Ela
+aponta para `internal_users`. A migração seguinte leu o comentário e obedeceu, e
+não casou nada. **Afirmação de manual sem medição não envelhece calada: ela é
+seguida.**
+
+---
+
 ## 2026-09-08 — Antes de gastar contato, a rodada confere o modelo na Meta
 
 **Decisão do Diretor**, com autorização do Diretor Geral (é conserto e
