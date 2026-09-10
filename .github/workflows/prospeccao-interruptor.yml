@@ -1,0 +1,70 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# O INTERRUPTOR DA PROSPECÇÃO, de fora do painel.
+#
+# Ordem do Diretor Geral, 10/09/2026: nenhuma abordagem sai até o CEO dizer
+# "vai". Este workflow é a mão que liga e desliga — e que se mede: o pré-voo
+# (prospeccao-pre-voo.yml) devolve o estado logo depois.
+#
+# Desligado, a fila nasce vazia e a rodada não aborda ninguém, seja quem for
+# que a dispare (GitHub, agendador interno ou botão). Ligar exige teto > 0.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Prospecção — interruptor (liga/desliga)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ligado:
+        description: "true = liga a prospecção · false = desliga (pausa com carimbo)"
+        required: true
+        type: choice
+        options: ["false", "true"]
+        default: "false"
+      limiteDiario:
+        description: "Teto de abordagens por dia (obrigatório > 0 para ligar; vazio = mantém)"
+        required: false
+        default: ""
+      motivo:
+        description: "Por quê (fica gravado)"
+        required: false
+        default: ""
+
+jobs:
+  interruptor:
+    name: "Ligar/desligar a prospecção"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Montar a URL
+        id: params
+        run: |
+          BASE_URL="${{ secrets.FOOCCI_BASE_URL }}"
+          BASE_URL="${BASE_URL%/}"
+          if [[ -z "$BASE_URL" ]]; then echo "::error::FOOCCI_BASE_URL não configurado"; exit 1; fi
+          echo "url=${BASE_URL}/api/cron/prospeccao/interruptor" >> "$GITHUB_OUTPUT"
+
+      - name: "POST interruptor"
+        env:
+          ENDPOINT_URL: ${{ steps.params.outputs.url }}
+          CRON_SECRET:  ${{ secrets.CRON_SECRET }}
+          LIGADO:       ${{ github.event.inputs.ligado }}
+          TETO:         ${{ github.event.inputs.limiteDiario }}
+          MOTIVO:       ${{ github.event.inputs.motivo }}
+          QUEM:         "workflow por ${{ github.actor }}"
+        run: |
+          BODY=$(jq -nc --argjson l "$LIGADO" --arg m "$MOTIVO" --arg q "$QUEM" --arg t "$TETO" \
+            '{ligado:$l, quem:$q} + (if $m != "" then {motivo:$m} else {} end) + (if $t != "" then {limiteDiario:($t|tonumber)} else {} end)')
+          echo "→ $BODY"
+
+          curl --connect-timeout 20 --max-time 60 -sS -X POST "$ENDPOINT_URL" \
+            -H "Authorization: Bearer $CRON_SECRET" -H "Content-Type: application/json" \
+            -d "$BODY" -o /tmp/r.json -w "%{http_code}" > /tmp/code.txt || true
+
+          HTTP=$(cat /tmp/code.txt)
+          echo "← HTTP   : $HTTP"
+          echo "← estado : $(jq -rc '.data // .error // "-"' /tmp/r.json)"
+
+          if [[ "$HTTP" -lt 200 || "$HTTP" -ge 300 ]]; then
+            echo "::error::o interruptor não mudou (HTTP $HTTP)"; cat /tmp/r.json; exit 1
+          fi
+          echo "✅ prospecção ligada=$(jq -r '.data.ligada' /tmp/r.json) · teto/dia=$(jq -r '.data.limiteDiario' /tmp/r.json)"

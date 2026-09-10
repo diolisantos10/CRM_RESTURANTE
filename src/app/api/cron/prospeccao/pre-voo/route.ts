@@ -103,6 +103,9 @@ async function raioXDoBanco() {
                 motivo: prospeccao.motivo,
                 limiteDiario: prospeccao.limiteDiario,
                 horasEntreAbordagens: prospeccao.horasEntreAbordagens,
+                // A rodada automática de hoje aconteceu? Quem e quando — de fora.
+                ultimaRodadaAutomaticaEm: prospeccao.ultimaRodadaAutomaticaEm,
+                ultimaRodadaAutomaticaPor: prospeccao.ultimaRodadaAutomaticaPor,
               },
       ta:
         ta === undefined
