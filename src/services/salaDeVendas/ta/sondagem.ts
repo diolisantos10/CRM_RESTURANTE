@@ -44,6 +44,8 @@
 
 import { selectEngineRouted } from "@/services/brain/engines/AIEngineRouter";
 import { callStructuredJson } from "@/services/brain/engines/OpenAIEngineAdapter";
+import { comPrazo } from "./prazo";
+import { PRAZO_DO_MODELO_MS } from "./cerebro";
 import type { SinaisDoLead } from "../score";
 
 const AGENTE = "sdr-ta-foocci";
@@ -140,17 +142,26 @@ export async function extrairSinais(
     const engine = await selectEngineRouted(AGENTE);
     if (engine.provider === "MOCK") return vazio;
 
-    const bruto = await callStructuredJson({
-      selection: engine,
-      systemPrompt: INSTRUCAO,
-      userContent: `Conversa:\n${falas}`,
-      responseFormat: "json",
-      // ⚠️ Zero, e não 0.6 como na composição da fala. Extração é medição: a
-      // mesma conversa tem de produzir o mesmo sinal, ou a temperatura de um
-      // lead muda entre dois turnos sem ninguém ter dito nada novo.
-      temperature: 0,
-      maxTokens: 400,
-    });
+    // Com prazo (09/09/2026): esta é a SEGUNDA chamada ao modelo do turno, e
+    // roda depois de a resposta já ter saído. Sem teto, um provedor pendurado
+    // prendia a promessa do webhook para sempre — sem dano ao cliente, mas com
+    // um turno que nunca termina. Estourou, o lead fica sem etiqueta neste
+    // turno, e o próximo tenta de novo com a conversa maior.
+    const bruto = await comPrazo(
+      callStructuredJson({
+        selection: engine,
+        systemPrompt: INSTRUCAO,
+        userContent: `Conversa:\n${falas}`,
+        responseFormat: "json",
+        // ⚠️ Zero, e não 0.6 como na composição da fala. Extração é medição: a
+        // mesma conversa tem de produzir o mesmo sinal, ou a temperatura de um
+        // lead muda entre dois turnos sem ninguém ter dito nada novo.
+        temperature: 0,
+        maxTokens: 400,
+      }),
+      PRAZO_DO_MODELO_MS,
+    );
+    if (bruto === null) return vazio;
 
     return limpar(bruto);
   } catch {

@@ -1572,3 +1572,83 @@ com regra inventada, e o revisor só descobre a diferença relendo as duas fonte
 Anotar a proveniência **por bloco** transforma a conferência de "acreditar" em
 "conferir", que é a mesma razão pela qual entrada de vitrine carrega data, origem
 e commit.
+
+---
+
+## 2026-09-10 — TA fora da transação, prazo no modelo, links e cadência de pergunta
+
+**Pedido:** o TA da Sala de Vendas falhou 5× seguidas para o CEO em 09/09 09h42.
+Causa medida: `FoocciSalesInbound.chamarOTA` rodava o turno INTEIRO dentro de
+`comIdentidade` (transação interativa do Prisma, 5 s), com a chamada ao modelo
+no meio. Mais três requisitos de conteúdo do CEO: links, não terminar toda
+resposta com pergunta, curto. Branch `claude/sala-agendador-1009`, commit ainda
+por vir (o Diretor commita).
+
+### O que fiz
+
+- `atender.ts` virou **ler → fechar → pensar → gravar**. `atenderComOTA(db,
+  pedido, abrir?)` recebe `AbrirTransacao`; cada ida ao banco abre a sua
+  transação curta. Cinco idas por turno normal (ler, gravar, entregar,
+  qualificar-ler, qualificar-escrever), e o teste fixa esse número — se virar
+  uma, alguém voltou a carregar a transação pelo turno.
+- `ta/prazo.ts` (`comPrazo`) e `PRAZO_DO_MODELO_MS = 20 s` em `cerebro.ts`,
+  aplicado às **duas** chamadas ao modelo do turno.
+- `ta/links.ts`: os quatro endereços derivados de `components/marketing/config`
+  (`PRECOS_URL`, `EXPERIMENTE_URL`, `ASSINAR_URL`) + origem pública; o teste
+  confere que cada rota existe em `src/app`.
+- `verificador.ts`: `longaDemais` (350 chars / 4 frases) e
+  `perguntouQuandoNaoDevia` (contexto opcional: pedido objetivo, ou última fala
+  do TA já era pergunta). `responder.ts` obedece às mesmas regras e monta dentro
+  do teto (derruba pergunta, depois o 2º apoio).
+
+### O que quebrou / o que aprendi
+
+1. **A segunda chamada ao modelo também pendurava o turno.** `qualificar` →
+   `extrairSinais` não tinha prazo. Com o modelo mudo, a resposta já tinha
+   saído para o lead, mas a promessa do webhook ficava presa para sempre. Só
+   apareceu porque o teste de ponta a ponta com relógio falso travou: o dublê
+   do modelo demorava 6 s nas duas chamadas e eu só avançava o relógio uma vez.
+   Regra que fica: **conte quantas vezes o turno vai ao modelo antes de dizer
+   que "o modelo tem prazo"**.
+2. **"site" sozinho não é pedido de link.** A primeira versão de `linkPedido`
+   marcava "oi, vi o site de vocês" como pedido objetivo → o TA parava de
+   sondar no primeiro "oi", e dois testes antigos caíram no chão. Intenção de
+   link exige verbo de pedido (manda / passa / qual / link).
+3. **Regex que apaga URL antes de contar frases engolia o ponto final colado.**
+   `https?://\S+` come o "." de "...experimente. Depois" e a frase que termina
+   em link deixa de contar. Lazy até a pontuação de fecho.
+4. **A apresentação gastava duas frases** ("Oi, Marina! Aqui é...") e o item de
+   preço da base gastava três. Com link, o chão do primeiro contato + preço dava
+   6 frases. Abertura em uma frase (travessão) e preço em duas: exatamente 4,
+   que é o teto. Teto de 4 e não 3, e o motivo está escrito no `verificador.ts`.
+5. **O roteiro antigo de `conversaInteira.test.ts` virou caso reprovado de
+   propósito** ("quanto custa?" + pergunta de sondagem). Atualizei o roteiro e
+   deixei no comentário por que a versão antiga é barrada agora.
+
+### O que ficou de fora, nomeado
+
+- **O ramo de handoff (`chamarGente`) ainda roda inteiro numa transação**, com
+  a consulta ao gerente (rede, Dioli Connect, teto próprio em
+  `consultarGerente.ts`) lá dentro. Separar exige que o conector padrão
+  (`connect/conector`) receba `abrir` em vez de um cliente. Anotado no
+  próprio código; não resolvido.
+- **A entrega à Meta continua sendo rede dentro de uma transação** (a sua
+  própria, curta, separada da gravação — se pendurar, morre só ela e a
+  resposta já está gravada). `enviarTextoDeVendas` não tem prazo próprio.
+
+### Verificação
+
+`npx tsc --noEmit` → 0. `npx vitest run src/services/salaDeVendas
+src/services/foocci-sdr src/services/connect/conector/tests/jornada-do-marcos.test.ts
+src/services/brain/architecture.test.ts src/app/api/admin/sala-de-vendas` →
+57 arquivos, 955 testes, 0 falhas (20 skipped pré-existentes).
+
+### Proposta de vitrine (o Diretor promove)
+
+> **Toda chamada lenta dentro de `comIdentidade` é um incidente esperando
+> hora.** A transação interativa do Prisma fecha em 5 s e não avisa: o sintoma
+> é "quebrou" no lugar errado (na gravação, não na chamada lenta). O desenho é
+> ler → fechar → coisa lenta → gravar, com o chamador injetando `abrir`. E o
+> teste que fixa o **número** de transações por turno é o que impede a regressão
+> silenciosa. Origem: incidente de 09/09/2026 09h42, `atender.ts` /
+> `FoocciSalesInbound.ts`, commit por vir.

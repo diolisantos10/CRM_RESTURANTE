@@ -315,12 +315,21 @@ async function chamarOTA(
   if (!leitura.temTexto || !msg.text) return undefined;
 
   try {
-    // Dentro de `comIdentidade` pelo mesmo motivo da gravação da entrada: o RLS
-    // precisa do papel declarado, senão a escrita do TA não passa pela trava.
-    return await comIdentidade(
-      prisma,
-      comoSistema("webhook da Meta: o TA respondendo, sem usuário logado"),
-      (tx) => atenderComOTA(tx, { leadId, mensagem: msg.text!, agora }),
+    // ── ⛔ O TA NÃO RODA DENTRO DE UMA TRANSAÇÃO — ele ABRE as dele ─────────
+    //
+    // Até 09/09/2026 esta chamada era `comIdentidade(prisma, ..., (tx) =>
+    // atenderComOTA(tx, ...))`: o turno inteiro, com a chamada ao modelo no
+    // meio, dentro de UMA transação interativa do Prisma — que fecha sozinha
+    // em 5 s. Modelo em 6 s = transação morta = "o turno quebrou" = lead sem
+    // resposta. Às 09h42 daquele dia foram cinco falhas seguidas para o CEO.
+    //
+    // Agora o TA recebe `abrir`: cada ida ao banco (ler os portões, gravar a
+    // resposta, entregar, etiquetar) abre a sua transação curta com a
+    // identidade declarada ao RLS e fecha antes de qualquer coisa lenta. O
+    // modelo roda sem transação aberta. Ver `AbrirTransacao` em `atender.ts`.
+    const identidade = comoSistema("webhook da Meta: o TA respondendo, sem usuário logado");
+    return await atenderComOTA(prisma, { leadId, mensagem: msg.text!, agora }, (trabalho) =>
+      comIdentidade(prisma, identidade, trabalho),
     );
   } catch (e) {
     console.error(`[foocci-sdr] o TA não conseguiu atender o lead ${leadId}:`, e);

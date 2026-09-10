@@ -45,7 +45,60 @@ export type MotivoDaReprovacao =
   | "integracaoInventada"
   | "fechouPeloCliente"
   | "negouSerAgente"
+  /** Passou do teto de tamanho — parede de texto no WhatsApp. */
+  | "longaDemais"
+  /** Perguntou quando a regra era responder e parar. */
+  | "perguntouQuandoNaoDevia"
   | "vazio";
+
+/**
+ * O que o verificador precisa saber da CONVERSA para julgar o texto.
+ *
+ * Tudo opcional, e a omissão é honesta: sem contexto, as duas regras de
+ * conversa não disparam — o texto continua sendo julgado pelas de negócio.
+ * Quem chama de dentro do turno (`cerebro.ts`) passa as duas; quem chama de
+ * uma tela de ensaio, com um texto solto, não tem como passar e não finge.
+ */
+export interface ContextoDaVerificacao {
+  /** A última fala do TA nesta conversa terminou em pergunta? */
+  ultimaFalaDoTAPerguntou?: boolean;
+  /** A pessoa pediu preço, link, demo ou como assinar — coisa objetiva. */
+  pediuInformacaoObjetiva?: boolean;
+}
+
+/**
+ * ── O TETO, E POR QUE ELE É CÓDIGO ──────────────────────────────────────────
+ *
+ * O ofício já dizia "duas ou três frases curtas" desde 26/08. Em 09/09/2026 o
+ * CEO pediu que fosse curto DE VERDADE — e instrução de redação é aviso, não
+ * trava. Estes dois números são a trava.
+ *
+ * 350 caracteres cabem numa tela de celular sem rolar. Quatro frases, e não
+ * três, porque a PRIMEIRA mensagem carrega a apresentação ("aqui é o agente de
+ * atendimento do Foocci") e a resposta de preço, vinda da tabela, gasta duas: o
+ * valor e a primeira cobrança pela metade. Uma pergunta de preço no primeiro
+ * contato, com o link, é exatamente quatro — e o chão determinístico precisa
+ * caber aqui, senão o pior dia do TA vira silêncio em vez de resposta seca.
+ */
+export const LIMITE_DE_CARACTERES = 350;
+export const LIMITE_DE_FRASES = 4;
+
+/**
+ * Quantas frases o texto tem.
+ *
+ * Os links saem ANTES da contagem: `https://foocci.com.br/site/precos` tem dois
+ * pontos que não terminam frase nenhuma, e um contador ingênuo reprovaria toda
+ * resposta com link por "frases demais" — o oposto do que o CEO pediu.
+ */
+export function contarFrases(texto: string): number {
+  return texto
+    // Lazy até a pontuação de fecho: "veja em https://x/y. Depois" precisa
+    // manter o ponto depois do link, senão a frase que termina em link some.
+    .replace(/https?:\/\/\S*?(?=[.,;:!?]*(?:\s|$))/gi, "")
+    .split(/[.!?…]+(?:\s+|$)/)
+    .map((f) => f.trim())
+    .filter((f) => f.length > 0).length;
+}
 
 export interface Veredito {
   aprovada: boolean;
@@ -192,13 +245,42 @@ export function valoresPermitidos(): Set<number> {
  * cada reprovação é testável caso a caso, e nenhum caminho de envio pode
  * "esquecer" de verificar sem que isso apareça no tipo.
  */
-export function verificarResposta(texto: string): Veredito {
+export function verificarResposta(
+  texto: string,
+  contexto: ContextoDaVerificacao = {},
+): Veredito {
   const motivos: MotivoDaReprovacao[] = [];
   const detalhes: string[] = [];
 
   const limpo = (texto ?? "").trim();
   if (!limpo) {
     return { aprovada: false, motivos: ["vazio"], detalhe: "o modelo devolveu texto vazio" };
+  }
+
+  // 0. Tamanho — antes de tudo, porque é o que a pessoa vê antes de ler.
+  const frases = contarFrases(limpo);
+  if (limpo.length > LIMITE_DE_CARACTERES || frases > LIMITE_DE_FRASES) {
+    motivos.push("longaDemais");
+    detalhes.push(
+      `resposta longa demais (${limpo.length} caracteres, ${frases} frases; o teto é ` +
+        `${LIMITE_DE_CARACTERES} caracteres e ${LIMITE_DE_FRASES} frases)`,
+    );
+  }
+
+  // 0b. Perguntou quando era para responder e parar.
+  //
+  // Duas situações, e as duas vêm de fora do texto: a pessoa pediu uma coisa
+  // objetiva (preço, link, demo), ou a última fala do TA já era uma pergunta.
+  // "No máximo uma pergunta a cada duas respostas" — pedido do CEO, 09/09/2026.
+  // Sem contexto, não dispara: ausência de informação não é informação.
+  if (limpo.includes("?")) {
+    if (contexto.pediuInformacaoObjetiva) {
+      motivos.push("perguntouQuandoNaoDevia");
+      detalhes.push("terminou com pergunta, e a pessoa pediu uma informação objetiva — responda e pare");
+    } else if (contexto.ultimaFalaDoTAPerguntou) {
+      motivos.push("perguntouQuandoNaoDevia");
+      detalhes.push("perguntou de novo — a mensagem anterior já era uma pergunta, esta entrega sem perguntar");
+    }
   }
 
   // 1. Preço fora da tabela.
