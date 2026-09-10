@@ -215,3 +215,41 @@ describe("⛔ o agente responde ANTES de perguntar", () => {
     }
   });
 });
+
+describe("⛔ ele não pede o telefone de quem está falando PELO telefone", () => {
+  const PEDIDOS = [
+    "Me passa seu WhatsApp que eu te chamo",
+    "qual o seu telefone?",
+    "pode me mandar seu número?",
+    "me manda seu contato",
+    "deixa o seu whats aí",
+  ];
+
+  for (const frase of PEDIDOS) {
+    it(`reprova: "${frase}"`, () => {
+      const v = verificarResposta(frase);
+      expect(v.aprovada, JSON.stringify(v)).toBe(false);
+      expect(v.motivos).toContain("pediuTelefoneQueJaTem");
+    });
+  }
+
+  it("⭐⭐ a sonda de controle: PERGUNTAR SOBRE WhatsApp continua liberado", () => {
+    // Esta é a sonda que carrega a regra. "Hoje você vende por onde?" e "você
+    // vende pelo WhatsApp?" são a pergunta MAIS importante da sondagem — uma
+    // expressão gulosa que casasse a palavra solta calaria justamente ela, e o
+    // agente ficaria sem saber o canal atual de ninguém.
+    const boas = [
+      "Hoje você vende pelo WhatsApp ou só pelo marketplace?",
+      "Dá pra vender pelo WhatsApp com o Foocci, sim.",
+      "Seus clientes já pedem pelo WhatsApp?",
+      "O número de pedidos cresce quando o canal é seu.",
+    ];
+
+    for (const frase of boas) {
+      const v = verificarResposta(frase);
+      expect(v.motivos, `barrou uma fala legítima: "${frase}"`).not.toContain(
+        "pediuTelefoneQueJaTem",
+      );
+    }
+  });
+});

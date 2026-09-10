@@ -117,7 +117,17 @@ jobs:
           # ninguém provou.
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260908203000_quem_liberou_o_lote/migration.sql
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260908205500_liberado_por_internal_user/migration.sql
-          echo "✅ As quatro migrations da prospecção aplicaram sobre banco realista."
+          # ⭐ 10/09/2026 — as duas da entrega consolidada. Faltavam aqui, e o job
+          # reprovou exatamente como o aviso acima previu: o DROP levou
+          # `prospeccao_config` e `lotes_de_prospeccao` embora, e sem estas duas
+          # linhas o cliente do Prisma pediu `salaWabaId` e `importacaoId` a um
+          # banco que não os tinha mais.
+          #
+          # A ordem importa e é a mesma que produção vai aplicar: a WABA (120000)
+          # antes da base contínua (180000).
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260910120000_waba_da_sala_persistido/migration.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260910180000_base_continua_memoria_e_trava/migration.sql
+          echo "✅ As seis migrations da prospecção aplicaram sobre banco realista."
 
       - name: Percorrer as Jornadas 1, 2 e 3
         run: npm run test:jornada
