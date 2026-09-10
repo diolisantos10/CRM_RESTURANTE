@@ -49,6 +49,7 @@ import {
   enviarModeloDeVendas,
   type ModeloDeAbordagem,
 } from "@/services/foocci-sdr/FoocciSalesChannel";
+import { montarParametros } from "./prospeccao/mapaDoModelo";
 
 type Cliente = PrismaClient | Prisma.TransactionClient;
 
@@ -63,7 +64,14 @@ export type ResultadoDaAbordagem =
         /** Teto de abordagens da hora ou do dia. Não é falha — é o freio. */
         | "ritmo"
         | "naoConseguiuGravar"
-        | "aMetaRecusou";
+        | "aMetaRecusou"
+        /**
+         * Um `{{n}}` do mapa do modelo ficou sem valor neste contato. `detalhe`
+         * é sempre `campoVazio:{{n}}`. É a linha da lista, não a máquina: pula.
+         */
+        | "campoVazio"
+        /** O modelo configurado não tem mapa de variáveis registrado. Máquina: para. */
+        | "semMapa";
       detalhe: string;
     };
 
@@ -147,6 +155,24 @@ export function saudacaoDoLead(lead: {
 }
 
 /**
+ * ⭐ O NOME DO RESTAURANTE, para o mapa do modelo.
+ *
+ * Lead de lista: o estabelecimento (`saudacaoDoLead`, com o guarda contra
+ * telefone-como-nome). Lead de formulário: o campo `restaurante` que a pessoa
+ * digitou — nunca o primeiro nome dela, porque o modelo diz "estou falando com
+ * o {{2}}" e {{2}} é o restaurante, não a pessoa.
+ */
+export function restauranteDoLead(lead: {
+  nome: string | null;
+  restaurante: string | null;
+  fonte: string | null;
+}): string | null {
+  if (lead.fonte === FONTE_DE_LISTA) return saudacaoDoLead(lead);
+  const r = (lead.restaurante ?? "").trim();
+  return r || null;
+}
+
+/**
  * O texto que vai gravado na conversa junto com o modelo.
  *
  * A linha da conversa precisa dizer alguma coisa legível: uma bolha vazia na
@@ -166,6 +192,7 @@ interface LeadParaAbordar {
   createdAt: Date;
   lastContactedAt: Date | null;
   restaurante: string | null;
+  cidade: string | null;
   fonte: string | null;
 }
 
@@ -209,9 +236,22 @@ export const FONTE_DE_LISTA = "LISTA_PROSPECCAO";
  * trava 2 de `abordarLead` (`conferirRitmo`), que roda depois do portão,
  * qualquer que tenha sido o portão.
  */
+/** O que o item da lista sabe do lugar — só o item guarda bairro e estado. */
+interface LugarDoItem {
+  bairro: string | null;
+  cidade: string | null;
+  estado: string | null;
+}
+
 type PortaoDoLead =
   | { portao: "morno" }
-  | { portao: "frio"; baseLegal: string; prospeccaoLiberada: boolean; descansoHoras: number }
+  | {
+      portao: "frio";
+      baseLegal: string;
+      prospeccaoLiberada: boolean;
+      descansoHoras: number;
+      lugar: LugarDoItem;
+    }
   | { portao: "recusado"; decisao: LeadSafetyDecision };
 
 async function escolherPortaoDoLead(
@@ -250,7 +290,13 @@ async function escolherPortaoDoLead(
   const item = await db.itemDeProspeccao.findFirst({
     where: { leadId: lead.id },
     orderBy: { criadoEm: "desc" },
-    select: { lote: { select: { situacao: true, proveniencia: true } } },
+    select: {
+      // O lugar entra em {{3}} do modelo de abordagem fria (`mapaDoModelo.ts`).
+      bairro: true,
+      cidade: true,
+      estado: true,
+      lote: { select: { situacao: true, proveniencia: true } },
+    },
   });
 
   if (!item) {
@@ -303,6 +349,7 @@ async function escolherPortaoDoLead(
     // propósito: se as duas leituras divergirem, a que manda é a que vier por
     // último — e seria esta, no caminho que fala com estranhos.
     descansoHoras: Math.max(REGRA.descansoHoras, config?.horasEntreAbordagens ?? REGRA.descansoHoras),
+    lugar: { bairro: item.bairro ?? null, cidade: item.cidade ?? null, estado: item.estado ?? null },
   };
 }
 
@@ -340,7 +387,7 @@ export async function abordarLead(
     select: {
       id: true, nome: true, whatsapp: true, optOutAt: true,
       consentAt: true, createdAt: true, lastContactedAt: true,
-      restaurante: true, fonte: true,
+      restaurante: true, cidade: true, fonte: true,
     },
   })) as LeadParaAbordar | null;
 
@@ -411,6 +458,24 @@ export async function abordarLead(
     };
   }
 
+  // ── Trava 1½: o mapa do modelo — cada {{n}} tem valor neste contato? ───
+  //
+  // ⭐ Antes do freio e antes de gravar, de propósito: um contato sem cidade
+  // não gasta ritmo nem deixa linha PENDENTE. Ele é PULADO com o motivo
+  // `campoVazio:{{n}}`, legível na tela e no extrato — e a Meta nunca recebe
+  // string vazia (regra do Diretor Geral, 10/09/2026; ver `mapaDoModelo.ts`).
+  const cfg = modeloConfigurado();
+  const lugar = escolha.portao === "frio" ? escolha.lugar : null;
+  const montado = montarParametros(cfg.nome, {
+    restaurante: restauranteDoLead(lead),
+    bairro: lugar?.bairro ?? null,
+    cidade: lugar?.cidade ?? lead.cidade ?? null,
+    estado: lugar?.estado ?? null,
+  });
+  if (!montado.ok) {
+    return { abordou: false, motivo: montado.causa, detalhe: montado.detalhe };
+  }
+
   // ── Trava 2: o freio de ritmo ──────────────────────────────────────────
   //
   // ⭐ O TETO DO DIA VALE NOS DOIS PORTÕES, e é por isso que ele mora AQUI e não
@@ -423,12 +488,10 @@ export async function abordarLead(
     return { abordou: false, motivo: "ritmo", detalhe: ritmo.detalhe };
   }
 
-  const cfg = modeloConfigurado();
-  const nome = saudacaoDoLead(lead);
   const modelo: ModeloDeAbordagem = {
     nome: cfg.nome,
     idioma: cfg.idioma,
-    parametros: nome ? [nome] : [],
+    parametros: montado.parametros,
   };
 
   // ── Trava 3: gravar antes de enviar ────────────────────────────────────

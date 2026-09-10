@@ -405,7 +405,7 @@ describe("a rodada confere o modelo antes de gastar o primeiro contato", () => {
 
   it.each([
     "semNomeConfigurado", "semToken", "naoAchado",
-    "naoAprovado", "variaveisNaoBatem", "metaRecusou",
+    "naoAprovado", "variaveisNaoBatem", "metaRecusou", "semMapa",
   ])(
     "aborta em %s — só sai quando a conferência diz `pronto`",
     async (causa) => {

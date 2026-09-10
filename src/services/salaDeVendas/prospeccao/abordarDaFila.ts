@@ -155,6 +155,12 @@ function reagirA(motivo: MotivoDaFila): Reacao {
     case "portaoRecusou":
       return "pula";
 
+    // ⭐ Um `{{n}}` do mapa sem valor neste contato (sem cidade, sem nome de
+    // restaurante). É uma linha da lista, não a máquina: pula com o motivo
+    // `campoVazio:{{n}}` e segue — regra do Diretor Geral, 10/09/2026.
+    case "campoVazio":
+      return "pula";
+
     // O freio do dia/hora. Não é defeito, e não adianta tentar o próximo: ele
     // vai bater no mesmo teto. A rodada termina, satisfeita.
     case "ritmo":
@@ -184,6 +190,10 @@ function reagirA(motivo: MotivoDaFila): Reacao {
     // uma linha ruim da lista: é a máquina. Para na primeira, e grita.
     case "leadNaoExiste":
     case "naoConseguiuGravar":
+    // Modelo configurado sem mapa de variáveis: TODO item falharia igual. O
+    // pré-voo já barra isso antes do primeiro contato; se chegou aqui, é a
+    // máquina — para na primeira.
+    case "semMapa":
       return "falha";
 
     default: {

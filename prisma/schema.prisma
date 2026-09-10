@@ -7277,6 +7277,9 @@ model ItemDeProspeccao {
   whatsappDigits String
 
   empresa String?
+  /// Entra em `{{3}}` da abordagem fria ("encontramos o contato de vocês em
+  /// Pinheiros, São Paulo"). Só o item guarda: o lead não tem bairro.
+  bairro  String?
   cidade  String?
   estado  String?
   tipo    String?

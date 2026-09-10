@@ -85,32 +85,51 @@ describe("ler os modelos da conta do número de vendas", () => {
   });
 });
 
-describe("⭐ a conferência antes do disparo", () => {
-  it("⭐ modelo aprovado com UMA variável: pronto", async () => {
-    metaResponde([{ name: "foocci_abordagem_v1", language: "pt_BR", status: "APPROVED", components: corpo("Olá {{1}}!") }]);
+const FRIA = "Olá, {{1}}! Aqui é a Foocci. Estou falando com o {{2}} porque encontramos o contato de vocês em {{3}}.";
+
+describe("⭐ a conferência antes do disparo — o mapa contra a Meta", () => {
+  it("⭐ abordagem_restaurante_fria com TRÊS variáveis: pronto, e o mapa cobre as três", async () => {
+    process.env.FOOCCI_SDR_MODELO_ABORDAGEM = "abordagem_restaurante_fria";
+    metaResponde([{ name: "abordagem_restaurante_fria", language: "pt_BR", status: "APPROVED", components: corpo(FRIA) }]);
 
     const r = await conferirModeloDeAbordagem(TOKEN);
 
     expect(r.pronto).toBe(true);
-    if (r.pronto) expect(r.modelo.variaveis).toBe(1);
+    if (r.pronto) {
+      expect(r.modelo.variaveis).toBe(3);
+      expect(r.parametrosQueMandamos).toBe(3);
+    }
   });
 
-  it("modelo aprovado SEM variável também passa — o envio manda zero quando não há nome", async () => {
+  it("modelo aprovado SEM variável passa sem mapa — não há o que mapear", async () => {
     metaResponde([{ name: "foocci_abordagem_v1", language: "pt_BR", status: "APPROVED", components: corpo("Olá!") }]);
     expect((await conferirModeloDeAbordagem(TOKEN)).pronto).toBe(true);
   });
 
-  it("⭐ DUAS variáveis: recusa ANTES de queimar contato", async () => {
-    // Sem isto, os três primeiros contatos da lista seriam gastos só para
-    // descobrir o que uma consulta responde.
+  it("⭐ modelo com variável e SEM mapa registrado: recusa ANTES de queimar contato", async () => {
+    // Era o defeito de 08/09: o envio mandava 1 parâmetro no chute e a Meta
+    // recusou 100% — seis contatos gastos para descobrir o que uma consulta responde.
     metaResponde([{ name: "foocci_abordagem_v1", language: "pt_BR", status: "APPROVED", components: corpo("Olá {{1}}, aqui é {{2}}") }]);
 
     const r = await conferirModeloDeAbordagem(TOKEN);
 
     expect(r.pronto).toBe(false);
     if (!r.pronto) {
+      expect(r.causa).toBe("semMapa");
+      expect(r.detalhe).toContain("foocci_abordagem_v1");
+    }
+  });
+
+  it("⭐ a Meta espera mais do que o mapa cobre: reprova NOMEANDO a variável que falta", async () => {
+    process.env.FOOCCI_SDR_MODELO_ABORDAGEM = "abordagem_restaurante_fria";
+    metaResponde([{ name: "abordagem_restaurante_fria", language: "pt_BR", status: "APPROVED", components: corpo(FRIA + " Vale até {{4}}.") }]);
+
+    const r = await conferirModeloDeAbordagem(TOKEN);
+
+    expect(r.pronto).toBe(false);
+    if (!r.pronto) {
       expect(r.causa).toBe("variaveisNaoBatem");
-      expect(r.detalhe).toContain("2 variáveis");
+      expect(r.detalhe).toContain("falta {{4}}");
     }
   });
 
@@ -148,7 +167,7 @@ describe("⭐ a conferência antes do disparo", () => {
   });
 
   it("⭐ idioma diferente ainda é um achado — 'não achei' mandaria procurar o modelo errado", async () => {
-    metaResponde([{ name: "foocci_abordagem_v1", language: "en_US", status: "APPROVED", components: corpo("Hi {{1}}!") }]);
+    metaResponde([{ name: "foocci_abordagem_v1", language: "en_US", status: "APPROVED", components: corpo("Hi!") }]);
 
     const r = await conferirModeloDeAbordagem(TOKEN);
 
@@ -183,7 +202,7 @@ describe("o pré-voo com o token do ambiente", () => {
   it("com token, confere de verdade — e o token não aparece no retorno", async () => {
     process.env.FOOCCI_SALES_ACCESS_TOKEN = "segredo-do-numero";
     metaResponde([
-      { name: "foocci_abordagem_v1", language: "pt_BR", status: "APPROVED", components: corpo("Olá {{1}}") },
+      { name: "foocci_abordagem_v1", language: "pt_BR", status: "APPROVED", components: corpo("Olá!") },
     ]);
 
     const r = await preVooDoModelo();
@@ -222,7 +241,7 @@ describe("achar a conta quando o número não responde", () => {
       }), { status: 200 }))
       // 3ª: a listagem de modelos, já com a conta certa
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: [{ name: "foocci_abordagem_v1", language: "pt_BR", status: "APPROVED", components: corpo("Olá {{1}}, tudo bem?") }],
+        data: [{ name: "foocci_abordagem_v1", language: "pt_BR", status: "APPROVED", components: corpo("Olá, tudo bem?") }],
       }), { status: 200 })) as never;
 
     const r = await conferirModeloDeAbordagem(TOKEN);

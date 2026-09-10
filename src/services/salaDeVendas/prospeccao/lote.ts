@@ -29,6 +29,7 @@ export interface LinhaDaLista {
   nome?: string | null;
   whatsapp: string;
   empresa?: string | null;
+  bairro?: string | null;
   cidade?: string | null;
   estado?: string | null;
   tipo?: string | null;
@@ -266,6 +267,7 @@ export async function importarLote(
           // rastreável sem fingir um telefone que não existe.
           whatsappDigits: `invalido:${idUnicoDeLinhaInvalida()}`,
           empresa: texto(linha.empresa),
+          bairro: texto(linha.bairro),
           cidade: texto(linha.cidade),
           estado: texto(linha.estado),
           tipo: texto(linha.tipo),
@@ -291,6 +293,7 @@ export async function importarLote(
         whatsapp: String(linha.whatsapp),
         whatsappDigits: v.digitos!,
         empresa: texto(linha.empresa),
+        bairro: texto(linha.bairro),
         cidade: texto(linha.cidade),
         estado: texto(linha.estado),
         tipo: texto(linha.tipo),
