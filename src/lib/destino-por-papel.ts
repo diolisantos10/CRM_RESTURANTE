@@ -31,6 +31,23 @@ export function destinoDe(papel: InternalRole): string {
     case "GERENTE_DEPARTAMENTO":
     case "AUDITOR_QA":
       return ROTAS.painel;
+    /**
+     * ⚠️ O CEO E O DIRETOR ENTRAM PELA SALA DE VENDAS — ordem do CEO, 10/09/2026.
+     *
+     * Até hoje caíam em `/admin/departamentos`, uma tela que dizia, com todas as
+     * letras, "a estrutura ainda não foi montada — nada depende disto para
+     * funcionar". Primeira coisa que o dono via ao entrar: um painel de zeros
+     * sobre um organograma que só existe no documento. E apertava voltar.
+     *
+     * *"Enquanto isso não estiver de pé rodando e vendendo a gente não vai fazer
+     * mais nenhum projeto."* A porta de entrada tem de ser o lugar onde a
+     * companhia decide se vive: o painel comercial. Quando a prioridade mudar,
+     * esta linha muda com ela — e é por isso que ela está aqui, com data, e não
+     * espalhada em três `router.replace`.
+     */
+    case "MASTER_CEO":
+    case "DIRETOR_FOOCCI":
+      return ROTAS.painel;
     default:
       return "/admin/departamentos";
   }
