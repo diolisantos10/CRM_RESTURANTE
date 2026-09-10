@@ -69,8 +69,16 @@ export interface MensagemQueChegou {
 
 export type ResultadoDeEntrada =
   | { ok: true; mensagemId: string; repetida: false }
-  /** Já estava gravada. NÃO é erro — é o webhook fazendo o trabalho dele. */
-  | { ok: true; mensagemId: string; repetida: true }
+  /**
+   * Já estava gravada. NÃO é erro — é o webhook fazendo o trabalho dele.
+   *
+   * ⚠️ `mensagemId` é `null` no caso raro da CORRIDA: duas entregas simultâneas,
+   * o índice único barrou a segunda, e dentro de uma transação já abortada não
+   * há como consultar o id da primeira. O tipo diz isso em vez de fingir um id
+   * — quem precisar do id trata o `null`, e quem só precisa saber "não conte de
+   * novo" lê `repetida`.
+   */
+  | { ok: true; mensagemId: string | null; repetida: true }
   | { ok: false; causa: "leadNaoExiste" };
 
 /**
@@ -84,6 +92,37 @@ export async function registrarEntrada(
   db: Cliente,
   m: MensagemQueChegou,
 ): Promise<ResultadoDeEntrada> {
+  // ── ⛔ OLHAR ANTES DE INSERIR, E O MOTIVO É UMA TRANSAÇÃO ABORTADA ────────
+  //
+  // Esta função inseria primeiro e tratava o `P2002` no `catch`. Funcionava
+  // fora de transação e **mentia dentro de uma** — que é justamente como ela
+  // roda em produção, porque `gravarNaConversa` a envolve em `comIdentidade`
+  // para o RLS enxergar o papel declarado.
+  //
+  // No Postgres, um erro dentro de um bloco de transação **aborta o bloco**:
+  // todo comando seguinte responde `current transaction is aborted`. Então a
+  // consulta do `catch` — a que ia buscar a mensagem que já existia — falhava
+  // também, e a função caía no ramo final devolvendo `leadNaoExiste`.
+  //
+  // Efeito medido no CI de 10/09/2026, contra Postgres de verdade: **toda
+  // reentrega da Meta era reportada como "o lead sumiu"**, e o log de produção
+  // dizia "mensagem NÃO gravada" para uma mensagem que estava gravada desde a
+  // primeira entrega. Diagnóstico errado sobre um sistema que funcionava.
+  //
+  // ⚠️ Isto NÃO substitui o índice único. A consulta abaixo é o caminho comum
+  // (a reentrega, que é previsível e frequente); o índice continua sendo a
+  // trava para a corrida de verdade, duas entregas simultâneas. Trocar o índice
+  // por esta consulta seria trocar uma trava por uma verificação.
+  const jaGravada = await db.leadMensagem.findUnique({
+    where: { waMessageId: m.waMessageId },
+    select: { id: true },
+  });
+  if (jaGravada) {
+    // Não mexe no espelho: o contador de não lidas já subiu na primeira vez, e
+    // somar de novo mostraria duas mensagens onde há uma.
+    return { ok: true, mensagemId: jaGravada.id, repetida: true };
+  }
+
   try {
     const criada = await db.leadMensagem.create({
       data: {
@@ -108,14 +147,18 @@ export async function registrarEntrada(
     return { ok: true, mensagemId: criada.id, repetida: false };
   } catch (e) {
     if (ehViolacaoDeUnicidade(e)) {
-      // A trava funcionou. Devolve a que já existe, e NÃO mexe no espelho — o
-      // contador de não lidas já foi incrementado na primeira vez, e somar de
-      // novo faria a tela mostrar duas mensagens onde há uma.
-      const jaExiste = await db.leadMensagem.findUnique({
-        where: { waMessageId: m.waMessageId },
-        select: { id: true },
-      });
-      if (jaExiste) return { ok: true, mensagemId: jaExiste.id, repetida: true };
+      // A CORRIDA de verdade: outra entrega da mesma mensagem gravou entre a
+      // consulta lá em cima e este `create`. O índice único é a trava, e ela
+      // funcionou.
+      //
+      // ⚠️ Aqui NÃO se consulta o banco de novo. Dentro de uma transação o erro
+      // acima já a abortou, e a consulta falharia — foi exatamente esse o
+      // defeito que a consulta prévia veio consertar. Repeti-lo aqui seria
+      // reintroduzi-lo no caminho raro.
+      //
+      // Sem id para devolver, mas o fato é o que importa ao chamador: a
+      // mensagem está gravada e este turno não deve contá-la de novo.
+      return { ok: true, mensagemId: null, repetida: true };
     }
 
     // Chave estrangeira: o lead sumiu entre o webhook e a gravação.

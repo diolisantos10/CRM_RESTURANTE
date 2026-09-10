@@ -89,15 +89,72 @@ describe("a reentrega da Meta não duplica a conversa", () => {
     expect(db.siteLead.update).not.toHaveBeenCalled();
   });
 
-  it("a trava é a unicidade do banco, não uma leitura antes da escrita", async () => {
-    // Se algum dia alguém trocar por findFirst+create, este teste continua
-    // passando — mas o de cima passa a depender de sorte. Por isso a asserção é
-    // sobre o que NÃO é chamado antes do create.
+  /**
+   * ⛔ ESTE CASO FOI REESCRITO EM 10/09/2026 — e o motivo importa mais que ele.
+   *
+   * Ele exigia que `findUnique` **não** fosse chamado antes do `create`, para
+   * impedir que alguém trocasse a trava de unicidade por uma leitura. A
+   * preocupação estava certa e continua valendo: leitura antes da escrita não é
+   * trava, é palpite com janela de corrida.
+   *
+   * Só que a asserção media a ORDEM DAS CHAMADAS, e não a doutrina — e o CI
+   * contra Postgres de verdade mostrou o preço. Inserir primeiro e tratar o
+   * `P2002` no `catch` **mente dentro de uma transação**: no Postgres um erro
+   * aborta o bloco inteiro, então a consulta do `catch` falhava também e a
+   * função devolvia `leadNaoExiste` para uma mensagem que estava gravada. Como
+   * produção roda tudo dentro de `comIdentidade` (por causa do RLS), TODA
+   * reentrega da Meta era reportada como "o lead sumiu".
+   *
+   * A consulta prévia entrou e a trava **não saiu**: o índice único continua
+   * decidindo a corrida. É isso que os três casos abaixo medem.
+   */
+  it("⭐⭐ a trava continua sendo a unicidade do banco — a corrida real ainda é barrada", async () => {
     const db = bancoQueAceita();
-    await registrarEntrada(db as never, chegou());
+    // A consulta prévia não achou nada: é a corrida de verdade, duas entregas
+    // simultâneas, e quem grava em segundo leva o P2002.
+    db.leadMensagem.findUnique.mockResolvedValueOnce(null);
+    db.leadMensagem.create.mockRejectedValueOnce({ code: "P2002" });
 
-    expect(db.leadMensagem.findUnique).not.toHaveBeenCalled();
+    const r = await registrarEntrada(db as never, chegou());
+
+    // Continua sendo "repetida", e não erro: a mensagem ESTÁ gravada — foi a
+    // outra entrega que a gravou. Quem apagar o tratamento do P2002 faz este
+    // caso virar `{ok:false}` e reprovar.
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.repetida).toBe(true);
+
+    // E o espelho não é tocado nem na corrida, senão o contador de não lidas
+    // sobe duas vezes para uma mensagem só.
+    expect(db.siteLead.update).not.toHaveBeenCalled();
+  });
+
+  it("⭐ a consulta prévia evita a violação no caminho COMUM da reentrega", async () => {
+    // O conserto propriamente dito. A reentrega é previsível e frequente; a
+    // corrida é rara. Deixar a frequente bater no índice era o que abortava a
+    // transação em produção.
+    const db = bancoQueAceita();
+    db.leadMensagem.findUnique.mockResolvedValueOnce({ id: "m1" });
+
+    const r = await registrarEntrada(db as never, chegou());
+
+    expect(r).toEqual({ ok: true, mensagemId: "m1", repetida: true });
+    expect(
+      db.leadMensagem.create,
+      "bateu no índice numa reentrega previsível — é isso que aborta a transação",
+    ).not.toHaveBeenCalled();
+  });
+
+  it("⛔ a sonda de controle: mensagem NOVA continua sendo gravada", async () => {
+    // Sem esta, uma consulta prévia mal escrita — devolvendo qualquer coisa —
+    // faria toda mensagem ser tratada como repetida, e a conversa do cliente
+    // pararia de registrar em silêncio, sem erro nenhum.
+    const db = bancoQueAceita();
+
+    const r = await registrarEntrada(db as never, chegou());
+
+    expect(r).toEqual({ ok: true, mensagemId: "m1", repetida: false });
     expect(db.leadMensagem.create).toHaveBeenCalledTimes(1);
+    expect(db.siteLead.update).toHaveBeenCalled();
   });
 });
 
