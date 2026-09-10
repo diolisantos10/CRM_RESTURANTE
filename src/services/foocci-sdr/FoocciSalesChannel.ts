@@ -45,6 +45,7 @@ import {
   maskGraphResponse,
 } from "@/services/whatsapp/providers/metaPayload";
 import type { LeadSafetyDecision } from "./LeadContactSafety";
+import { temPlaceholderNaoResolvido } from "./semPlaceholder";
 
 // ─── Identidade do canal ────────────────────────────────────────────────────────
 
@@ -537,6 +538,25 @@ export async function enviarModeloDeVendas(
   const vazio = modelo.parametros.findIndex((p) => !p || !p.trim());
   if (vazio >= 0) {
     return { ok: false, error: `variável {{${vazio + 1}}} do modelo veio vazia` };
+  }
+
+  // ⛔ E TAMPOUCO SAI COM VARIÁVEL NÃO RESOLVIDA — a trava acima só pega o
+  // vazio; esta pega o **preenchido errado**.
+  //
+  // Um parâmetro que ainda carrega `{{2}}`, um rascunho `[nome do restaurante]`
+  // ou um `undefined` coagido a texto passa por todas as conferências de
+  // CONTAGEM — o pré-voo mede quantas variáveis saem, nunca o que vai dentro
+  // delas — e a Meta aceita numa boa, porque ela confere formato, não sentido.
+  // Quem lê "Olá undefined, aqui é a Foocci" é o prospecto, e a abordagem fria
+  // só tem uma primeira impressão.
+  for (let i = 0; i < modelo.parametros.length; i++) {
+    const ofensor = temPlaceholderNaoResolvido(modelo.parametros[i]);
+    if (ofensor) {
+      return {
+        ok: false,
+        error: `variável {{${i + 1}}} do modelo saiu com trecho não resolvido: "${ofensor}"`,
+      };
+    }
   }
 
   const recipient = toMetaRecipient(toPhone);

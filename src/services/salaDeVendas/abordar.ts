@@ -44,7 +44,7 @@ import {
   type LeadSafetyDecision,
 } from "@/services/foocci-sdr/LeadContactSafety";
 import { contarAbordagensDeHoje } from "./prospeccao/selecao";
-import { parametrosQueOEnvioMonta } from "@/services/foocci-sdr/modelosDaMeta";
+import { parametrosDoEnvioAgora } from "@/services/foocci-sdr/modelosDaMeta";
 import {
   canalDeVendasPronto,
   enviarModeloDeVendas,
@@ -438,7 +438,14 @@ export async function abordarLead(
   // Agora o número vem do contrato (conferido no pré-voo contra o modelo
   // aprovado) e a montagem é exata. Faltando dado, **não sai**: recusar aqui
   // custa um contato; mandar payload incompatível custa a reputação do número.
-  const montagem = montarParametros(parametrosQueOEnvioMonta(), lead);
+  //
+  // ⚠️ `parametrosDoEnvioAgora` e NÃO `parametrosQueOEnvioMonta()` seco: desde
+  // 10/09/2026 o número vem do modelo persistido, e o pré-voo confere por essa
+  // mesma fonte. Se aqui continuasse lendo só o ambiente, a conferência
+  // aprovaria um contrato e o disparo montaria outro — o defeito que a P0.2
+  // existe para matar, de volta pela porta dos fundos e com pré-voo verde por
+  // cima. Sem banco, a função cai na reserva do ambiente e nada muda.
+  const montagem = montarParametros(await parametrosDoEnvioAgora(db), lead);
   if (!montagem.ok) {
     return { abordou: false, motivo: "semDadoParaOModelo", detalhe: montagem.falta };
   }

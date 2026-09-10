@@ -35,6 +35,20 @@ import { receberMensagemDeVendas, interpretarMensagemDeVendas } from "../FoocciS
 
 const AGORA = new Date("2026-08-14T15:00:00Z");
 
+/**
+ * ⏱️ A JANELA DE AGRUPAMENTO FICA EM ZERO AQUI, e é decisão, não atalho.
+ *
+ * Desde 10/09/2026 o turno espera alguns segundos antes de compor, para juntar
+ * a rajada de mensagens curtas que o lead manda no WhatsApp (`agrupamento.ts`).
+ * Em produção isso é o conserto; num teste seriam quatro segundos parados por
+ * caso, e uma suíte que dorme é uma suíte que ninguém roda.
+ *
+ * ⚠️ O que fica em zero é a ESPERA, não a consolidação: a leitura das entradas,
+ * o carimbo do turno e a volta que pega a mensagem atrasada continuam sendo
+ * exercitados. Zerar o relógio não afrouxa regra nenhuma.
+ */
+process.env.FOOCCI_SDR_JANELA_AGRUPAMENTO_MS = "0";
+
 beforeEach(() => {
   // Só as TABELAS. `$transaction` é uma função no topo do objeto, e varrê-la
   // como se fosse tabela quebra o laço nas propriedades internas do dublê.

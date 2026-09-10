@@ -224,16 +224,63 @@ describe("importar a lista", () => {
     expect(itensCriados[0].motivo).toBeTruthy();
   });
 
-  it("o lote nasce RASCUNHO — importar não autoriza abordar", async () => {
+  /**
+   * ⛔ ESTE CASO MUDOU DE LADO EM 10/09/2026, POR ORDEM — e a troca fica
+   * registrada, porque até ontem ele provava exatamente o contrário.
+   *
+   * Ele exigia que o lote nascesse `RASCUNHO`: importar não autorizava abordar,
+   * e alguém tinha de clicar "Liberar". A regra era boa e virou defeito quando a
+   * operação cresceu — o arquivo é fatiado de 500 em 500, então uma lista de
+   * 8.000 contatos pedia **dezesseis** cliques de liberação para uma decisão que
+   * a pessoa já tinha tomado ao subir o arquivo. Ordem do Diretor Geral: a base
+   * é contínua, e importação válida entra no estoque.
+   *
+   * ── ⚠️ O QUE NÃO PODE TER SE PERDIDO NA TROCA ─────────────────────────────
+   *
+   * A autorização não sumiu; mudou de lugar. Continua havendo ato humano
+   * declarado e com dono: a **proveniência** (obrigatória — o caso da
+   * `ProvenienciaAusente` acima é a sonda de controle disso) e o
+   * `liberadoPorUserId`, que grava QUEM assinou. Sem estas duas linhas, "base
+   * contínua" teria virado "abordar sem ninguém ter assinado", que é outra
+   * coisa e é justamente o que a regra velha existia para impedir.
+   */
+  it("⭐ a importação já entra na base contínua — e ainda assim tem quem assinou", async () => {
     const { db } = dbDeImportacao();
     await importarLote(db, {
       nome: "Curitiba",
       proveniencia: "Lista pública, 08/2026",
+      criadoPor: "Dioli (u-1)",
+      criadoPorUserId: "u-1",
       linhas: [{ whatsapp: "11987654321" }],
     });
     const dados = (db.loteDeProspeccao.create as any).mock.calls[0][0].data;
-    expect(dados.situacao).toBeUndefined(); // o padrão do schema é RASCUNHO
+
+    expect(dados.situacao).toBe("LIBERADO");
+    // A base legal declarada continua viajando com o lote.
     expect(dados.proveniencia).toBe("Lista pública, 08/2026");
+    // E continua havendo um responsável que o banco reconhece.
+    expect(dados.liberadoPorUserId).toBe("u-1");
+    expect(dados.liberadoEm).toBeInstanceOf(Date);
+  });
+
+  it("⛔ sem id de responsável, o lote entra SEM assinatura — e a rodada não o aborda", async () => {
+    // A sonda de controle da regra acima. `liberadoPorUserId` vem da sessão; se
+    // um chamador antigo não o mandar, o campo tem de ficar AUSENTE em vez de
+    // receber o rótulo de tela. Foi essa confusão exata — rótulo `Nome (id)`
+    // entregue a uma coluna com chave estrangeira — que derrubou a primeira
+    // rodada real em 08/09/2026, com HTTP 500 levando junto outros nove
+    // contatos que não tinham nada a ver com o problema.
+    const { db } = dbDeImportacao();
+    await importarLote(db, {
+      nome: "Curitiba",
+      proveniencia: "Lista pública, 08/2026",
+      criadoPor: "Dioli (u-1)",
+      linhas: [{ whatsapp: "11987654321" }],
+    });
+    const dados = (db.loteDeProspeccao.create as any).mock.calls[0][0].data;
+
+    expect(dados.liberadoPorUserId).toBeUndefined();
+    expect(dados.liberadoPor).toBe("Dioli (u-1)");
   });
 });
 

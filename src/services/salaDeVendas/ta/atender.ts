@@ -76,6 +76,15 @@ import type { ArmazemDePendencias } from "@/services/connect/conector/pendencias
 import { foraDaAlcadaNaMensagem } from "../precos";
 import { extrairSinais, juntarSinais } from "./sondagem";
 import { posturaDoLead } from "./oficio";
+import {
+  blocoDeConduta,
+  blocoDeMemoria,
+  gravarMemoria,
+  lerIrritacao,
+  lerMemoria,
+  lerPedidoDeParar,
+  type MemoriaDoLead,
+} from "./memoria";
 import { escreverOScore, type SinaisDoLead } from "../score";
 
 /**
@@ -152,9 +161,25 @@ export type ResultadoDoTurno =
 
 export interface PedidoDeTurno {
   leadId: string;
-  /** O que o cliente acabou de escrever. */
+  /**
+   * O que o cliente escreveu — **já consolidado**.
+   *
+   * ⚠️ Desde 10/09/2026 isto não é mais "a mensagem que chegou no webhook": é
+   * tudo o que ele escreveu desde a última vez que a empresa falou, junto e na
+   * ordem do relógio (ver `agrupamento.ts`). Quem chama com uma linha só está
+   * respondendo a um pedaço da frase — foi assim que o TA perguntou o tipo de
+   * cozinha para quem tinha acabado de dizer "é padaria".
+   */
   mensagem: string;
   agora?: Date;
+  /**
+   * O turno a que esta fala pertence, carimbado também nas entradas.
+   *
+   * Sem ele, duas respostas para a mesma sequência ficam indistinguíveis de duas
+   * respostas para duas sequências — e o defeito de resposta dupla só se prova
+   * corrigido no olho de quem lê a conversa.
+   */
+  turnoId?: string | null;
   /**
    * Injetável **só para o teste**. No caminho de produção nada disto é passado:
    * o `fetch` é o do runtime, o ambiente é o `process.env`, o armazém é a
@@ -340,18 +365,61 @@ async function executarTurno(
   // `falar()` e não `responder()`: desde 26/08/2026 quem redige é um modelo,
   // com o determinístico como chão. A decisão de escalar continua sendo tomada
   // em código, ANTES do modelo — quem quer isso escrito está em `falar.ts`.
-  const [jaPerguntou, historico] = await Promise.all([
+  const [jaPerguntou, historico, memoriaAnterior] = await Promise.all([
     perguntasJaFeitas(db, lead.id),
     conversaAteAqui(db, lead.id),
+    lerMemoria(db, lead.id),
   ]);
+
+  // ── ⭐ 5b. O QUE ELE ACABOU DE PEDIR, LIDO ANTES DE COMPOR ──────────────
+  //
+  // Gravado ANTES da composição, e não depois, e a ordem é o conserto: em
+  // 09/09/2026 o lead escreveu "não quero mais responder perguntas" e recebeu
+  // outra pergunta **no mesmo turno**. Ler isto depois de compor consertaria a
+  // conversa a partir da mensagem seguinte — ou seja, tarde.
+  const pediuParar = lerPedidoDeParar(pedido.mensagem);
+  const irritacaoAgora = lerIrritacao(pedido.mensagem);
+
+  if (pediuParar || irritacaoAgora > 0) {
+    await gravarMemoria(
+      db,
+      lead.id,
+      { pediuPararSondagem: pediuParar, irritacao: irritacaoAgora },
+      agora,
+    );
+  }
+
+  const memoria: MemoriaDoLead = {
+    ...memoriaAnterior,
+    pediuPararSondagem: memoriaAnterior.pediuPararSondagem || pediuParar,
+    irritacao: Math.max(memoriaAnterior.irritacao, irritacaoAgora),
+  };
 
   // A postura sai da temperatura que o qualificador escreveu no turno anterior.
   // QUENTE e PRIORIDADE_MAXIMA viram closer; o resto — MORNO, FRIO e sobretudo
   // `null`, que é "ninguém mediu" — continua sondando. Ver `posturaDoLead`.
+  // ⭐ A POSTURA VIRA VARIÁVEL porque ela agora também é MÉTRICA. Ela decide o
+  // ofício que entra no prompt e, desde 10/09/2026, é gravada em cada mensagem
+  // como `papelDoAgente`. Sem gravar, o desempenho de "recepção", "qualificação"
+  // e "closer" só poderia ser deduzido do estágio do lead — que muda DEPOIS da
+  // mensagem, e portanto atribui a fala ao papel errado.
+  const postura = posturaDoLead(lead.temperatura);
+  const papelDoAgente = postura === "fechar" ? "closer" : "qualificacao";
+
   const r = await falar(
-    { mensagem: pedido.mensagem, nome: lead.nome, jaPerguntou, historico },
+    {
+      mensagem: pedido.mensagem,
+      nome: lead.nome,
+      jaPerguntou,
+      historico,
+      memoria: blocoDeMemoria(memoria),
+      conduta: blocoDeConduta(memoria),
+      // A trava do determinístico. O bloco de conduta acima avisa o modelo; esta
+      // linha impede o chão de fazer a pergunta quando o modelo cair.
+      pediuPararSondagem: memoria.pediuPararSondagem,
+    },
     VERSAO_1,
-    posturaDoLead(lead.temperatura),
+    postura,
   );
 
   // ── ⭐ 6b. O GATILHO DE PREÇO GANHA CHAMADOR ────────────────────────────
@@ -544,6 +612,11 @@ async function executarTurno(
           // "Agente Maria" e o aviso de que vem gente não pode chegar anônimo.
           autorUserId: assina,
           agora,
+          turnoId: pedido.turnoId ?? null,
+          // O aviso de handoff não é venda: é o agente parando. Marcado como
+          // `recepcao` para não inflar a métrica do papel que estava vendendo.
+          papelDoAgente: "recepcao",
+          origemDaFala: r.origem,
         });
 
         // "maquina": ninguém leu este aviso antes de ele sair. Quem decide se
@@ -608,6 +681,9 @@ async function executarTurno(
     autorUserId: assina,
     texto: r.texto,
     agora,
+    turnoId: pedido.turnoId ?? null,
+    papelDoAgente,
+    origemDaFala: r.origem,
   });
 
   if (!gravada.ok) {

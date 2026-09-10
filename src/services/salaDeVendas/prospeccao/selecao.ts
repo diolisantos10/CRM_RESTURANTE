@@ -110,54 +110,55 @@ export async function montarFilaDeProspeccao(
 
   const quantos = Math.min(cabeNoTeto, opcoes.limite ?? cabeNoTeto);
 
+  // ── ⭐ A BASE É UMA SÓ — E O FILTRO DE LOTE MUDOU DE PAPEL EM 10/09/2026 ───
+  //
+  // `lote: { situacao: "LIBERADO" }` continua aqui, e continua sendo obrigatório,
+  // mas ele já **não é mais o portão de autorização**: o lote nasce LIBERADO
+  // desde que a importação passou a assinar a liberação (ver `lote.ts`). O que
+  // ele faz agora é EXCLUIR o lote que alguém parou de propósito — o botão de
+  // pausa, e o cancelamento de uma importação inteira, que pausa todos os lotes
+  // daquele arquivo. Sem esta linha, cancelar uma importação não teria efeito
+  // nenhum sobre quem é abordado amanhã de manhã.
+  //
+  // ⚠️ `limiteDiario` do lote NÃO é mais lido. A coluna continua no banco (é
+  // registro de como o lote entrou), e a fila deixou de obedecê-la: com o
+  // arquivo entrando em 16 partes de 20, ela cortava a base unificada em 320 por
+  // dia enquanto a tela mostrava o teto global de 2.000 ao lado — dois tetos, um
+  // deles invisível, e ninguém entendendo por que a fila parava. Pedir só o que
+  // se usa é o que impede a coluna de voltar a valer por descuido.
   const itens = await db.itemDeProspeccao.findMany({
     where: { situacao: "PENDENTE", lote: { situacao: "LIBERADO" } },
     orderBy: { criadoEm: "asc" },
     take: quantos,
     include: {
-      lote: { select: { id: true, proveniencia: true, limiteDiario: true } },
+      lote: { select: { id: true, proveniencia: true } },
     },
   });
 
   const liberados: CandidatoAAbordagem[] = [];
   const barrados: CandidatoAAbordagem[] = [];
 
-  /** Quantos já entraram na fila por lote, para o teto do lote também valer. */
-  const porLote = new Map<string, number>();
-
   for (const item of itens) {
     // Leitura, nunca criação: se o contato já é lead, aproveitamos o histórico
     // dele; se não é, avaliamos com histórico zero — que é a verdade.
     const lead = await lerLeadDoItem(db, item);
 
-    // Zero é "nada sai", igual ao teto global. A leitura oposta ("0 = sem
-    // limite") inverteria a semântica entre dois campos com o mesmo nome — e é
-    // o tipo de inversão que só aparece no dia em que alguém importa com 0.
-    const tetoDoLote = item.lote.limiteDiario ?? 0;
-    const jaNoLote = porLote.get(item.loteId) ?? 0;
-
-    const decisao =
-      jaNoLote >= tetoDoLote
-        ? {
-            sendable: false as const,
-            reason: "PROSPECCAO_DESLIGADA" as const,
-            detail: `Teto do lote atingido (${jaNoLote}/${tetoDoLote}).`,
-          }
-        : avaliarAbordagemDeProspeccao({
-            telefone: item.whatsapp,
-            optOutAt: lead?.optOutAt ?? null,
-            tentativas: lead?.tentativas ?? 0,
-            ultimoContatoEm: lead?.lastContactedAt ?? null,
-            // Verdadeiro porque os três campos acima saíram do banco agora: ou
-            // o lead existe e foi lido, ou ele não existe e o histórico é
-            // genuinamente zero.
-            historicoConhecido: true,
-            canalPronto: opcoes.canalPronto,
-            prospeccaoLiberada: true,
-            baseLegalDeclarada: item.lote.proveniencia,
-            descansoHoras,
-            agora,
-          });
+    // O teto que vale é o do dia (contado acima, no banco) mais o teto explícito
+    // da rodada, que quem aperta o botão escolhe. Nenhum outro.
+    const decisao = avaliarAbordagemDeProspeccao({
+      telefone: item.whatsapp,
+      optOutAt: lead?.optOutAt ?? null,
+      tentativas: lead?.tentativas ?? 0,
+      ultimoContatoEm: lead?.lastContactedAt ?? null,
+      // Verdadeiro porque os três campos acima saíram do banco agora: ou o lead
+      // existe e foi lido, ou ele não existe e o histórico é genuinamente zero.
+      historicoConhecido: true,
+      canalPronto: opcoes.canalPronto,
+      prospeccaoLiberada: true,
+      baseLegalDeclarada: item.lote.proveniencia,
+      descansoHoras,
+      agora,
+    });
 
     const candidato: CandidatoAAbordagem = {
       itemId: item.id,
@@ -168,12 +169,8 @@ export async function montarFilaDeProspeccao(
       decisao,
     };
 
-    if (decisao.sendable) {
-      liberados.push(candidato);
-      porLote.set(item.loteId, jaNoLote + 1);
-    } else {
-      barrados.push(candidato);
-    }
+    if (decisao.sendable) liberados.push(candidato);
+    else barrados.push(candidato);
   }
 
   return {
@@ -181,7 +178,7 @@ export async function montarFilaDeProspeccao(
     barrados,
     motivoDaFilaVazia:
       liberados.length === 0 && barrados.length === 0
-        ? "Nenhum item pendente em lote liberado."
+        ? "Nenhum contato pendente na base — ou a lista acabou, ou os lotes estão pausados."
         : null,
     usadosHoje,
     tetoDoDia,

@@ -31,6 +31,7 @@
  */
 
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { limparEntidades } from "./ta/agrupamento";
 import type {
   DirecaoDaMensagem,
   TipoDaMensagem,
@@ -187,6 +188,19 @@ export interface MensagemParaEnviar {
   tipo?: TipoDaMensagem;
   templateNome?: string | null;
   agora?: Date;
+
+  // ── A TRILHA DO TURNO ─────────────────────────────────────────────────────
+  //
+  // Os três nasceram do defeito de 09/09/2026: duas respostas da IA para uma
+  // sequência só do lead. Sem eles o defeito é visível na tela e invisível no
+  // banco — e o que não se consulta não se prova corrigido.
+
+  /** O turno que produziu esta fala. Duas saídas com o mesmo id são o defeito. */
+  turnoId?: string | null;
+  /** `abordagem`, `recepcao`, `qualificacao` ou `closer`. */
+  papelDoAgente?: string | null;
+  /** `modelo`, `modelo-2a-tentativa` ou `deterministico`. */
+  origemDaFala?: string | null;
 }
 
 export type ResultadoDeSaida =
@@ -223,7 +237,14 @@ export async function registrarSaida(
   db: Cliente,
   m: MensagemParaEnviar,
 ): Promise<ResultadoDeSaida> {
-  const texto = m.texto?.trim();
+  // ⛔ A LIMPEZA É AQUI, E É AQUI DE PROPÓSITO.
+  //
+  // `registrarSaida` é o funil por onde passa TODA mensagem que a empresa manda
+  // — o TA, o determinístico, o aviso de handoff, o humano pela Central. Limpar
+  // na composição protegeria um caminho e deixaria os outros; limpar no funil é
+  // trava, não aviso (guardrail 4). O lead recebeu `&#x20;` literal em
+  // 09/09/2026 porque não havia funil nenhum fazendo isto.
+  const texto = limparEntidades(m.texto ?? "").trim();
   if (!texto) return { ok: false, causa: "semTexto" };
 
   // Item 19 do comando: registrar o responsável por cada mensagem. Sem esta
@@ -248,6 +269,9 @@ export async function registrarSaida(
         autor: m.autor,
         autorUserId: m.autorUserId ?? null,
         templateNome: m.templateNome ?? null,
+        turnoId: m.turnoId ?? null,
+        papelDoAgente: m.papelDoAgente ?? null,
+        origemDaFala: m.origemDaFala ?? null,
         ocorreuEm: agora,
       },
       select: { id: true },

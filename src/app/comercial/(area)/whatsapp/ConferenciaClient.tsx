@@ -81,12 +81,12 @@ export function ConferenciaClient() {
   }, [tentativa]);
 
   if (estado.fase === "carregando") {
-    return <p className="p-6 text-[13px] text-muted">Perguntando à Meta…</p>;
+    return <p className="text-[13px] text-muted">Perguntando à Meta…</p>;
   }
 
   if (estado.fase === "semAcesso") {
     return (
-      <p className="p-6 text-[13.5px] leading-relaxed text-ink2">
+      <p className="text-[13.5px] leading-relaxed text-ink2">
         Sem acesso. Esta tela é de quem enxerga a operação inteira.
       </p>
     );
@@ -94,7 +94,7 @@ export function ConferenciaClient() {
 
   if (estado.fase === "erro") {
     return (
-      <p className="p-6 text-[13.5px] text-ink2">
+      <p className="text-[13.5px] text-ink2">
         {estado.detalhe ?? "Não foi possível conferir o canal."}
       </p>
     );
@@ -102,34 +102,27 @@ export function ConferenciaClient() {
 
   const { presenca, conferencia } = estado;
 
+  // ⚠️ O envelope da página saiu daqui para o `page.tsx` em 10/09/2026, quando
+  // os modelos passaram a dividir a tela com a conferência. Enquanto cada
+  // pedaço trazia o próprio `min-h-full`, o segundo entrava dentro do primeiro
+  // ou embaixo dele com outra margem — e uma tela com duas larguras de coluna
+  // parece defeito porque é.
   return (
-    <div className="min-h-full bg-canvas px-4 py-6 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-3xl">
-        <header className="mb-5 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-[-.02em] text-ink">
-              O WhatsApp de vendas
-            </h1>
-            <p className="mt-1 max-w-[62ch] text-[13.5px] leading-relaxed text-muted">
-              Esta tela pergunta à Meta, agora, se as chaves que estão no ar
-              alcançam o número da Foocci. Ela não manda mensagem para ninguém.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={reconferir}
-            className="shrink-0 rounded-full border border-line2 bg-paper px-3.5 py-1.5 text-[12.5px] font-medium text-ink2 hover:bg-chip"
-          >
-            Conferir de novo
-          </button>
-        </header>
-
-        <Veredito conferencia={conferencia} />
-
-        <AsTresChaves presenca={presenca} />
+    <>
+      <div className="mb-3 flex justify-end">
+        <button
+          type="button"
+          onClick={reconferir}
+          className="shrink-0 rounded-full border border-line2 bg-paper px-3.5 py-1.5 text-[12.5px] font-medium text-ink2 hover:bg-chip"
+        >
+          Conferir de novo
+        </button>
       </div>
-    </div>
+
+      <Veredito conferencia={conferencia} />
+
+      <AsTresChaves presenca={presenca} />
+    </>
   );
 }
 
