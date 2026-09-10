@@ -117,7 +117,9 @@ jobs:
           # ninguém provou.
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260908203000_quem_liberou_o_lote/migration.sql
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260908205500_liberado_por_internal_user/migration.sql
-          echo "✅ As quatro migrations da prospecção aplicaram sobre banco realista."
+          # 10/09/2026 — a reserva da rodada automática (agendador interno).
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260910153000_reserva_da_rodada_automatica/migration.sql
+          echo "✅ As cinco migrations da prospecção aplicaram sobre banco realista."
 
       - name: Percorrer as Jornadas 1, 2 e 3
         run: npm run test:jornada

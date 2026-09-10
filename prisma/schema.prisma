@@ -7206,6 +7206,13 @@ model ProspeccaoConfig {
   pausadoPor String?
   motivo     String?
 
+  /// Quando a rodada AUTOMÁTICA do dia foi reservada, e por quem (agendador
+  /// interno ou cron do GitHub). É a trava contra dois agendadores dispararem
+  /// a mesma rodada no mesmo dia — uma reserva atômica, não um "se já rodou".
+  /// Rodada manual (workflow_dispatch, botão) não passa por aqui.
+  ultimaRodadaAutomaticaEm  DateTime?
+  ultimaRodadaAutomaticaPor String?
+
   atualizadoEm DateTime @updatedAt
   atualizadoPor String?
 
