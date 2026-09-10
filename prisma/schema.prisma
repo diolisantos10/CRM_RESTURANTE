@@ -5184,7 +5184,22 @@ model SiteLead {
 /// apaga a lista de quem voltaria a conversar em três meses.
 enum SiteLeadStage {
   NOVO // chegou, ninguém falou com ele ainda
-  PRIMEIRO_CONTATO // alguém (ou o TA) mandou a primeira mensagem
+  /// Contato frio conferido e elegível, esperando a vez na base contínua.
+  ///
+  /// ⚠️ NÃO é o mesmo que NOVO. `NOVO` é quem chegou até nós (formulário, site,
+  /// WhatsApp). Este é quem NÓS fomos buscar e ainda não abordamos. Misturar os
+  /// dois faria a fila do dia disputar espaço com quem já pediu contato — e
+  /// quem pediu contato tem sempre precedência sobre quem não pediu.
+  DISPONIVEL_PARA_PROSPECCAO
+  PRIMEIRO_CONTATO // alguém (ou o TA) mandou a primeira mensagem — é o "abordado"
+  /// ⭐ ELE FALOU DE VOLTA. O estágio que faltava, e faltava caro.
+  ///
+  /// Sem ele, um lead que respondeu à abordagem ficava em PRIMEIRO_CONTATO junto
+  /// com os que nunca disseram nada — e a diferença entre esses dois é a única
+  /// coisa que importa no dia seguinte a um disparo. EM_QUALIFICACAO não servia:
+  /// exige que a descoberta tenha COMEÇADO, e há um vão real entre "respondeu" e
+  /// "estamos qualificando" onde o lead esfria sem aparecer em lista nenhuma.
+  RESPONDEU
   EM_QUALIFICACAO // respondeu e a descoberta está em andamento
   QUALIFICADO // tem perfil, dor e interesse — vale tempo humano
   DEMO_AGENDADA // marcou a demonstração
@@ -6434,6 +6449,32 @@ model LeadMensagem {
   /// Quando uma pessoa marcou como lida. Alimenta `SiteLead.naoLidas`.
   lidaEm DateTime?
 
+  // ── ⭐ A TRILHA DO TURNO — acrescentada em 10/09/2026 ──────────────────────
+  //
+  // A conversa de 09/09 teve duas respostas da IA para uma sequência só, e fora
+  // de ordem. Não havia como provar de onde cada uma tinha vindo: `autor = IA`
+  // dizia que a máquina falou, e nada mais. Sem estes três campos o defeito é
+  // visível na tela e invisível no banco — o que faz "já corrigimos" virar
+  // opinião.
+
+  /// O turno a que esta mensagem pertence.
+  ///
+  /// ⭐ É o que junta as mensagens de ENTRADA que o lead mandou em sequência
+  /// ("oi", "é padaria", "só vendo pelo iFood") com a ÚNICA resposta que elas
+  /// produziram. Duas saídas com o mesmo `turnoId` são, por definição, o defeito
+  /// de resposta dupla — e agora se acha com uma consulta, não com o olho.
+  turnoId String?
+
+  /// Qual papel escreveu: `abordagem`, `recepcao`, `qualificacao`, `closer`.
+  /// Um cérebro só executa os quatro; sem esta coluna a métrica de cada papel
+  /// seria adivinhada pelo estágio do lead, que muda depois da mensagem.
+  papelDoAgente String?
+
+  /// De onde saiu a fala: `modelo`, `modelo-2a-tentativa`, `deterministico`.
+  /// Distingue o que o modelo escreveu do que o código escreveu quando ele
+  /// falhou — duas qualidades diferentes que hoje se contam como uma.
+  origemDaFala String?
+
   /// Avaliações de QA que citam esta mensagem como evidência.
   citadaEmQA LeadAvaliacaoCriterio[]
 
@@ -6441,7 +6482,46 @@ model LeadMensagem {
   @@index([leadId, direcao, ocorreuEm])
   @@index([status])
   @@index([ocorreuEm])
+  @@index([turnoId])
   @@map("lead_mensagens")
+}
+
+/// ⭐ O LOCK DE UMA CONVERSA — a trava que impede duas respostas para um turno.
+///
+/// ── POR QUE UMA TABELA, E NÃO UMA VARIÁVEL ─────────────────────────────────
+///
+/// O app roda em mais de um processo. Uma trava em memória protege um processo
+/// contra si mesmo e não protege nada contra o vizinho — e o defeito de 09/09 é
+/// exatamente o do vizinho: duas mensagens do lead chegam quase juntas, o
+/// webhook responde 200 e dispara o TA em `void` (sem esperar), e dois turnos
+/// correm em paralelo sobre o mesmo lead. Cada um lê o histórico SEM a mensagem
+/// do outro, e os dois respondem.
+///
+/// A trava só é trava se todos lerem do mesmo lugar. O banco é esse lugar.
+///
+/// ── POR QUE ELA EXPIRA ─────────────────────────────────────────────────────
+///
+/// Um processo que morre no meio do turno deixaria a conversa trancada para
+/// sempre — e uma trava sem expiração transforma uma falha de um turno em um
+/// lead que nunca mais é atendido. `expiraEm` é o conserto: passada a hora, a
+/// trava vale como inexistente e o próximo turno a toma.
+model TravaDaConversa {
+  /// O lead é a chave. Uma conversa, uma trava.
+  leadId String @id
+
+  /// Quem tomou: id do processo/turno. Serve para o dono soltar a SUA trava e
+  /// nunca a de outro — soltar a trava alheia é o mesmo que não ter trava.
+  donoDoTurno String
+
+  tomadaEm DateTime @default(now())
+  expiraEm DateTime
+
+  /// A última mensagem de entrada conhecida quando a trava foi tomada. Se
+  /// chegar outra depois, a geração em curso está velha e não deve ser enviada.
+  ultimaEntradaId String?
+
+  @@index([expiraEm])
+  @@map("travas_da_conversa")
 }
 
 /// A ficha 360º do lead — o painel direito da tela de atendimento.
@@ -6479,6 +6559,56 @@ model LeadQualificacao {
   /// gente. A fonte importa: "informado no formulário" e "deduzido da conversa"
   /// não valem a mesma coisa numa proposta.
   observacoes String? @db.Text
+
+  // ── ⭐ A MEMÓRIA DA CONVERSA — acrescentada em 10/09/2026 ──────────────────
+  //
+  // Até aqui esta tabela tinha UM escritor: a tela, quando um humano digitava.
+  // O TA extraía os mesmos fatos a cada turno (`sondagem.ts`), usava-os para
+  // calcular o score e **jogava fora**. Efeito medido na conversa de 09/09: o
+  // lead disse "padaria" e foi perguntado de novo sobre o tipo de cozinha; disse
+  // "só vendo pelo iFood" e foi perguntado de novo qual canal usava.
+  //
+  // Um agente que descobre e esquece não é um agente que qualifica — é um
+  // formulário que reinicia. Os campos abaixo são o que faltava para ele parar
+  // de perguntar o que já sabe.
+
+  /// De qual marketplace ele depende hoje (iFood, Rappi, 99Food).
+  marketplaceAtual String?
+  /// O que ele disse que NÃO quer, ou por que hesita. Uma por linha.
+  objecoes String[] @default([])
+  /// Recursos que ele mesmo puxou (CRM, automação, cardápio, fidelidade).
+  funcionalidadesDeInteresse String[] @default([])
+  /// O que ele pediu com todas as letras ("quero ver os planos", "me manda o link").
+  pedidoExplicito String? @db.Text
+
+  /// ⛔ ELE PEDIU PARA PARAR DE RESPONDER PERGUNTA.
+  ///
+  /// Não é o mesmo que opt-out: ele continua querendo falar, só não quer ser
+  /// interrogado. Sem esta marca o agente lia "não quero mais responder
+  /// perguntas" como uma objeção qualquer e voltava a sondar no turno seguinte —
+  /// que é exatamente o que aconteceu em 09/09.
+  pediuPararSondagem   Boolean   @default(false)
+  pediuPararSondagemEm DateTime?
+
+  /// Ele pediu para falar com uma pessoa. Marcado aqui além do handoff porque o
+  /// handoff pode ser recusado por política e o PEDIDO continua valendo.
+  pediuHumano   Boolean   @default(false)
+  pediuHumanoEm DateTime?
+
+  /// Sinal de irritação lido na conversa (0 = nada, 3 = explícito).
+  irritacao Int @default(0)
+
+  /// As perguntas que o agente JÁ FEZ, por chave estável.
+  ///
+  /// ⚠️ Existia uma dedução no lugar disto (`atender.ts`, `texto.includes(...)`
+  /// sobre as saídas): comparar a pergunta com o texto já enviado só acerta
+  /// enquanto o modelo escrever a pergunta com as MESMAS palavras — e ele
+  /// reformula, porque foi mandado reformular. Chave gravada não reformula.
+  perguntasJaFeitas String[] @default([])
+
+  /// Quando o TA escreveu aqui pela última vez. Separado de `updatedAt` para
+  /// distinguir o que a máquina soube do que uma pessoa corrigiu depois.
+  atualizadoPelaIaEm DateTime?
 
   atualizadoPorId String?
   atualizadoPor   InternalUser? @relation("FichaAtualizadaPor", fields: [atualizadoPorId], references: [id])
@@ -7234,7 +7364,28 @@ model LoteDeProspeccao {
 
   situacao SituacaoDoLote @default(RASCUNHO)
 
-  /// Teto próprio do lote, além do teto diário global.
+  /// A importação que originou este lote.
+  ///
+  /// ⭐ É o campo que transforma "16 lotes de 500" em UMA lista de 8.000 aos
+  /// olhos de quem operou. O fracionamento em 500 continua existindo porque é um
+  /// limite técnico de conferência; ele deixou de ser uma decisão de negócio
+  /// repetida dezesseis vezes.
+  importacaoId String?
+  importacao   ImportacaoDeLeads? @relation(fields: [importacaoId], references: [id], onDelete: SetNull)
+
+  /// ⚠️ COLUNA APOSENTADA EM 10/09/2026 — mantida, e sem efeito no caminho normal.
+  ///
+  /// Era o teto de saída POR LOTE, aplicado em `montarFilaDeProspeccao` por cima
+  /// do teto global. Com a base contínua ele virou um segundo teto invisível:
+  /// uma base unificada de 8.000 contatos, importada em 16 partes com 20 cada,
+  /// entregaria 320 por dia — e a tela mostraria o teto global de 2.000 ao lado,
+  /// sem ninguém entender por que a fila parava.
+  ///
+  /// A ordem do Diretor Geral é explícita: se a coluna precisar ficar por
+  /// compatibilidade, *"ela não pode reduzir silenciosamente a fila unificada"*.
+  /// Ela não reduz mais nada — a seleção não a lê. Não foi apagada porque
+  /// apagar coluna é migração destrutiva, e o histórico de quem importou com
+  /// que teto continua valendo como registro.
   limiteDiario Int @default(20)
 
   criadoPor   String?
@@ -7299,4 +7450,132 @@ model ItemDeProspeccao {
   @@index([situacao])
   @@index([whatsappDigits])
   @@map("itens_de_prospeccao")
+}
+
+/// Em que pé está o processamento de uma importação.
+enum SituacaoDaImportacao {
+  PROCESSANDO // as partes ainda estão entrando
+  CONCLUIDA // todas as partes entraram
+  FALHOU // parou no meio, e `erroTecnico` diz por quê
+  CANCELADA // alguém desfez; os lotes vão junto
+}
+
+/// ⭐ UMA IMPORTAÇÃO — o arquivo inteiro, e a resposta a "por que temos isto?".
+///
+/// ── O QUE ELA RESPONDE, E O QUE NÃO EXISTIA ────────────────────────────────
+///
+/// Antes de 10/09/2026 a casa sabia que um lead veio de `LISTA_PROSPECCAO` e
+/// sabia a `proveniencia` escrita à mão no lote. Não sabia de QUAL arquivo, com
+/// que nome, com quantas linhas, quantas recusadas e por quê, nem quem
+/// exatamente subiu — `criadoPor` era texto livre.
+///
+/// No dia em que alguém perguntar "de onde vocês tiraram o meu telefone?", a
+/// resposta precisa caber numa frase e ter lastro. É este registro.
+///
+/// ⚠️ **`criadoPor` continua existindo e continua sendo texto.** Não foi
+/// substituído: rótulo antigo apagado é histórico apagado. O que entrou ao lado
+/// dele é `criadoPorUserId`, um id que o banco reconhece — a mesma lição que
+/// derrubou a primeira rodada real em 08/09, quando um rótulo de tela foi
+/// entregue a uma coluna com chave estrangeira.
+model ImportacaoDeLeads {
+  id String @id @default(cuid())
+
+  /// O nome do arquivo como ele estava na máquina de quem subiu.
+  arquivoNome String
+  arquivoTipo String?
+  /// Impressão digital do conteúdo. É ela que reconhece a MESMA planilha subindo
+  /// de novo com outro nome — o caso que mais gera contato duplicado.
+  arquivoHash  String?
+  arquivoBytes Int?
+
+  linhasTotais        Int @default(0)
+  linhasAceitas       Int @default(0)
+  novos               Int @default(0)
+  duplicadosNoArquivo Int @default(0)
+  duplicadosEmOutras  Int @default(0)
+  jaEramLeads         Int @default(0)
+  telefonesInvalidos  Int @default(0)
+  linhasRecusadas     Int @default(0)
+
+  /// Por motivo, quantas. `{"Telefone com formato improvável": 12}`.
+  motivosDeRecusa Json?
+
+  /// Por que a empresa possui estes contatos. É a base legal declarada.
+  proveniencia String
+  /// Quem ou o que obteve a lista (busca no Google, feira, indicação, parceiro).
+  canalDeObtencao String?
+
+  /// Rótulo de tela de quem subiu. Texto, e legado — ver o aviso do modelo.
+  criadoPor String?
+  /// O id de verdade. É por ele que se responsabiliza alguém.
+  criadoPorUserId String?
+  criadoPorNome   String?
+
+  /// Qual leitura de colunas foi usada. Muda quando o parser muda, e é o que
+  /// explica duas importações do mesmo arquivo darem números diferentes.
+  versaoDoMapeamento String @default("v1")
+
+  situacao    SituacaoDaImportacao @default(PROCESSANDO)
+  erroTecnico String?
+
+  iniciadaEm  DateTime  @default(now())
+  concluidaEm DateTime?
+
+  canceladaEm          DateTime?
+  canceladaPor         String?
+  canceladaPorUserId   String?
+  motivoDoCancelamento String?
+
+  lotes LoteDeProspeccao[]
+
+  @@index([situacao, iniciadaEm])
+  @@index([arquivoHash])
+  @@map("importacoes_de_leads")
+}
+
+/// Um modelo aprovado da Meta **da Sala Comercial** — sincronizado, não digitado.
+///
+/// ── POR QUE NÃO É `MetaMessageTemplate` ────────────────────────────────────
+///
+/// `MetaMessageTemplate` tem `restaurantId` com cascade para `Restaurant`. Pôr
+/// o modelo da Foocci lá exigiria inventar um restaurante-fantasma para a
+/// própria Foocci — e a ordem é explícita: *"nunca misturar contatos, conversas,
+/// templates, números ou campanhas de tenants diferentes"*. Tabela separada AQUI
+/// é o isolamento, não a duplicação.
+///
+/// ── O QUE ELE ACABA ────────────────────────────────────────────────────────
+///
+/// `FOOCCI_SDR_MODELO_VARIAVEIS`: uma variável de ambiente onde uma pessoa
+/// digitava, à mão, quantos `{{n}}` o modelo aprovado tem. A Meta sabe esse
+/// número e responde por API. Pedir a um humano que copie um dado que a API
+/// entrega é criar uma segunda verdade que só diverge.
+model ModeloDeVendas {
+  id String @id @default(cuid())
+
+  /// O `phone_number_id` da Sala a que este modelo pertence. Guardado junto com
+  /// o WABA pelo mesmo motivo de `ProspeccaoConfig`: um sem o outro não prova de
+  /// qual conta o modelo veio.
+  phoneNumberId String
+  wabaId        String
+
+  nome    String
+  idioma  String
+  /// MARKETING, UTILITY, AUTHENTICATION — como a Meta classifica.
+  categoria String?
+  /// APPROVED, PENDING, REJECTED, DISABLED, PAUSED.
+  situacao String
+
+  /// ⭐ Quantos `{{n}}` o corpo tem, contado do que a Meta devolveu.
+  variaveis Int @default(0)
+
+  metaTemplateId  String?
+  motivoDaRecusa  String?
+  /// O corpo aprovado, para a tela mostrar o que o lead vai receber.
+  corpo String?
+
+  sincronizadoEm DateTime @default(now())
+
+  @@unique([phoneNumberId, nome, idioma])
+  @@index([situacao])
+  @@map("modelos_de_vendas")
 }

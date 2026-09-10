@@ -33,9 +33,33 @@
  * com o motivo escrito.
  */
 
-/** Teto duro. Nem variável de ambiente, nem chamador, passa disto. */
-export const TETO_DURO_POR_HORA = 30;
-export const TETO_DURO_POR_DIA = 200;
+/**
+ * ⛔ TETO DURO — LEVANTADO EM 10/09/2026, PELO CAMINHO QUE ESTE ARQUIVO EXIGE
+ *
+ * Era 30/hora e 200/dia. O Diretor Geral fixou a capacidade da operação em
+ * **2.000 contatos por dia, configurável**. Os dois números não podiam coexistir:
+ * um teto configurável de 2.000 contra um teto duro de 200 não é um teto
+ * configurável — é um número de tela que morre calado no nono por cento.
+ *
+ * Este arquivo já dizia como se faz: *"Quem precisar de mais que o teto duro
+ * muda o código, em revisão, com o motivo escrito."* É exatamente isto.
+ *
+ * ⚠️ **O TETO DA HORA SUBIU JUNTO, E ELE NÃO É DETALHE.** A 30/hora, 2.000/dia é
+ * inalcançável: 30 × 24 = 720. O teto do dia teria subido para 2.000 e a
+ * operação continuaria parando em 720 — um segundo teto silencioso, no lugar
+ * exato de onde o primeiro saiu. Com 200/hora, 2.000 cabe na janela autorizada
+ * de atendimento (≈11 horas) sem precisar de rajada.
+ *
+ * ── O QUE NÃO MUDOU, E É O PONTO ────────────────────────────────────────────
+ *
+ * O ambiente continua só APERTANDO. E o teto duro continua sendo o menor entre
+ * o que a casa decidiu e **o que a Meta permite** — ver `tetosEmVigor`, que
+ * aceita o tier medido. Capacidade autorizada pela Meta não é autorização para
+ * abordar: opt-out, horário, proveniência e descanso continuam valendo por cima,
+ * e nenhum deles mora aqui.
+ */
+export const TETO_DURO_POR_HORA = 200;
+export const TETO_DURO_POR_DIA = 2000;
 
 export interface Tetos {
   hora: number;
@@ -48,11 +72,28 @@ export interface Tetos {
  * `FOOCCI_SDR_TETO_HORA` e `FOOCCI_SDR_TETO_DIA` só APERTAM. Valor maior que o
  * teto duro é ignorado — silenciosamente não, o chamador vê o valor aplicado.
  * Valor inválido (letra, negativo, zero) cai no teto duro.
+ *
+ * ⭐ `tierDaMeta` é o teto de conversas iniciadas pela empresa que a **Meta**
+ * concede a este número (250, 1.000, 10.000, ilimitado). Ele aperta o dia como
+ * qualquer outro limite, e por um motivo diferente dos demais: estourá-lo não
+ * produz uma recusa isolada, produz recusa em série — e recusa em série é como
+ * a nota de qualidade do número cai. `null` (não medido) não afrouxa nada:
+ * ausência de informação não é informação, então o teto da casa continua valendo
+ * sozinho.
  */
-export function tetosEmVigor(env: NodeJS.ProcessEnv = process.env): Tetos {
+export function tetosEmVigor(
+  env: NodeJS.ProcessEnv = process.env,
+  tierDaMeta?: number | null,
+): Tetos {
+  const dia = aperta(env.FOOCCI_SDR_TETO_DIA, TETO_DURO_POR_DIA);
+  const tier =
+    typeof tierDaMeta === "number" && Number.isInteger(tierDaMeta) && tierDaMeta > 0
+      ? tierDaMeta
+      : null;
+
   return {
     hora: aperta(env.FOOCCI_SDR_TETO_HORA, TETO_DURO_POR_HORA),
-    dia: aperta(env.FOOCCI_SDR_TETO_DIA, TETO_DURO_POR_DIA),
+    dia: tier === null ? dia : Math.min(dia, tier),
   };
 }
 
