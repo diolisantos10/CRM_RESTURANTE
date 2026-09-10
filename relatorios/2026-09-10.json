@@ -1,0 +1,107 @@
+{
+  "produto": "foocci",
+  "data": "2026-09-10",
+  "gerado_em_utc": "2026-09-10T11:20:00Z",
+  "assinado_por": "Diretor do Foocci",
+
+  "entrega_anterior": {
+    "relatorio_2026_09_09": "AUSENTE",
+    "motivo": "a sessao ficou parada e o gatilho nao a acordou a tempo; a chamada de 09/09 so foi lida hoje, junto com a de 10/09",
+    "fonte": "duas notificacoes na fila, enfileiradas em 2026-09-09T11:05:57Z e 2026-09-10T11:05:31Z"
+  },
+
+  "saude": {
+    "producao_commit": "9686aa1d",
+    "producao_ramo": "claude/remove-legacy-runner-q8iXa",
+    "db": "ok",
+    "uptime_segundos": 92052,
+    "requisicoes_24h": 32271,
+    "erros_5xx_24h": 3,
+    "erros_4xx_24h": 140,
+    "taxa_5xx_24h_pct": 0.009,
+    "fonte": "GET /api/health e Railway http-requests, janela de 24h"
+  },
+
+  "cliente": {
+    "pedidos_hoje": null,
+    "comandas_enfileiradas_hoje": null,
+    "clientes_sem_resposta_sushi_cazza": null,
+    "leads_no_funil": null,
+    "restaurantes_com_whatsapp_meta_configurado": 1,
+    "fonte": "o numero de restaurantes veio da varredura de credencial (totalConfigs). O resto NAO foi medido: sem porta de leitura no banco de producao"
+  },
+
+  "prospeccao": {
+    "contatos_abordados_hoje": 0,
+    "contatos_abordados_09_09": 0,
+    "contatos_queimados_08_09": 6,
+    "rodada_automatica_09_09": "abortou no pre-voo, 0 abordados e 0 pulados — nenhum item tocado",
+    "rodada_automatica_10_09": "ainda nao rodou; o cron dispara as 12:00 UTC e este relatorio fecha antes",
+    "bloqueio": "o modelo aprovado espera um numero de {{n}} diferente do 1 que o codigo manda — (#132000) da Meta",
+    "fonte": "GitHub Actions, execucao agendada 34372152231 e pre-voo 34469613110 de hoje as 11:07 UTC"
+  },
+
+  "produtividade": {
+    "merges_no_ramo_de_deploy_desde_o_relatorio_de_08_09": 23,
+    "merges_em_09_e_10_09": 4,
+    "prs_meus_mergeados_no_periodo": 11,
+    "prs_meus_mergeados_lista": [218, 219, 221, 222, 223, 224, 225, 226, 227, 228, 229],
+    "prs_meus_abertos": 0,
+    "prs_de_outra_sessao_mergeados_apos_os_meus": [230, 231],
+    "fonte": "git log origin/claude/remove-legacy-runner-q8iXa e GitHub"
+  },
+
+  "qualidade": {
+    "tsc_limpo": true,
+    "testes_verdes": 8283,
+    "testes_pulados": 38,
+    "testes_vermelhos": 0,
+    "delta_testes_desde_08_09": 236,
+    "revisao_adversarial_do_qualidade": "1 (decisao A, antes de subir): 0 travas derrubadas, 4 achados reais consertados no mesmo dia",
+    "mutacoes_rodadas_no_periodo": 6,
+    "mutacoes_que_sobreviveram": 0,
+    "fonte": "npx tsc --noEmit e npx vitest run no ramo de deploy hoje as 11:12 UTC"
+  },
+
+  "dinheiro": {
+    "faturamento_hoje": null,
+    "pedidos_pagos_hoje": null,
+    "restaurantes_ativos": null,
+    "fonte": "nao medido: sem porta de leitura no banco de producao"
+  },
+
+  "risco": {
+    "p0_aberto": 0,
+    "p1_abertos": 2,
+    "p1_lista": [
+      "a prospeccao nao envia: falta o id da conta (WABA) ou o texto do modelo aprovado — depende de quem tem o Business Manager",
+      "lead do site anterior a 14/08/2026 tem consentAt nulo e ficou inabordavel pelo portao de consentimento; ninguem contou quantos sao"
+    ],
+    "backup_pitr_ligado": false,
+    "backup_wal_archive_presente": false,
+    "contatos_perdidos_no_periodo": 6,
+    "fonte": "grep por WAL_ARCHIVE no ramo de deploy hoje; logs das rodadas de 08/09"
+  },
+
+  "bloqueio_do_ceo": {
+    "itens": 1,
+    "lista": [
+      "a prospeccao para num dado so: FOOCCI_SALES_WABA_ID no ambiente OU o texto do modelo aprovado com os {{n}} no lugar. Os tres caminhos automaticos estao medidos e os tres falham com este token"
+    ]
+  },
+
+  "fios_permanentes": {
+    "backup": "PITR desligado, sem WAL_ARCHIVE_* — igual a ontem e a 28/08. Nenhuma restauracao provada. NAO houve atualizacao automatica de banco no periodo.",
+    "cliente_sem_resposta": "WhatsAppAiReturnPolicy continua SEM chamador de producao: os unicos que a importam sao um diagnostico e a rota de cron que mede. Igual a 08/09. Quantos clientes ficaram mudos hoje: nao medido.",
+    "agente_solto": "a escada continua SHADOW_ONLY por padrao no codigo (BrainFreeFormConfigService). A proporcao 1 em 21 NAO foi medida hoje: exige o banco."
+  },
+
+  "nao_medido": [
+    "tudo que depende do banco de producao: pedidos, faturamento, leads, listas, clientes sem resposta, a proporcao do agente solto",
+    "o relatorio de 09/09 inteiro — a sessao nao foi acordada e a chamada so chegou hoje",
+    "quantos leads do site tem consentAt nulo e ficaram inabordaveis pela trava nova",
+    "o valor de qualquer variavel de ambiente: a leitura no Railway passou a ser recusada nesta sessao",
+    "se o #230 (id da conta pelo webhook) ja capturou alguma conta — depende de chegar mensagem no numero de vendas, e ate 11:07 UTC de hoje o pre-voo ainda nao achava a conta",
+    "quantos dos 3 erros 5xx das ultimas 24h sao do meu caminho: nao abri os logs por rota"
+  ]
+}
