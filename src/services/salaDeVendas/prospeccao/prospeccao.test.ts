@@ -322,8 +322,23 @@ describe("liberar o lote", () => {
 // A FILA DO DIA
 // ═══════════════════════════════════════════════════════════════════════════
 
-function dbDeFila(config: any, itens: any[] = [], abordagensHoje = 0, leadNaBase: any = null) {
+/**
+ * @param abordagensHoje quantas saíram desde a meia-noite de São Paulo.
+ * @param janela quantas saíram nas últimas 24h corridas (a conta da Meta) e na
+ *   última hora. Separado de `abordagensHoje` de propósito: os dois divergem
+ *   todo dia, e é dessa divergência que nasce o defeito da meia-noite.
+ */
+function dbDeFila(
+  config: any,
+  itens: any[] = [],
+  abordagensHoje = 0,
+  leadNaBase: any = null,
+  janela: { nas24h?: number; naHora?: number } = {},
+) {
   const leadsCriados: any[] = [];
+  const nas24h = janela.nas24h ?? 0;
+  const naHora = janela.naHora ?? 0;
+
   return {
     leadsCriados,
     db: {
@@ -341,7 +356,18 @@ function dbDeFila(config: any, itens: any[] = [], abordagensHoje = 0, leadNaBase
           return { id: "novo-lead", optOutAt: null, lastContactedAt: null };
         }),
       },
-      leadMensagem: { count: vi.fn().mockResolvedValue(0) },
+      leadMensagem: {
+        // O freio faz DUAS contagens na mesma tabela — hora e 24h — e o dublê
+        // precisa distinguir qual é qual, senão um teste da janela derrubaria o
+        // teto da hora junto e passaria pelo motivo errado. A janela pedida
+        // está no `gte`.
+        count: vi.fn(async (args: any) => {
+          const gte: Date | undefined = args?.where?.ocorreuEm?.gte;
+          if (!gte) return 0;
+          const atras = AGORA.getTime() - gte.getTime();
+          return atras <= 60 * 60 * 1000 + 1000 ? naHora : nas24h;
+        }),
+      },
     } as any,
   };
 }
@@ -671,5 +697,78 @@ describe("o descanso configurável só aperta", () => {
 
     expect(fila.liberados).toHaveLength(0);
     expect(fila.barrados[0]!.decisao.reason).toBe("DESCANSO_ATIVO");
+  });
+});
+
+/**
+ * ⭐⭐ A JANELA MÓVEL DE 24 HORAS DA META
+ *
+ * Evidência confirmada no Gerenciador do WhatsApp em 10/09/2026: o número da
+ * Foocci pode iniciar **2.000 conversas numa janela contínua de 24 horas**.
+ *
+ * ── O DEFEITO QUE ESTES CASOS IMPEDEM ──────────────────────────────────────
+ *
+ * `contarAbordagensDeHoje` conta pelo DIA CIVIL de São Paulo. A Meta não. À
+ * 00h01, o contador do dia zera e a fila ofereceria o teto inteiro — sobre um
+ * saldo que a Meta já gastou nas horas anteriores.
+ *
+ * O excedente não vira um erro isolado: vira recusa em série, e recusa em série
+ * é como a nota de qualidade do número cai. O número é o mesmo por onde a casa
+ * atende quem já é cliente.
+ */
+describe("⭐⭐ o saldo é o da janela de 24h, não o do dia civil", () => {
+  const LIGADA = { outboundLigado: true, limiteDiario: 2000, pausadoEm: null };
+
+  it("⛔ à meia-noite o dia zera, e a fila NÃO oferece o teto inteiro", async () => {
+    // O caso exato: `usadosHoje = 0` (o dia acabou de virar) e 1.900 conversas
+    // pesando das últimas 24 horas. Sobram 100, não 2.000.
+    const itens = Array.from({ length: 150 }, (_, i) => ({ ...ITEM, id: `i${i}` }));
+    const { db } = dbDeFila(LIGADA, itens, 0, null, { nas24h: 1900 });
+
+    const fila = await montarFilaDeProspeccao(db, { canalPronto: true, agora: AGORA });
+
+    expect(fila.usadosHoje).toBe(0);
+    expect(fila.usadosNaJanela).toBe(1900);
+    expect(fila.saldoDaJanela).toBe(100);
+
+    // A prova: a consulta pediu no máximo o saldo da janela, e não o teto.
+    const pedidos = (db.itemDeProspeccao.findMany as any).mock.calls[0][0].take;
+    expect(pedidos).toBeLessThanOrEqual(100);
+  });
+
+  it("⛔ janela esgotada fecha a fila, mesmo com o dia civil zerado", async () => {
+    const { db } = dbDeFila(LIGADA, [ITEM], 0, null, { nas24h: 2000 });
+
+    const fila = await montarFilaDeProspeccao(db, { canalPronto: true, agora: AGORA });
+
+    expect(fila.liberados).toHaveLength(0);
+    expect(fila.saldoDaJanela).toBe(0);
+    // A frase precisa dizer JANELA, e não "teto do dia": quem lê às 00h05
+    // precisa entender por que não pode mandar com o contador do dia em zero.
+    expect(fila.motivoDaFilaVazia?.toLowerCase()).toContain("24h");
+  });
+
+  it("⭐ a sonda de controle: com a janela livre, os 2.000 estão disponíveis", async () => {
+    // Sem este caso, os dois acima passariam numa implementação que
+    // simplesmente nunca libera nada — e a operação ficaria parada com a tela
+    // dizendo que está tudo bem.
+    const itens = Array.from({ length: 3 }, (_, i) => ({ ...ITEM, id: `i${i}` }));
+    const { db } = dbDeFila(LIGADA, itens, 0, null, { nas24h: 0 });
+
+    const fila = await montarFilaDeProspeccao(db, { canalPronto: true, agora: AGORA });
+
+    expect(fila.saldoDaJanela).toBe(2000);
+    expect(fila.liberados.length).toBeGreaterThan(0);
+  });
+
+  it("⛔ e o teto da HORA continua valendo por cima da janela", async () => {
+    // A janela de 24h com saldo de sobra não autoriza rajada: 2.000 numa hora
+    // queima o número tão rápido quanto 2.500 num dia.
+    const { db } = dbDeFila(LIGADA, [ITEM], 0, null, { nas24h: 10, naHora: 200 });
+
+    const fila = await montarFilaDeProspeccao(db, { canalPronto: true, agora: AGORA });
+
+    expect(fila.liberados).toHaveLength(0);
+    expect(fila.motivoDaFilaVazia?.toLowerCase()).toContain("hora");
   });
 });

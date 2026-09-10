@@ -51,6 +51,10 @@ interface Fila {
   motivoDaFilaVazia: string | null;
   usadosHoje: number;
   tetoDoDia: number;
+  /** Conversas iniciadas nas últimas 24h corridas — a conta da Meta. */
+  usadosNaJanela: number;
+  /** O que a Meta ainda deixa mandar agora. É este que limita a fila. */
+  saldoDaJanela: number;
 }
 
 interface Lote {
@@ -206,6 +210,21 @@ export function ProspeccaoClient() {
             <p className="mt-0.5 text-[12.5px] text-muted">
               {fila.usadosHoje} de {fila.tetoDoDia} abordagens hoje
               {interruptor.motivo ? ` · ${interruptor.motivo}` : ""}
+            </p>
+            {/*
+              ⭐ O NÚMERO QUE MANDA, e ele não é o de cima.
+              A Meta conta conversas iniciadas numa janela CORRIDA de 24 horas —
+              não numa cota que zera à meia-noite. Mostrar só "abordagens hoje"
+              faria a tela dizer "0 de 2.000" à 00h05 com 1.500 conversas ainda
+              pesando de ontem. Os dois aparecem, e o saldo vem em destaque.
+            */}
+            <p className="mt-0.5 text-[12.5px] font-semibold text-ink2">
+              Saldo da Meta agora: <span className="tabular-nums">{fila.saldoDaJanela}</span>{" "}
+              conversas
+              <span className="font-normal text-muted">
+                {" "}
+                · {fila.usadosNaJanela} iniciadas nas últimas 24h
+              </span>
             </p>
           </div>
 
