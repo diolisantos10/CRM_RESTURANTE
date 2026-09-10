@@ -7206,6 +7206,16 @@ model ProspeccaoConfig {
   pausadoPor String?
   motivo     String?
 
+  /// A conta do WhatsApp (WABA) da Sala Comercial, aprendida do webhook.
+  ///
+  /// ⚠️ Guardada JUNTO com o número a que ela pertence, e nunca sozinha: um
+  /// WABA sem o número que o originou não prova nada, e trocar o número de
+  /// vendas sem trocar o WABA faria a casa consultar a conta errada — inclusive
+  /// a de um restaurante. As duas colunas andam em par, ou nenhuma vale.
+  salaWabaId          String?
+  salaWabaPhoneNumber String?
+  salaWabaVistoEm     DateTime?
+
   atualizadoEm DateTime @updatedAt
   atualizadoPor String?
 

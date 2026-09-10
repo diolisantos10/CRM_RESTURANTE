@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { abordarLead, primeiroNome, saudacaoDoLead, resumoDoModelo, modeloConfigurado } from "./abordar";
+import { montarParametros, abordarLead, primeiroNome, saudacaoDoLead, resumoDoModelo, modeloConfigurado } from "./abordar";
 
 const enviarModelo = vi.hoisted(() => vi.fn());
 const canalPronto = vi.hoisted(() => vi.fn(() => true));
@@ -241,12 +241,18 @@ describe("o primeiro nome", () => {
     expect(primeiroNome(null)).toBeNull();
   });
 
-  it("lead sem nome utilizável manda modelo sem variável", async () => {
-    const { db } = banco({ lead: { nome: "5511999998888" } });
-    await abordarLead(db, { leadId: "L1", autorUserId: "u1", agora: AGORA });
-
-    const modelo = enviarModelo.mock.calls[0]![2] as { parametros: string[] };
-    expect(modelo.parametros).toEqual([]);
+  it("⛔ lead sem nome utilizável NÃO vira payload menor — é recusado", () => {
+    // ── MUDOU EM 10/09/2026 (P0.2) ────────────────────────────────────────
+    // Antes, um contato sem nome utilizável mandava `parametros: []` — payload
+    // MENOR contra um modelo de `{{1}}`, e a Meta recusava. O formato do que
+    // sai não pode depender do contato: ou tem o dado, ou não sai.
+    const r = montarParametros(1, {
+      nome: "5511999998888",
+      restaurante: null,
+      fonte: null,
+      cidade: null,
+    });
+    expect(r.ok).toBe(false);
   });
 });
 

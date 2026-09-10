@@ -44,6 +44,8 @@ export const ENTRADA = `${COMERCIAL}/entrar`;
 export const ROTAS = {
   filas: COMERCIAL,
   conversas: `${COMERCIAL}/conversas`,
+  /** Todos os leads numa tabela só — inclusive quem sumiria das filas. */
+  carteira: `${COMERCIAL}/carteira`,
   funil: `${COMERCIAL}/funil`,
   agentes: `${COMERCIAL}/agentes`,
   precos: `${COMERCIAL}/precos`,
@@ -108,6 +110,9 @@ export interface Aba {
 const PARA_TODOS: readonly Aba[] = [
   { href: ROTAS.filas, rotulo: "Filas" },
   { href: ROTAS.conversas, rotulo: "Conversas" },
+  // Logo depois de Conversas, e antes do Funil: quem abre a Sala de manhã
+  // procura primeiro quem ficou sem resposta, não o desenho do funil.
+  { href: ROTAS.carteira, rotulo: "Carteira" },
   { href: ROTAS.funil, rotulo: "Funil" },
   // Os números da própria pessoa. Fica em `PARA_TODOS` porque não há de quem
   // esconder: são os dela. O CEO abre e vê os dele, que é o que faz sentido —

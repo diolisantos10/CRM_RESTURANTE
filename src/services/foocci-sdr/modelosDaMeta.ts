@@ -91,6 +91,22 @@ export async function contaDoNumeroDeVendas(
    * saída de emergência — quem tem o id em mãos destrava em um minuto — e os
    * caminhos automáticos continuam existindo para quando não houver ninguém.
    */
+  // ── Caminho 0a: o que a casa APRENDEU do webhook ──
+  //
+  // ⭐ 10/09/2026, ordem do Diretor Geral: *"persistir o WABA da Sala a partir
+  // de envelope válido do número comercial... manter a variável como fallback,
+  // não como única fonte."*
+  //
+  // O `entry[].id` do webhook É o WABA, e o #230 já o encontra. Até hoje ele só
+  // ia para o log, pedindo que alguém copiasse para a variável — dependência
+  // humana num dado que chega sozinho, várias vezes por dia.
+  //
+  // ⚠️ Só vale se estiver casado com o número de vendas ATUAL. Trocar o número
+  // sem trocar o WABA faria a casa consultar a conta errada — e a conta errada,
+  // aqui, é a de um restaurante cliente.
+  const aprendido = await wabaAprendido(id);
+  if (aprendido) return { ok: true, wabaId: aprendido };
+
   const daMao = (process.env.FOOCCI_SALES_WABA_ID ?? "").trim();
   if (daMao) return { ok: true, wabaId: daMao };
 
@@ -338,15 +354,55 @@ export async function conferirModeloDeAbordagem(token: string): Promise<Conferen
     };
   }
 
-  if (achado.variaveis > 1) {
+  // ⛔ CORRESPONDÊNCIA EXATA, e não "no máximo uma".
+  //
+  // ── O DEFEITO, ATÉ 10/09/2026 ─────────────────────────────────────────────
+  //
+  // Esta conferência aceitava 0 OU 1 variável e declarava que o envio manda 1.
+  // Mas `abordarLead` montava `nome ? [nome] : []` — **um payload que muda com
+  // o contato**. Contra um modelo de `{{1}}`, o contato com nome passava e o
+  // sem nome era recusado pela Meta; contra um modelo de zero variáveis, o
+  // contato COM nome é que era recusado.
+  //
+  // Ou seja: o pré-voo dizia "pronto" e a rodada descobria o contrário, contato
+  // a contato. O template aprovado tem contrato FIXO; o payload também precisa
+  // ter. Quem manda no número é a Meta — este código só confere se bate.
+  const esperados = achado.variaveis;
+  if (esperados !== parametrosQueOEnvioMonta()) {
     return {
       pronto: false,
       causa: "variaveisNaoBatem",
-      detalhe: `o modelo espera ${achado.variaveis} variáveis e o envio manda 1`,
+      detalhe:
+        `o modelo aprovado espera ${esperados} variável(is) e o envio monta ` +
+        `${parametrosQueOEnvioMonta()}. Ajuste FOOCCI_SDR_MODELO_VARIAVEIS para ${esperados}.`,
     };
   }
 
-  return { pronto: true, modelo: achado, parametrosQueMandamos: 1 };
+  return { pronto: true, modelo: achado, parametrosQueMandamos: esperados };
+}
+
+/**
+ * Quantas variáveis o envio monta — o contrato do NOSSO lado.
+ *
+ * Vem do ambiente porque o contrato é da Meta, não do código: o modelo aprovado
+ * define o número, e o pré-voo confere se este valor bate com ele. Sem a
+ * variável, o padrão é **1** (a saudação), que é o modelo em uso hoje.
+ *
+ * ⚠️ Valor inválido cai no padrão em vez de virar zero: um campo em branco no
+ * painel não pode, sozinho, mudar o formato do que sai para o cliente.
+ */
+export function parametrosQueOEnvioMonta(env: NodeJS.ProcessEnv = process.env): number {
+  const bruto = (env.FOOCCI_SDR_MODELO_VARIAVEIS ?? "").trim();
+
+  // ⚠️ VAZIO NÃO É ZERO, e o teste pegou isto na primeira rodada: `Number("")`
+  // é `0`, e `0` é inteiro — a variável AUSENTE virava "mande zero parâmetros"
+  // silenciosamente, mudando o formato do que sai para o cliente sem ninguém
+  // ter decidido. Ausência cai no padrão; zero só vale escrito.
+  if (bruto === "") return 1;
+
+  const n = Number(bruto);
+  if (!Number.isInteger(n) || n < 0 || n > 10) return 1;
+  return n;
 }
 
 /**
@@ -367,4 +423,80 @@ export function preVooDoModelo(): Promise<ConferenciaDoModelo> {
     causa: "semToken",
     detalhe: "FOOCCI_SALES_ACCESS_TOKEN não está no ambiente",
   }));
+}
+
+
+// ─── O WABA aprendido do webhook ─────────────────────────────────────────────
+
+/**
+ * O WABA persistido, **se** ele pertencer ao número de vendas de hoje.
+ *
+ * Devolve `null` em qualquer dúvida — sem registro, registro de outro número,
+ * ou banco indisponível. `null` manda o chamador seguir para os outros
+ * caminhos; um palpite mandaria a casa consultar a conta errada.
+ */
+export async function wabaAprendido(phoneNumberId: string): Promise<string | null> {
+  try {
+    const { prisma } = await import("@/lib/prisma");
+    const cfg = await prisma.prospeccaoConfig.findUnique({
+      where: { id: "singleton" },
+      select: { salaWabaId: true, salaWabaPhoneNumber: true },
+    });
+    if (!cfg?.salaWabaId) return null;
+    // O par tem de bater. WABA sem número casado não prova nada.
+    if (cfg.salaWabaPhoneNumber !== phoneNumberId) return null;
+    return cfg.salaWabaId;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Aprende o WABA a partir de um envelope de webhook do número de vendas.
+ *
+ * ── ⚠️ SÓ ESCREVE QUANDO TEM CERTEZA DOS DOIS LADOS ────────────────────────
+ *
+ * Exige que o `phoneNumberId` do envelope seja EXATAMENTE o número de vendas
+ * configurado. Sem essa conferência, um envelope de restaurante gravaria o WABA
+ * do cliente como se fosse o da Sala — e a partir daí a casa consultaria
+ * modelos, limites e qualidade da conta errada.
+ *
+ * Idempotente e barata: só escreve quando o valor MUDA, então o caminho normal
+ * (o mesmo WABA chegando o dia inteiro) não toca o banco.
+ *
+ * **Nunca lança.** É chamada de dentro do webhook, e um erro aqui não pode
+ * derrubar o recebimento de uma mensagem de cliente.
+ */
+export async function aprenderWabaDaSala(input: {
+  phoneNumberId: string | null | undefined;
+  wabaId: string | null | undefined;
+  agora?: Date;
+}): Promise<void> {
+  const numero = (input.phoneNumberId ?? "").trim();
+  const waba = (input.wabaId ?? "").trim();
+  if (!numero || !waba) return;
+
+  const daSala = foocciSalesPhoneNumberId();
+  if (!daSala || numero !== daSala) return;
+
+  try {
+    const { prisma } = await import("@/lib/prisma");
+    const cfg = await prisma.prospeccaoConfig.findUnique({
+      where: { id: "singleton" },
+      select: { salaWabaId: true, salaWabaPhoneNumber: true },
+    });
+    if (cfg?.salaWabaId === waba && cfg?.salaWabaPhoneNumber === numero) return;
+
+    await prisma.prospeccaoConfig.update({
+      where: { id: "singleton" },
+      data: {
+        salaWabaId: waba,
+        salaWabaPhoneNumber: numero,
+        salaWabaVistoEm: input.agora ?? new Date(),
+      },
+    });
+    console.info("[prospeccao] WABA da Sala aprendido do webhook", { numero, waba });
+  } catch (e) {
+    console.error("[prospeccao] não consegui gravar o WABA da Sala", e);
+  }
 }
