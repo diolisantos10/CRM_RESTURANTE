@@ -775,6 +775,24 @@ function oConectorJaAvisou(conector: ResultadoDoConector | null): boolean {
  * nada disso — o pior que acontece é o lead ficar mais um turno sem etiqueta, e
  * o próximo turno tenta de novo com a conversa maior.
  */
+/**
+ * Qual marketplace aparece nos canais que ele citou.
+ *
+ * ⚠️ Devolve `null` quando nenhum aparece, e nunca "nenhum": a diferença entre
+ * *"ele disse que não usa marketplace"* e *"ele não falou de marketplace"* é a
+ * diferença entre um argumento de venda e um chute. Ausência de informação não é
+ * informação (guardrail 1).
+ */
+function marketplaceEntre(canais: string[] | null | undefined): string | null {
+  const conhecidos = ["ifood", "rappi", "99food", "uber eats"];
+  for (const canal of canais ?? []) {
+    const baixo = canal.toLowerCase().trim();
+    const achado = conhecidos.find((m) => baixo.includes(m));
+    if (achado) return canal.trim();
+  }
+  return null;
+}
+
 async function qualificar(
   db: Cliente,
   p: { leadId: string; mensagem: string; agora: Date },
@@ -828,6 +846,49 @@ async function qualificar(
     // primeiro argumento e usa o segundo só para preencher buraco.
     const sinais = juntarSinais({ ...daConversa, mensagensDoLead }, doFormulario);
 
+    // ── ⭐ O QUE FALTAVA: GRAVAR O QUE ELE ACABOU DE DESCOBRIR ─────────────
+    //
+    // Até 10/09/2026 a linha acima era a última: os fatos extraídos viravam
+    // pontuação e sumiam. `LeadQualificacao` existia desde sempre e tinha UM
+    // escritor — a tela, quando um humano digitava. O agente descobria "padaria",
+    // "só iFood", "movimento fraco" a cada turno e esquecia a cada turno.
+    //
+    // Sem esta chamada, `blocoDeMemoria` chegaria vazio ao prompt em produção e
+    // toda a correção de memória seria enfeite: verde no teste, e o mesmo agente
+    // perguntando de novo o que a pessoa já respondeu.
+    //
+    // ⚠️ Só campos EXTRAÍDOS. `objetivo` e `objecoes` não são deduzidos daqui
+    // porque a sondagem não os extrai — inventá-los para "preencher a ficha"
+    // seria pôr no CRM uma frase que ninguém disse.
+    await gravarMemoria(
+      db,
+      p.leadId,
+      {
+        segmento: ficha?.tipo?.trim() || null,
+        sistemaAtual: sinais.sistemaAtual ?? null,
+        marketplaceAtual: marketplaceEntre(sinais.canaisAtuais),
+        canaisAtuais: sinais.canaisAtuais ?? [],
+        dorPrincipal: sinais.dorPrincipal ?? null,
+        unidades: sinais.unidades ?? null,
+        volumeMensal: sinais.volumeMensal ?? null,
+        urgencia: sinais.urgencia ?? null,
+        poderDeDecisao: sinais.poderDeDecisao ?? null,
+        faixaDeOrcamento: sinais.faixaDeOrcamento ?? null,
+      },
+      p.agora,
+    );
+
+    // ⚠️ O SCORE VEM DEPOIS DA MEMÓRIA, e a ordem foi corrigida em 10/09/2026
+    // porque o teste pegou o contrário.
+    //
+    // Estava antes. Como as duas escritas dividem o mesmo `try`, qualquer falha
+    // no score — uma tabela indisponível, um fator estranho — levava junto a
+    // gravação da memória, em silêncio. E as duas não valem a mesma coisa: o
+    // score é um número DERIVADO, que o próximo turno recalcula do zero; a
+    // memória é o único registro de que a pessoa disse "padaria". Perdida ela,
+    // perde-se para sempre, e o agente volta a perguntar.
+    //
+    // Na dúvida sobre a ordem de duas escritas, primeiro a que não se recupera.
     await escreverOScore(db, { leadId: p.leadId, sinais, agora: p.agora });
   } catch {
     // Modelo fora do ar, banco recusando a escrita, JSON estranho. Nada disso

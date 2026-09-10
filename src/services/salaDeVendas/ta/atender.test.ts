@@ -33,6 +33,8 @@ interface Ajustes {
   timeNoBanco?: Array<{ id: string; nome: string; email: string }>;
   /** Quantos clientes abertos cada agente já tem, para o desempate de carga. */
   cargaDosAgentes?: Array<{ atendenteUserId: string; _count: { _all: number } }>;
+  /** O que a casa JÁ sabia sobre o lead. `null` = ficha em branco. */
+  qualificacao?: Record<string, unknown> | null;
 }
 
 function banco(a: Ajustes = {}) {
@@ -79,6 +81,15 @@ function banco(a: Ajustes = {}) {
     },
     siteLeadInteraction: { create: vi.fn().mockResolvedValue({}) },
     leadHandoff: { create: vi.fn().mockResolvedValue({ id: "h1" }) },
+    // ⭐ A MEMÓRIA DO LEAD, no dublê, desde 10/09/2026.
+    //
+    // Não é adorno: `lerMemoria` roda ANTES de compor e `gravarMemoria` roda
+    // depois de qualificar. Sem esta tabela aqui, as duas caem no ramo de erro e
+    // os casos passariam sem exercitar nada da memória — verde por vacuidade.
+    leadQualificacao: {
+      findUnique: vi.fn().mockResolvedValue(a.qualificacao ?? null),
+      upsert: vi.fn().mockResolvedValue({}),
+    },
     // Desde 27/08/2026 a tomada do lead escolhe um agente do time e grava o
     // `atendenteUserId` dele. `a.timeNoBanco` deixa o caso decidir se o time
     // existe: vazio é o estado de uma instalação nova, e o TA precisa
@@ -611,5 +622,85 @@ describe("⭐ o aviso de que vem gente não pode falhar calado", () => {
     expect(gritos.length, "gritou num turno que não teve handoff nenhum").toBe(0);
 
     erro.mockRestore();
+  });
+});
+
+/**
+ * ⭐⭐ QUEM CHAMA A MEMÓRIA — o defeito predileto desta casa, medido cinco vezes.
+ *
+ * `LeadQualificacao` existe desde sempre. `sondagem.ts` extrai os fatos desde
+ * sempre. O que não existia era **a linha que liga os dois**: o turno pontuava
+ * com os fatos e os jogava fora, e a tabela tinha um único escritor — a tela,
+ * quando um humano digitava.
+ *
+ * Peça escrita, testada e sem chamador é o defeito que esta casa já cometeu
+ * cinco vezes (`materializarLead`, `motivoDeHandoffPorPreco`, e outros três).
+ * Os casos abaixo existem para que o sexto não seja este. Eles não conferem se
+ * a memória é bonita: conferem que **alguém a chama em produção**.
+ */
+describe("⭐⭐ a memória do lead é LIDA antes de compor e GRAVADA depois", () => {
+  it("⭐ o turno grava o que descobriu — sem isto, o prompt chega vazio para sempre", async () => {
+    const db = banco({ lead: { tipo: "padaria" } });
+
+    await atenderComOTA(db as never, { leadId: "l1", mensagem: PERGUNTA, agora: AGORA });
+
+    expect(
+      db.leadQualificacao.upsert,
+      "ninguém gravou a memória — os fatos extraídos morreram no turno, como antes de 10/09",
+    ).toHaveBeenCalled();
+
+    const escrito = db.leadQualificacao.upsert.mock.calls[0]![0] as {
+      where: { leadId: string };
+      update: Record<string, unknown>;
+    };
+    expect(escrito.where.leadId).toBe("l1");
+    expect(escrito.update.segmento).toBe("padaria");
+    // Carimbo da máquina, separado do `updatedAt`: distingue o que a IA soube do
+    // que uma pessoa corrigiu depois.
+    expect(escrito.update.atualizadoPelaIaEm).toBeInstanceOf(Date);
+  });
+
+  it("⭐ e a memória é LIDA no mesmo turno — a leitura acontece, não só a escrita", async () => {
+    const db = banco({ qualificacao: { leadId: "l1", segmento: "padaria" } });
+
+    await atenderComOTA(db as never, { leadId: "l1", mensagem: PERGUNTA, agora: AGORA });
+
+    expect(
+      db.leadQualificacao.findUnique,
+      "o turno compôs sem consultar o que já sabia sobre a pessoa",
+    ).toHaveBeenCalledWith({ where: { leadId: "l1" } });
+  });
+
+  it('⛔ "não quero mais responder perguntas" é gravado NO MESMO turno, não no seguinte', async () => {
+    // A ordem é o conserto. Gravar depois de compor consertaria a conversa a
+    // partir da mensagem seguinte — ou seja, tarde: o lead já teria recebido
+    // mais uma pergunta, que foi exatamente o que aconteceu em 09/09.
+    const db = banco();
+
+    await atenderComOTA(db as never, {
+      leadId: "l1",
+      mensagem: "não quero mais responder perguntas, me manda o preço",
+      agora: AGORA,
+    });
+
+    const pedidos = db.leadQualificacao.upsert.mock.calls
+      .map((c) => (c[0] as { update: Record<string, unknown> }).update)
+      .filter((u) => u.pediuPararSondagem === true);
+
+    expect(pedidos.length, "o pedido de parar não foi gravado neste turno").toBeGreaterThan(0);
+  });
+
+  it("⛔ a sonda de controle: uma mensagem comum NÃO marca pedido de parar", async () => {
+    // Sem esta, um detector guloso marcaria todo mundo e o agente pararia de
+    // qualificar a base inteira — um estrago silencioso e muito pior.
+    const db = banco();
+
+    await atenderComOTA(db as never, { leadId: "l1", mensagem: PERGUNTA, agora: AGORA });
+
+    const marcou = db.leadQualificacao.upsert.mock.calls
+      .map((c) => (c[0] as { update: Record<string, unknown> }).update)
+      .some((u) => u.pediuPararSondagem === true);
+
+    expect(marcou, "marcou pedido de parar numa pergunta comum sobre preço").toBe(false);
   });
 });

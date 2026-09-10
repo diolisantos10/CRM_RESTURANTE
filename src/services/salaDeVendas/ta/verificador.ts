@@ -37,6 +37,30 @@
  */
 
 import { tabelaPublicada } from "../precos";
+import { temPlaceholderNaoResolvido } from "@/services/foocci-sdr/semPlaceholder";
+import { linksPermitidos } from "./link";
+
+/**
+ * Um endereço escrito na resposta que não está na lista oficial, se houver.
+ *
+ * ⚠️ Compara sem a barra final e sem diferenciar maiúsculas: `…/precos` e
+ * `…/Precos/` são o mesmo endereço para o navegador, e reprovar um deles seria
+ * barrar o modelo por acertar.
+ */
+function linkForaDaLista(texto: string): string | null {
+  const escritos = texto.match(/https?:\/\/[^\s<>"')\]]+/gi) ?? [];
+  if (escritos.length === 0) return null;
+
+  const oficiais = new Set(linksPermitidos().map(normalizarUrl));
+  for (const url of escritos) {
+    if (!oficiais.has(normalizarUrl(url))) return url;
+  }
+  return null;
+}
+
+function normalizarUrl(u: string): string {
+  return u.trim().toLowerCase().replace(/[.,;:!?)]+$/, "").replace(/\/+$/, "");
+}
 
 export type MotivoDaReprovacao =
   | "precoForaDaTabela"
@@ -45,6 +69,13 @@ export type MotivoDaReprovacao =
   | "integracaoInventada"
   | "fechouPeloCliente"
   | "negouSerAgente"
+  /**
+   * ⛔ Sobrou um espaço reservado no texto: `[link do site]`, `{{2}}`,
+   * `undefined`. O cliente recebeu `[link do site]` literal em 09/09/2026.
+   */
+  | "placeholderNaoResolvido"
+  /** Escreveu um endereço que não está na lista oficial — ou seja, inventou. */
+  | "linkForaDaLista"
   | "vazio";
 
 export interface Veredito {
@@ -250,6 +281,30 @@ export function verificarResposta(texto: string): Veredito {
   if (negou) {
     motivos.push("negouSerAgente");
     detalhes.push(`negou ser um agente ("${negou[0].trim()}")`);
+  }
+
+  // 7. Espaço reservado que não foi preenchido.
+  //
+  // ⚠️ Reaproveita `temPlaceholderNaoResolvido`, que já guarda o envio por
+  // MODELO. Escrever um segundo detector aqui daria duas listas de padrões que
+  // divergem — e a que envelhecesse seria justamente a que protege a conversa
+  // livre, que é por onde `[link do site]` vazou.
+  const sobrou = temPlaceholderNaoResolvido(limpo);
+  if (sobrou) {
+    motivos.push("placeholderNaoResolvido");
+    detalhes.push(`deixou um espaço reservado no texto ("${sobrou}")`);
+  }
+
+  // 8. Endereço inventado.
+  //
+  // A regra é lista branca, e não "parece uma URL da Foocci": um `/planos` que
+  // não existe é um 404 no meio da venda, e o modelo inventa caminho com a
+  // maior naturalidade. Item da ordem: toda URL validada antes do envio, e link
+  // inválido impede o envio daquela resposta.
+  const inventado = linkForaDaLista(limpo);
+  if (inventado) {
+    motivos.push("linkForaDaLista");
+    detalhes.push(`escreveu um endereço que não é oficial ("${inventado}")`);
   }
 
   return {

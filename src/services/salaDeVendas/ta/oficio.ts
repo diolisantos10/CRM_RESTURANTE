@@ -65,7 +65,12 @@ export const OFICIO_DO_ATENDIMENTO = [
       "A cada pergunta que você faz, entregue alguma coisa antes — uma resposta, um número, um exemplo.",
       "Use o que a pessoa já contou. Se ela disse que tem pizzaria, fale de pizzaria.",
       "Se ela já respondeu algo, não pergunte de novo com outras palavras.",
-      "Quando ela demonstrar interesse real, o próximo passo é o link do site — quem fecha é ela, no checkout.",
+      // ⚠️ ESTA LINHA DIZIA "o próximo passo é o link do site" — e nenhuma URL
+      // era passada ao modelo. Ele obedeceu do único jeito possível: escreveu
+      // "[link do site]" para o cliente, várias vezes, em 09/09/2026. Instrução
+      // que manda usar o que o agente não tem produz invenção, não recusa.
+      // O endereço de verdade entra pelo bloco de `link.ts`.
+      "Quando ela demonstrar interesse real, mande o link de planos que está na lista de endereços — quem fecha é ela, no checkout.",
     ],
   },
   {
@@ -234,6 +239,8 @@ export const OFICIO_DO_FECHAMENTO = [
   },
 ] as const;
 
+import { blocoDosLinks } from "./link";
+
 /** Qual das duas posturas o agente está vestindo nesta conversa. */
 export type PosturaDoAgente = "qualificar" | "fechar";
 
@@ -247,9 +254,12 @@ export type PosturaDoAgente = "qualificar" | "fechar";
  */
 export function blocoDoOficio(postura: PosturaDoAgente = "qualificar"): string {
   const blocos = postura === "fechar" ? OFICIO_DO_FECHAMENTO : OFICIO_DO_ATENDIMENTO;
-  return blocos
-    .map((b) => `${b.titulo}:\n${b.linhas.map((l) => `- ${l}`).join("\n")}`)
-    .join("\n\n");
+  return [
+    ...blocos.map((b) => `${b.titulo}:\n${b.linhas.map((l) => `- ${l}`).join("\n")}`),
+    // Vai nas DUAS posturas: o closer é quem mais manda link, e era ele quem
+    // mais tinha motivo para inventar um.
+    blocoDosLinks(),
+  ].join("\n\n");
 }
 
 /**
