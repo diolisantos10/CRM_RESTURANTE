@@ -23,13 +23,14 @@ export interface LinhaLida {
   nome: string | null;
   whatsapp: string;
   empresa: string | null;
+  bairro: string | null;
   cidade: string | null;
   estado: string | null;
   tipo: string | null;
 }
 
 /** O que cada coluna do arquivo virou. É isto que a tela mostra ao operador. */
-export type CampoConhecido = "nome" | "whatsapp" | "empresa" | "cidade" | "estado" | "tipo";
+export type CampoConhecido = "nome" | "whatsapp" | "empresa" | "bairro" | "cidade" | "estado" | "tipo";
 
 export interface ColunaLida {
   /** Como veio escrito no arquivo (ou "coluna 3" quando não há cabeçalho). */
@@ -69,6 +70,12 @@ const CABECALHOS: Readonly<Record<string, CampoConhecido>> = {
   negocio: "empresa",
   razaosocial: "empresa",
   nomefantasia: "empresa",
+
+  // O bairro entra em {{3}} do modelo de abordagem fria ("encontramos o
+  // contato de vocês em Pinheiros, São Paulo"). Ver `mapaDoModelo.ts`.
+  bairro: "bairro",
+  distrito: "bairro",
+  regiao: "bairro",
 
   cidade: "cidade",
   municipio: "cidade",
@@ -242,6 +249,7 @@ export function lerPlanilha(texto: string): LeituraDaPlanilha {
       nome: pega("nome"),
       whatsapp,
       empresa: pega("empresa"),
+      bairro: pega("bairro"),
       cidade: pega("cidade"),
       estado: pega("estado"),
       tipo: pega("tipo"),

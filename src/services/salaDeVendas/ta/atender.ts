@@ -34,6 +34,17 @@
  *   7. **Gravar.** A mensagem nasce PENDENTE, sempre.
  *   8. **Entregar, se o dono ligou a entrega.** Desligada, ela fica PENDENTE.
  *
+ * ── E EM QUE TRANSAÇÃO CADA UM RODA — o desenho de 09/09/2026 ──────────────
+ *
+ * Os portões 1 a 5 são **uma** transação curta (`lerOTurno`), que FECHA antes
+ * de o modelo ser chamado. O passo 6 roda **sem transação nenhuma**. Os passos
+ * 7 e 8 abrem, cada um, a sua. Quem abre é `abrir` (ver `AbrirTransacao`):
+ * o TA nunca recebe uma transação já aberta para carregar pelo turno inteiro.
+ *
+ * Por quê: a transação interativa do Prisma fecha em 5 s, e o modelo leva o
+ * tempo que leva. Com o turno inteiro dentro dela, modelo em 6 s virava
+ * "quebrou" e lead sem resposta — cinco vezes seguidas para o CEO, às 09h42.
+ *
  * ── A ENTREGA É OUTRA CHAVE, E ISSO NÃO É PROVISÓRIO ────────────────────────
  *
  * O que sai desta função é uma linha em `lead_mensagens`, que nasce PENDENTE.
@@ -80,9 +91,9 @@ import { escreverOScore, type SinaisDoLead } from "../score";
 
 /**
  * Aceita a transação além do cliente solto — igual a `conversa.ts` e
- * `handoff.ts`. O webhook chama esta função **dentro** de `comIdentidade`, que
- * abre transação para declarar o papel ao RLS; sem isto o tipo obrigaria a
- * escrever fora da identidade, que é onde a trava do banco não enxerga.
+ * `handoff.ts`. Cada fase do turno recebe o `tx` de uma transação curta aberta
+ * por `abrir` (com identidade declarada ao RLS); nos testes, é o banco de
+ * mentira, sem transação nenhuma.
  */
 type Cliente = PrismaClient | Prisma.TransactionClient;
 
@@ -164,6 +175,27 @@ export interface PedidoDeTurno {
 }
 
 /**
+ * Abre uma transação CURTA com a identidade declarada, roda o trabalho, fecha.
+ *
+ * ── POR QUE O TURNO RECEBE ISTO, E NÃO UMA TRANSAÇÃO ABERTA ─────────────────
+ *
+ * Até 09/09/2026 o webhook abria `comIdentidade` e chamava o TA lá dentro — o
+ * turno inteiro, inclusive o modelo, rodava numa transação interativa do
+ * Prisma, que fecha sozinha em 5 s. Modelo em 6 s = transação morta = a
+ * gravação da resposta falha = "o turno quebrou" = lead sem resposta. Às 09h42
+ * daquele dia o log registrou o TA falhando cinco vezes seguidas para o CEO.
+ *
+ * O desenho agora é: **ler → fechar → pensar → gravar**. Cada ida ao banco
+ * abre a sua transação, curta, e a fecha antes de qualquer coisa lenta. O
+ * modelo nunca roda com transação aberta. Quem sabe abrir com identidade é o
+ * chamador (`FoocciSalesInbound`, com `comIdentidade`); o TA só pede.
+ *
+ * Omitido, o TA usa o cliente recebido diretamente — é o caminho dos testes,
+ * que passam um banco de mentira sem transação nenhuma.
+ */
+export type AbrirTransacao = <T>(trabalho: (tx: Cliente) => Promise<T>) => Promise<T>;
+
+/**
  * O TA atende um turno.
  *
  * **Nunca lança**, e a casca é aqui em cima de propósito. Quem chama esta função
@@ -178,9 +210,11 @@ export interface PedidoDeTurno {
 export async function atenderComOTA(
   db: Cliente,
   pedido: PedidoDeTurno,
+  abrir?: AbrirTransacao,
 ): Promise<ResultadoDoTurno> {
+  const abrirOuUsar: AbrirTransacao = abrir ?? ((trabalho) => trabalho(db));
   try {
-    return await executarTurno(db, pedido);
+    return await executarTurno(abrirOuUsar, pedido);
   } catch (e) {
     return {
       falou: false,
@@ -191,17 +225,152 @@ export async function atenderComOTA(
   }
 }
 
+/** O que a fase de leitura devolve: ou o motivo de calar, ou tudo o que o turno precisa. */
+type Leitura =
+  | { tipo: "calar"; resultado: ResultadoDoTurno }
+  | {
+      tipo: "atender";
+      lead: { id: string; nome: string | null; temperatura: string | null };
+      /** Quem assina a mensagem — o agente do time, ou `null` quando não há time. */
+      assina: string | null;
+      jaPerguntou: number[];
+      historico: Array<{ deQuem: "cliente" | "ta"; texto: string }>;
+    };
+
 async function executarTurno(
-  db: Cliente,
+  abrir: AbrirTransacao,
   pedido: PedidoDeTurno,
 ): Promise<ResultadoDoTurno> {
   const agora = pedido.agora ?? new Date();
 
-  const calar = (motivo: MotivoDeCalar, detalhe: string): ResultadoDoTurno => ({
-    falou: false,
-    chamouGente: false,
-    motivo,
-    detalhe,
+  // ── FASE 1: LER — os cinco portões e o contexto, numa transação curta ────
+  const leitura = await abrir((tx) => lerOTurno(tx, pedido, agora));
+  if (leitura.tipo === "calar") return leitura.resultado;
+  const { lead, assina, jaPerguntou, historico } = leitura;
+
+  // ── FASE 2: PENSAR — SEM transação aberta ───────────────────────────────
+  //
+  // `falar()` e não `responder()`: desde 26/08/2026 quem redige é um modelo,
+  // com o determinístico como chão. A decisão de escalar continua sendo tomada
+  // em código, ANTES do modelo — quem quer isso escrito está em `falar.ts`.
+  //
+  // ⛔ Nada de banco entre a fase 1 e a fase 3. O modelo pode levar 6, 10, 20
+  // segundos (o teto está em `cerebro.ts`), e uma transação aberta aqui morre
+  // em 5. Foi ISTO que quebrou em 09/09/2026.
+  //
+  // A postura sai da temperatura que o qualificador escreveu no turno anterior.
+  // QUENTE e PRIORIDADE_MAXIMA viram closer; o resto — MORNO, FRIO e sobretudo
+  // `null`, que é "ninguém mediu" — continua sondando. Ver `posturaDoLead`.
+  const r = await falar(
+    { mensagem: pedido.mensagem, nome: lead.nome, jaPerguntou, historico },
+    VERSAO_1,
+    posturaDoLead(lead.temperatura),
+  );
+
+  // ── ⭐ O GATILHO DE PREÇO GANHA CHAMADOR ────────────────────────────────
+  //
+  // `motivoDeHandoffPorPreco` estava escrita, testada e **órfã**: nenhum caminho
+  // de produção chegava até ela. Medido em 30/08/2026, e foi o quarto caso do
+  // mesmo defeito no mesmo dia. Esta linha é o chamador que faltava.
+  //
+  // O elo que faltava não era a peça: era traduzir o texto do cliente em
+  // assunto. `foraDaAlcadaNaMensagem` faz isso, em código e antes do modelo —
+  // mesma doutrina de `falar.ts`: a decisão de escalar não é do modelo.
+  //
+  // ⚠️ Repare que ele escala por conta própria: mesmo que `falar()` não tenha
+  // visto motivo nenhum, um assunto fora da alçada PARA o agente. Era esse o
+  // buraco — uma mensagem que não usasse as palavras de `PEDE_PROPOSTA` mas
+  // pedisse permuta passaria batida e o agente responderia por cima.
+  const foraDaAlcada = foraDaAlcadaNaMensagem(pedido.mensagem);
+  const deveChamarGente = (r.handoff.deve && r.handoff.motivo) || foraDaAlcada.length > 0;
+
+  // ── FASE 3a: é caso de gente — consulta o gerente, chama a fila, e PARA ─
+  if (deveChamarGente) {
+    return abrir((tx) =>
+      chamarGente(tx, { pedido, agora, lead, assina, historico, fala: r, foraDaAlcada }),
+    );
+  }
+
+  // ── FASE 3b: grava o que ele diria. PENDENTE, sempre ───────────────────
+  const gravada = await abrir((tx) =>
+    registrarSaida(tx, {
+      leadId: lead.id,
+      // IA, e não SISTEMA: `SISTEMA` é cadência e template operacional, coisa que
+      // ninguém redigiu. Isto aqui é fala composta, e a auditoria precisa poder
+      // separar "o robô escreveu" de "a máquina disparou o passo 2".
+      autor: "IA",
+      // ⚠️ `autor: "IA"` E `autorUserId` juntos, de propósito. O primeiro diz O QUE
+      // falou (robô, não pessoa) e o segundo diz QUEM (Agente Maria). A auditoria
+      // precisa dos dois: sem o primeiro, um dia alguém conta fala de robô como
+      // produtividade de gente; sem o segundo, a conversa não tem nome.
+      autorUserId: assina,
+      texto: r.texto,
+      agora,
+    }),
+  );
+
+  if (!gravada.ok) {
+    // Só acontece se o texto vier vazio — `responder()` promete que não vem,
+    // mas a promessa mora em outro arquivo. Sem este ramo, uma quebra lá viraria
+    // um `undefined` silencioso no id da mensagem.
+    return {
+      falou: false,
+      chamouGente: false,
+      motivo: "naoConseguiuGravar",
+      detalhe: `a mensagem não foi gravada: ${gravada.causa}`,
+    };
+  }
+
+  // ── FASE 3c: entregar, SE o dono ligou a entrega ────────────────────────
+  //
+  // Desligada, `entregarMensagem` não faz nada e a mensagem continua PENDENTE —
+  // que é o estado de hoje e continua sendo o padrão. A chave é do CEO.
+  //
+  // ⛔ **"maquina", e é ESTA a linha mais perigosa do arquivo.** Aqui a IA
+  // responde a um estranho no WhatsApp sem que ninguém tenha lido antes. Até
+  // 07/09/2026 ela dependia da MESMA chave que liberava o vendedor a mandar o
+  // que acabou de digitar — duas coisas de tamanhos muito diferentes atrás de
+  // um interruptor só. Agora esta exige `FOOCCI_SDR_IA_RESPONDE_SOZINHA`.
+  //
+  // ⚠️ A falha de entrega NÃO derruba o turno. A mensagem já está gravada — e
+  // gravada NUMA TRANSAÇÃO JÁ FECHADA, separada desta de propósito: a ida à
+  // Meta é rede, e se ela pendurar, o que morre é esta transação pequena, não
+  // o registro da resposta. O que se perde é a saída — recuperável, visível na
+  // tela, e com o motivo guardado na própria linha. Transformar isso em erro
+  // faria a Meta reentregar o "oi" do cliente e o TA responder duas vezes.
+  const entrega = await abrir((tx) => entregarMensagem(tx, gravada.mensagemId, "maquina"));
+
+  // ── FASE 4: qualificar — ouvir o que ele disse e etiquetar ──────────────
+  //
+  // ⚠️ **DEPOIS de entregar, e nunca antes.** Qualificar chama o modelo de
+  // novo, e o cliente já está esperando desde o portão 1. Pôr isto antes da
+  // entrega somaria a espera da extração à espera da composição — e a única
+  // coisa que o cliente percebe é o tempo até a resposta chegar.
+  //
+  // Foi o buraco que o CEO destampou em 27/08/2026 perguntando *"você já fez
+  // teste com esse qualificador?"*: a régua de temperatura existia, testada, e
+  // NINGUÉM a chamava. O agente perguntava "quantas unidades?", a pessoa
+  // respondia "três", e a resposta morria na conversa. Todo lead sem etiqueta,
+  // e a fila do closer vazia para sempre.
+  await qualificar(abrir, { leadId: lead.id, mensagem: pedido.mensagem, agora });
+
+  return {
+    falou: true,
+    porPolitica: false,
+    mensagemId: gravada.mensagemId,
+    resposta: r,
+    entregue: entrega.entregue,
+  };
+}
+
+/**
+ * FASE 1 — os cinco portões e o contexto do turno. Tudo o que precisa de banco
+ * ANTES do modelo, numa ida só, dentro de uma transação que fecha ao voltar.
+ */
+async function lerOTurno(db: Cliente, pedido: PedidoDeTurno, agora: Date): Promise<Leitura> {
+  const calar = (motivo: MotivoDeCalar, detalhe: string): Leitura => ({
+    tipo: "calar",
+    resultado: { falou: false, chamouGente: false, motivo, detalhe },
   });
 
   // ── 1. A chave mestra ───────────────────────────────────────────────────
@@ -335,325 +504,267 @@ async function executarTurno(
   // cliente já escreveu e está esperando.
   const assina = tomada.assumiu ? (tomada.agente?.userId ?? null) : lead.atendenteUserId;
 
-  // ── 6. Compor ───────────────────────────────────────────────────────────
-  //
-  // `falar()` e não `responder()`: desde 26/08/2026 quem redige é um modelo,
-  // com o determinístico como chão. A decisão de escalar continua sendo tomada
-  // em código, ANTES do modelo — quem quer isso escrito está em `falar.ts`.
+  // ── O contexto que o modelo vai ler — lido AQUI, antes de fechar ────────
   const [jaPerguntou, historico] = await Promise.all([
     perguntasJaFeitas(db, lead.id),
     conversaAteAqui(db, lead.id),
   ]);
 
-  // A postura sai da temperatura que o qualificador escreveu no turno anterior.
-  // QUENTE e PRIORIDADE_MAXIMA viram closer; o resto — MORNO, FRIO e sobretudo
-  // `null`, que é "ninguém mediu" — continua sondando. Ver `posturaDoLead`.
-  const r = await falar(
-    { mensagem: pedido.mensagem, nome: lead.nome, jaPerguntou, historico },
-    VERSAO_1,
-    posturaDoLead(lead.temperatura),
-  );
+  return {
+    tipo: "atender",
+    lead: { id: lead.id, nome: lead.nome, temperatura: lead.temperatura },
+    assina,
+    jaPerguntou,
+    historico,
+  };
+}
 
-  // ── ⭐ 6b. O GATILHO DE PREÇO GANHA CHAMADOR ────────────────────────────
+/**
+ * FASE 3a — é caso de gente: consulta o gerente, chama a fila, avisa o cliente.
+ *
+ * ⚠️ Roda inteira numa transação. A consulta ao gerente é rede (Dioli Connect,
+ * com teto próprio em `consultarGerente.ts`), e ela acontece AQUI DENTRO — é o
+ * único trecho do turno em que rede e transação ainda convivem. Separar exigiria
+ * que o conector padrão (`connect/conector`) recebesse `abrir` em vez de um
+ * cliente, e isso é outra frente. Anotado em 09/09/2026; não resolvido.
+ */
+async function chamarGente(
+  db: Cliente,
+  p: {
+    pedido: PedidoDeTurno;
+    agora: Date;
+    lead: { id: string; nome: string | null };
+    assina: string | null;
+    historico: Array<{ deQuem: "cliente" | "ta"; texto: string }>;
+    fala: FalaFinal;
+    foraDaAlcada: ReturnType<typeof foraDaAlcadaNaMensagem>;
+  },
+): Promise<ResultadoDoTurno> {
+  const { pedido, agora, lead, assina, historico, fala: r, foraDaAlcada } = p;
+
+  // O motivo enumerado. Quando quem disparou foi só o gatilho de preço, o
+  // motivo é `PEDIU_PROPOSTA`: o lead pediu uma condição que a empresa precisa
+  // decidir, que é o que essa etiqueta quer dizer na fila.
+  const motivoExplicito = r.handoff.motivo ?? "PEDIU_PROPOSTA";
+
+  // ── ⭐⭐ O CONECTOR PADRÃO — CONSULTA A POLÍTICA ANTES DE ESCALAR ─────────
   //
-  // `motivoDeHandoffPorPreco` estava escrita, testada e **órfã**: nenhum caminho
-  // de produção chegava até ela. Medido em 30/08/2026, e foi o quarto caso do
-  // mesmo defeito no mesmo dia. Esta linha é o chamador que faltava.
+  // Este é o passo que o PR #178 não deu. Lá, todo assunto fora da alçada
+  // subia ao gerente — **inclusive quando a empresa já tinha decidido aquilo
+  // na semana passada**. O gerente virava pombo-correio da própria decisão,
+  // uma vez por cliente.
   //
-  // O elo que faltava não era a peça: era traduzir o texto do cliente em
-  // assunto. `foraDaAlcadaNaMensagem` faz isso, em código e antes do modelo —
-  // mesma doutrina de `falar.ts`: a decisão de escalar não é do modelo.
+  // `atenderComOConector` faz, nesta ordem: consulta a política no núcleo; se
+  // houver uma **válida** (viva, vigente, e que valha para ESTE cliente),
+  // responde agora e não escala; não havendo, escala pelo caminho abaixo,
+  // grava a pendência que faz a resposta voltar, e **avisa o cliente** de que
+  // a decisão está pendente.
   //
-  // ⚠️ Repare que ele escala por conta própria: mesmo que `falar()` não tenha
-  // visto motivo nenhum, um assunto fora da alçada PARA o agente. Era esse o
-  // buraco — uma mensagem que não usasse as palavras de `PEDE_PROPOSTA` mas
-  // pedisse permuta passaria batida e o agente responderia por cima.
-  const foraDaAlcada = foraDaAlcadaNaMensagem(pedido.mensagem);
+  // ⛔ Nenhuma política é guardada aqui. A memória de decisão mora na Control
+  // Room; este produto só pergunta, recebe e entrega.
+  //
+  // ── ⭐ A TRADUÇÃO, ANTES DE QUALQUER COISA IR PARA O FIO ─────────────────
+  //
+  // O núcleo tem vocabulário FECHADO de assuntos de decisão, e as palavras da
+  // Sala não estão nele. Medido contra produção em 30/08/2026: **zero
+  // interseção** — toda escalada real do Foocci morria em
+  // `assunto_fora_do_vocabulario`, e o cliente ficava esperando um gerente
+  // que nunca foi perguntado.
+  //
+  // ⚠️ Traduz-se só o que VAI NO FIO. A fila humana continua lendo as palavras
+  // da Sala (`foraDaAlcada`, logo abaixo, no dossiê): quem pega a fila é gente
+  // daqui, e "permuta" diz mais a ela do que `forma_de_pagamento_nao_padrao`.
+  const traduzidos = traduzirAssuntos(foraDaAlcada);
 
-  const deveChamarGente = (r.handoff.deve && r.handoff.motivo) || foraDaAlcada.length > 0;
-
-  // ── 7a. É caso de gente: consulta o gerente, chama a fila, e PARA ───────
-  if (deveChamarGente) {
-    // O motivo enumerado. Quando quem disparou foi só o gatilho de preço, o
-    // motivo é `PEDIU_PROPOSTA`: o lead pediu uma condição que a empresa precisa
-    // decidir, que é o que essa etiqueta quer dizer na fila.
-    const motivoExplicito = r.handoff.motivo ?? "PEDIU_PROPOSTA";
-
-    // ── ⭐⭐ 7a-i. O CONECTOR PADRÃO — CONSULTA A POLÍTICA ANTES DE ESCALAR ─
-    //
-    // Este é o passo que o PR #178 não deu. Lá, todo assunto fora da alçada
-    // subia ao gerente — **inclusive quando a empresa já tinha decidido aquilo
-    // na semana passada**. O gerente virava pombo-correio da própria decisão,
-    // uma vez por cliente.
-    //
-    // `atenderComOConector` faz, nesta ordem: consulta a política no núcleo; se
-    // houver uma **válida** (viva, vigente, e que valha para ESTE cliente),
-    // responde agora e não escala; não havendo, escala pelo caminho abaixo,
-    // grava a pendência que faz a resposta voltar, e **avisa o cliente** de que
-    // a decisão está pendente.
-    //
-    // ⛔ Nenhuma política é guardada aqui. A memória de decisão mora na Control
-    // Room; este produto só pergunta, recebe e entrega.
-    // ── ⭐ A TRADUÇÃO, ANTES DE QUALQUER COISA IR PARA O FIO ───────────────
-    //
-    // O núcleo tem vocabulário FECHADO de assuntos de decisão, e as palavras da
-    // Sala não estão nele. Medido contra produção em 30/08/2026: **zero
-    // interseção** — toda escalada real do Foocci morria em
-    // `assunto_fora_do_vocabulario`, e o cliente ficava esperando um gerente
-    // que nunca foi perguntado.
-    //
-    // ⚠️ Traduz-se só o que VAI NO FIO. A fila humana continua lendo as palavras
-    // da Sala (`foraDaAlcada`, logo abaixo, no dossiê): quem pega a fila é gente
-    // daqui, e "permuta" diz mais a ela do que `forma_de_pagamento_nao_padrao`.
-    const traduzidos = traduzirAssuntos(foraDaAlcada);
-
-    const conector =
-      traduzidos.paraONucleo.length > 0
-        ? await atenderComOConector(
-            ligacaoDoFoocci(db, {
-              assinaUserId: assina,
-              armazem: pedido.conector?.armazem,
-            }),
-            {
-              conversa: lead.id,
-              // ⚠️ O id do lead, e nunca o telefone ou o e-mail. A pergunta que
-              // sai daqui não carrega dado pessoal: o núcleo precisa saber QUEM
-              // pergunta só para distinguir exceção de regra, e um identificador
-              // opaco resolve isso inteiro.
-              referenciaDoCliente: lead.id,
-              assuntos: traduzidos.paraONucleo,
-              pergunta: pedido.mensagem,
-              agora,
-            },
-            // ── A ESCALADA É DO PRODUTO ───────────────────────────────────
-            //
-            // No Foocci ela é `consultarGerente`, pela porta do Dioli Connect,
-            // com o caso do lead junto — o mesmo caminho provado no PR #178. O
-            // conector não sabe o que é um lead; ele só precisa saber se abriu.
-            async ({ protocolo, assuntos, politicaRecusada }) => {
-              const r = await consultarGerente({
-                protocolo,
-                // ⭐ Os assuntos que vêm do conector — já no vocabulário da
-                // casa. Usar a lista local aqui seria traduzir para a consulta
-                // de política e mandar o nome de dentro no despacho: as duas
-                // portas do núcleo leem o mesmo vocabulário fechado.
-                foraDaAlcada: assuntos,
-                caso: {
-                  leadId: lead.id,
-                  nome: lead.nome,
-                  resumo: `O lead escreveu: "${pedido.mensagem}"`,
-                  historico: (historico ?? []).map((t) => ({ deQuem: t.deQuem, texto: t.texto })),
-                  // ⚠️ Quando existia decisão anterior e ela NÃO valia (revogada,
-                  // exceção de outro cliente), isso vai escrito para o gerente.
-                  // A pergunta que ele recebe é outra quando já houve resposta.
-                  oQueTrava: [
-                    foraDaAlcada.map((f) => `${f.assunto}: ${f.motivo}`).join(" | "),
-                    politicaRecusada,
-                  ]
-                    .filter(Boolean)
-                    .join(" || "),
-                },
-              });
-              return r.consultado
-                ? { aberta: true, fio: r.fio, detalhe: r.paraODossie }
-                : { aberta: false, fio: null, detalhe: r.paraODossie };
-            },
-            pedido.conector,
-          )
-        : null;
-
-    // ── ⭐ PASSO 3: havia política. O cliente já foi respondido, e ACABOU ───
-    //
-    // Sem escalada, sem fila, sem espera. É o caso que o CEO descreveu: "se
-    // houver resposta válida, ele responde ao cliente IMEDIATAMENTE".
-    if (conector?.respondeu) {
-      return {
-        falou: true,
-        porPolitica: true,
-        politicaId: conector.politicaId,
-        mensagemId: conector.mensagemId,
-        texto: conector.texto,
-        entregue: conector.entregue,
-      };
-    }
-
-    const consulta = resumoDaConsulta(conector, traduzidos.semTraducao);
-
-    const h = await passarParaGente(db, {
-      leadId: lead.id,
-      motivoEscrito: r.porque,
-      motivoExplicito,
-      dossie: {
-        // O resumo é o que `validarDossie` exige, e por um motivo prático:
-        // quem pegar a fila lê ISTO antes de abrir a conversa. A frase literal
-        // do cliente vale mais que qualquer paráfrase — é o que fez o TA parar.
-        resumo: `O cliente escreveu: "${pedido.mensagem}"`,
-        // ⭐ O que trava, e o que já foi feito a respeito. As duas coisas na
-        // mesma frase de propósito: a fila precisa saber que existe uma consulta
-        // em curso (ou que ela falhou) antes de decidir o que fazer.
-        objecoes: consulta
-          ? `${foraDaAlcada.map((f) => `${f.assunto}: ${f.motivo}`).join("\n")}\n\n${consulta.paraODossie}`
-          : undefined,
-        proximaAcao: "responder a esta mensagem — o TA parou e não respondeu nada",
-      },
-      agora,
-    });
-
-    if (h.ok) {
-      // ── ⚠️ O CLIENTE PRECISA SABER QUE ALGUÉM VEM ────────────────────────
-      //
-      // Até 26/08/2026 o TA passava o bastão e voltava calado: o handoff era
-      // registrado, o dono do lead mudava, a fila recebia o dossiê — e a pessoa
-      // que acabou de escrever "quero falar com alguém" **não recebia nada**.
-      //
-      // Do lado de dentro tudo parecia certo. Do lado de fora era silêncio
-      // depois de um pedido, que é a pior resposta possível a um pedido.
-      //
-      // A fala do handoff é gravada como qualquer outra mensagem e entregue
-      // pelo mesmo caminho. Se falhar, o handoff CONTINUA valendo: o bastão já
-      // passou, e desfazê-lo por causa da mensagem deixaria o lead sem ninguém.
-      //
-      // ── ⚠️ E O TEXTO NÃO PODE SER A FALA DE VENDA ────────────────────────
-      //
-      // Quando quem disparou foi SÓ o gatilho de preço, `falar()` não sabia que
-      // ia haver handoff: `r.texto` é a resposta comercial que ele compôs. Mandá-la
-      // aqui daria ao cliente uma resposta de venda logo depois de ele ter
-      // pedido uma condição que a empresa não decidiu — e ele responderia à
-      // pergunta errada, exatamente o que o cabeçalho deste arquivo proíbe.
-      //
-      // Nesse caso o texto é o aviso determinístico, curto e verdadeiro.
-      //
-      // ── ⭐ E UMA VOZ SÓ, QUANDO O CONECTOR JÁ FALOU ──────────────────────
-      //
-      // O conector avisa o cliente de que a decisão está pendente, e esse aviso
-      // diz a mesma coisa que este: *alguém vai responder, você não precisa
-      // cobrar*. Mandar os dois seguidos entregaria duas frases quase iguais no
-      // mesmo minuto, e a segunda faria o agente parecer travado.
-      //
-      // ⚠️ A escolha é pular ESTE, e não o do conector: o do conector é o que
-      // corresponde a uma consulta REGISTRADA, com protocolo e conversa de
-      // volta. Este aqui é o chão de quando não houve consulta nenhuma.
-      if (!oConectorJaAvisou(conector)) {
-        const texto = r.handoff.deve ? r.texto : AVISO_DE_QUE_VEM_GENTE;
-
-        const avisoGravado = await registrarSaida(db, {
-          leadId: lead.id,
-          texto,
-          autor: "IA",
-          // Assina igual à fala de venda: o cliente acabou de conversar com
-          // "Agente Maria" e o aviso de que vem gente não pode chegar anônimo.
-          autorUserId: assina,
-          agora,
-        });
-
-        // "maquina": ninguém leu este aviso antes de ele sair. Quem decide se
-        // ele pode sair é `FOOCCI_SDR_IA_RESPONDE_SOZINHA`, não esta linha.
-        if (avisoGravado.ok) {
-          const entregaDoAviso = await entregarMensagem(db, avisoGravado.mensagemId, "maquina");
-
-          /**
-           * ⚠️ O RETORNO DESTA LINHA ERA JOGADO FORA — e era a falha muda mais
-           * cara da Sala.
-           *
-           * Aqui é o pedido de gente: o lead pediu uma pessoa, pediu desconto ou
-           * ficou bravo. O TA para de vender de propósito e manda UMA coisa —
-           * "alguém já vem". Se essa única mensagem não sai, acontece o pior
-           * arranjo possível: o lead fica em silêncio absoluto, e o sistema
-           * registra o handoff como se tivesse dado certo. Ninguém no funil vê
-           * diferença entre "avisado e esperando" e "abandonado sem saber".
-           *
-           * O turno NÃO falha por causa disto, e é deliberado: a mensagem está
-           * gravada, aparece na tela e o motivo fica na própria linha. Derrubar o
-           * turno faria a Meta reentregar a fala do cliente e o TA responder duas
-           * vezes — a mesma razão dada na entrega da resposta de venda, abaixo.
-           *
-           * O que muda é que agora ele GRITA, com o caso concreto junto
-           * (guardrail 6): alerta que diz "algo falhou" sem o lead e sem o motivo
-           * é ruído que ninguém investiga.
-           */
-          if (!entregaDoAviso.entregue) {
-            console.error("[ta] o aviso de que vem gente NÃO chegou ao lead", {
-              leadId: lead.id,
-              handoffId: h.handoffId,
-              mensagemId: avisoGravado.mensagemId,
-              motivo: entregaDoAviso.motivo,
-              detalhe: entregaDoAviso.detalhe,
+  const conector =
+    traduzidos.paraONucleo.length > 0
+      ? await atenderComOConector(
+          ligacaoDoFoocci(db, {
+            assinaUserId: assina,
+            armazem: pedido.conector?.armazem,
+          }),
+          {
+            conversa: lead.id,
+            // ⚠️ O id do lead, e nunca o telefone ou o e-mail. A pergunta que
+            // sai daqui não carrega dado pessoal: o núcleo precisa saber QUEM
+            // pergunta só para distinguir exceção de regra, e um identificador
+            // opaco resolve isso inteiro.
+            referenciaDoCliente: lead.id,
+            assuntos: traduzidos.paraONucleo,
+            pergunta: pedido.mensagem,
+            agora,
+          },
+          // ── A ESCALADA É DO PRODUTO ───────────────────────────────────
+          //
+          // No Foocci ela é `consultarGerente`, pela porta do Dioli Connect,
+          // com o caso do lead junto — o mesmo caminho provado no PR #178. O
+          // conector não sabe o que é um lead; ele só precisa saber se abriu.
+          async ({ protocolo, assuntos, politicaRecusada }) => {
+            const c = await consultarGerente({
+              protocolo,
+              // ⭐ Os assuntos que vêm do conector — já no vocabulário da
+              // casa. Usar a lista local aqui seria traduzir para a consulta
+              // de política e mandar o nome de dentro no despacho: as duas
+              // portas do núcleo leem o mesmo vocabulário fechado.
+              foraDaAlcada: assuntos,
+              caso: {
+                leadId: lead.id,
+                nome: lead.nome,
+                resumo: `O lead escreveu: "${pedido.mensagem}"`,
+                historico: (historico ?? []).map((t) => ({ deQuem: t.deQuem, texto: t.texto })),
+                // ⚠️ Quando existia decisão anterior e ela NÃO valia (revogada,
+                // exceção de outro cliente), isso vai escrito para o gerente.
+                // A pergunta que ele recebe é outra quando já houve resposta.
+                oQueTrava: [
+                  foraDaAlcada.map((f) => `${f.assunto}: ${f.motivo}`).join(" | "),
+                  politicaRecusada,
+                ]
+                  .filter(Boolean)
+                  .join(" || "),
+              },
             });
-          }
-        }
-      }
+            return c.consultado
+              ? { aberta: true, fio: c.fio, detalhe: c.paraODossie }
+              : { aberta: false, fio: null, detalhe: c.paraODossie };
+          },
+          pedido.conector,
+        )
+      : null;
 
-      return { falou: false, chamouGente: true, handoffId: h.handoffId, motivo: h.motivo };
-    }
-
-    // O handoff recusou. As duas saídas erradas: responder com a fala de venda
-    // (ignora o gatilho que disparou) ou calar mentindo o motivo. Fica o motivo
-    // verdadeiro, nomeado, e o lead segue com a IA para a próxima tentativa —
-    // `passarParaGente` só troca o dono depois de validar, então nada ficou
-    // pela metade.
-    return calar("handoffRecusado", `o handoff recusou: ${h.causa}`);
+  // ── ⭐ PASSO 3: havia política. O cliente já foi respondido, e ACABOU ───
+  //
+  // Sem escalada, sem fila, sem espera. É o caso que o CEO descreveu: "se
+  // houver resposta válida, ele responde ao cliente IMEDIATAMENTE".
+  if (conector?.respondeu) {
+    return {
+      falou: true,
+      porPolitica: true,
+      politicaId: conector.politicaId,
+      mensagemId: conector.mensagemId,
+      texto: conector.texto,
+      entregue: conector.entregue,
+    };
   }
 
-  // ── 7b. Grava o que ele diria. PENDENTE, sempre ─────────────────────────
-  const gravada = await registrarSaida(db, {
+  const consulta = resumoDaConsulta(conector, traduzidos.semTraducao);
+
+  const h = await passarParaGente(db, {
     leadId: lead.id,
-    // IA, e não SISTEMA: `SISTEMA` é cadência e template operacional, coisa que
-    // ninguém redigiu. Isto aqui é fala composta, e a auditoria precisa poder
-    // separar "o robô escreveu" de "a máquina disparou o passo 2".
-    autor: "IA",
-    // ⚠️ `autor: "IA"` E `autorUserId` juntos, de propósito. O primeiro diz O QUE
-    // falou (robô, não pessoa) e o segundo diz QUEM (Agente Maria). A auditoria
-    // precisa dos dois: sem o primeiro, um dia alguém conta fala de robô como
-    // produtividade de gente; sem o segundo, a conversa não tem nome.
-    autorUserId: assina,
-    texto: r.texto,
+    motivoEscrito: r.porque,
+    motivoExplicito,
+    dossie: {
+      // O resumo é o que `validarDossie` exige, e por um motivo prático:
+      // quem pegar a fila lê ISTO antes de abrir a conversa. A frase literal
+      // do cliente vale mais que qualquer paráfrase — é o que fez o TA parar.
+      resumo: `O cliente escreveu: "${pedido.mensagem}"`,
+      // ⭐ O que trava, e o que já foi feito a respeito. As duas coisas na
+      // mesma frase de propósito: a fila precisa saber que existe uma consulta
+      // em curso (ou que ela falhou) antes de decidir o que fazer.
+      objecoes: consulta
+        ? `${foraDaAlcada.map((f) => `${f.assunto}: ${f.motivo}`).join("\n")}\n\n${consulta.paraODossie}`
+        : undefined,
+      proximaAcao: "responder a esta mensagem — o TA parou e não respondeu nada",
+    },
     agora,
   });
 
-  if (!gravada.ok) {
-    // Só acontece se o texto vier vazio — `responder()` promete que não vem,
-    // mas a promessa mora em outro arquivo. Sem este ramo, uma quebra lá viraria
-    // um `undefined` silencioso no id da mensagem.
-    return calar("naoConseguiuGravar", `a mensagem não foi gravada: ${gravada.causa}`);
+  if (h.ok) {
+    // ── ⚠️ O CLIENTE PRECISA SABER QUE ALGUÉM VEM ────────────────────────
+    //
+    // Até 26/08/2026 o TA passava o bastão e voltava calado: o handoff era
+    // registrado, o dono do lead mudava, a fila recebia o dossiê — e a pessoa
+    // que acabou de escrever "quero falar com alguém" **não recebia nada**.
+    //
+    // Do lado de dentro tudo parecia certo. Do lado de fora era silêncio
+    // depois de um pedido, que é a pior resposta possível a um pedido.
+    //
+    // A fala do handoff é gravada como qualquer outra mensagem e entregue
+    // pelo mesmo caminho. Se falhar, o handoff CONTINUA valendo: o bastão já
+    // passou, e desfazê-lo por causa da mensagem deixaria o lead sem ninguém.
+    //
+    // ── ⚠️ E O TEXTO NÃO PODE SER A FALA DE VENDA ────────────────────────
+    //
+    // Quando quem disparou foi SÓ o gatilho de preço, `falar()` não sabia que
+    // ia haver handoff: `r.texto` é a resposta comercial que ele compôs. Mandá-la
+    // aqui daria ao cliente uma resposta de venda logo depois de ele ter
+    // pedido uma condição que a empresa não decidiu — e ele responderia à
+    // pergunta errada, exatamente o que o cabeçalho deste arquivo proíbe.
+    //
+    // Nesse caso o texto é o aviso determinístico, curto e verdadeiro.
+    //
+    // ── ⭐ E UMA VOZ SÓ, QUANDO O CONECTOR JÁ FALOU ──────────────────────
+    //
+    // O conector avisa o cliente de que a decisão está pendente, e esse aviso
+    // diz a mesma coisa que este: *alguém vai responder, você não precisa
+    // cobrar*. Mandar os dois seguidos entregaria duas frases quase iguais no
+    // mesmo minuto, e a segunda faria o agente parecer travado.
+    //
+    // ⚠️ A escolha é pular ESTE, e não o do conector: o do conector é o que
+    // corresponde a uma consulta REGISTRADA, com protocolo e conversa de
+    // volta. Este aqui é o chão de quando não houve consulta nenhuma.
+    if (!oConectorJaAvisou(conector)) {
+      const texto = r.handoff.deve ? r.texto : AVISO_DE_QUE_VEM_GENTE;
+
+      const avisoGravado = await registrarSaida(db, {
+        leadId: lead.id,
+        texto,
+        autor: "IA",
+        // Assina igual à fala de venda: o cliente acabou de conversar com
+        // "Agente Maria" e o aviso de que vem gente não pode chegar anônimo.
+        autorUserId: assina,
+        agora,
+      });
+
+      // "maquina": ninguém leu este aviso antes de ele sair. Quem decide se
+      // ele pode sair é `FOOCCI_SDR_IA_RESPONDE_SOZINHA`, não esta linha.
+      if (avisoGravado.ok) {
+        const entregaDoAviso = await entregarMensagem(db, avisoGravado.mensagemId, "maquina");
+
+        /**
+         * ⚠️ O RETORNO DESTA LINHA ERA JOGADO FORA — e era a falha muda mais
+         * cara da Sala.
+         *
+         * Aqui é o pedido de gente: o lead pediu uma pessoa, pediu desconto ou
+         * ficou bravo. O TA para de vender de propósito e manda UMA coisa —
+         * "alguém já vem". Se essa única mensagem não sai, acontece o pior
+         * arranjo possível: o lead fica em silêncio absoluto, e o sistema
+         * registra o handoff como se tivesse dado certo. Ninguém no funil vê
+         * diferença entre "avisado e esperando" e "abandonado sem saber".
+         *
+         * O turno NÃO falha por causa disto, e é deliberado: a mensagem está
+         * gravada, aparece na tela e o motivo fica na própria linha. Derrubar o
+         * turno faria a Meta reentregar a fala do cliente e o TA responder duas
+         * vezes — a mesma razão dada na entrega da resposta de venda.
+         *
+         * O que muda é que agora ele GRITA, com o caso concreto junto
+         * (guardrail 6): alerta que diz "algo falhou" sem o lead e sem o motivo
+         * é ruído que ninguém investiga.
+         */
+        if (!entregaDoAviso.entregue) {
+          console.error("[ta] o aviso de que vem gente NÃO chegou ao lead", {
+            leadId: lead.id,
+            handoffId: h.handoffId,
+            mensagemId: avisoGravado.mensagemId,
+            motivo: entregaDoAviso.motivo,
+            detalhe: entregaDoAviso.detalhe,
+          });
+        }
+      }
+    }
+
+    return { falou: false, chamouGente: true, handoffId: h.handoffId, motivo: h.motivo };
   }
 
-  // ── 8. Entregar, SE o dono ligou a entrega ──────────────────────────────
-  //
-  // Desligada, `entregarMensagem` não faz nada e a mensagem continua PENDENTE —
-  // que é o estado de hoje e continua sendo o padrão. A chave é do CEO.
-  //
-  // ⛔ **"maquina", e é ESTA a linha mais perigosa do arquivo.** Aqui a IA
-  // responde a um estranho no WhatsApp sem que ninguém tenha lido antes. Até
-  // 07/09/2026 ela dependia da MESMA chave que liberava o vendedor a mandar o
-  // que acabou de digitar — duas coisas de tamanhos muito diferentes atrás de
-  // um interruptor só. Agora esta exige `FOOCCI_SDR_IA_RESPONDE_SOZINHA`.
-  //
-  // ⚠️ A falha de entrega NÃO derruba o turno. A mensagem já está gravada, e o
-  // que se perde é a saída — recuperável, visível na tela, e com o motivo
-  // guardado na própria linha. Transformar isso em erro faria a Meta reentregar
-  // o "oi" do cliente e o TA responder duas vezes.
-  const entrega = await entregarMensagem(db, gravada.mensagemId, "maquina");
-
-  // ── 9. Qualificar: ouvir o que ele disse e etiquetar ────────────────────
-  //
-  // ⚠️ **DEPOIS de entregar, e nunca antes.** Qualificar chama o modelo de
-  // novo, e o cliente já está esperando desde o portão 1. Pôr isto antes da
-  // entrega somaria a espera da extração à espera da composição — e a única
-  // coisa que o cliente percebe é o tempo até a resposta chegar.
-  //
-  // Foi o buraco que o CEO destampou em 27/08/2026 perguntando *"você já fez
-  // teste com esse qualificador?"*: a régua de temperatura existia, testada, e
-  // NINGUÉM a chamava. O agente perguntava "quantas unidades?", a pessoa
-  // respondia "três", e a resposta morria na conversa. Todo lead sem etiqueta,
-  // e a fila do closer vazia para sempre.
-  await qualificar(db, { leadId: lead.id, mensagem: pedido.mensagem, agora });
-
+  // O handoff recusou. As duas saídas erradas: responder com a fala de venda
+  // (ignora o gatilho que disparou) ou calar mentindo o motivo. Fica o motivo
+  // verdadeiro, nomeado, e o lead segue com a IA para a próxima tentativa —
+  // `passarParaGente` só troca o dono depois de validar, então nada ficou
+  // pela metade.
   return {
-    falou: true,
-    porPolitica: false,
-    mensagemId: gravada.mensagemId,
-    resposta: r,
-    entregue: entrega.entregue,
+    falou: false,
+    chamouGente: false,
+    motivo: "handoffRecusado",
+    detalhe: `o handoff recusou: ${h.causa}`,
   };
 }
 
@@ -692,18 +803,24 @@ function oConectorJaAvisou(conector: ResultadoDoConector | null): boolean {
 }
 
 /**
- * Ouve a conversa, junta com o que já se sabia, e grava a etiqueta.
+ * FASE 4 — ouve a conversa, junta com o que já se sabia, e grava a etiqueta.
  *
  * **Nunca lança, e nunca devolve nada.** O turno já terminou quando ela roda: a
  * mensagem foi composta, gravada e entregue. Uma falha aqui não pode desfazer
  * nada disso — o pior que acontece é o lead ficar mais um turno sem etiqueta, e
  * o próximo turno tenta de novo com a conversa maior.
+ *
+ * Três passos, e o do meio é o modelo: **ler** (transação), **extrair** (sem
+ * transação — é uma segunda chamada ao modelo, tão lenta quanto a primeira),
+ * **escrever** (transação). Mesma razão das fases de cima.
  */
 async function qualificar(
-  db: Cliente,
+  abrir: AbrirTransacao,
   p: { leadId: string; mensagem: string; agora: Date },
 ): Promise<void> {
   try {
+    // ── LER ─────────────────────────────────────────────────────────────
+    //
     // ⚠️ A conversa INTEIRA, e não a janela de 12 que a composição usa.
     //
     // Compor precisa do contexto recente; qualificar precisa de TUDO. Se a
@@ -713,35 +830,41 @@ async function qualificar(
     //
     // Custa uma consulta a mais e resolve, sem coluna nova no banco: a conversa
     // já É o registro dos fatos.
-    const msgs = await db.leadMensagem.findMany({
-      where: { leadId: p.leadId, texto: { not: null } },
-      orderBy: { ocorreuEm: "asc" },
-      select: { direcao: true, texto: true },
+    const { conversa, doFormulario } = await abrir(async (db) => {
+      const msgs = await db.leadMensagem.findMany({
+        where: { leadId: p.leadId, texto: { not: null } },
+        orderBy: { ocorreuEm: "asc" },
+        select: { direcao: true, texto: true },
+      });
+
+      // ── O QUE O FORMULÁRIO JÁ TINHA PERGUNTADO ──────────────────────────
+      //
+      // A pessoa preencheu tipo de restaurante e principal desafio antes de
+      // escrever. Ignorar isso faria o agente perguntar de novo o que ela já
+      // respondeu — e é o defeito que mais rápido faz alguém desistir.
+      const ficha = await db.siteLead.findUnique({
+        where: { id: p.leadId },
+        select: { tipo: true, desafio: true },
+      });
+
+      const doFormulario: SinaisDoLead = {
+        dorPrincipal: ficha?.desafio?.trim() || null,
+        // Tipo preenchido no formulário do site é declaração de que É restaurante.
+        // `null` quando vazio: ausência não vira `false`, que desqualificaria.
+        ehRestaurante: ficha?.tipo?.trim() ? true : null,
+      };
+
+      return {
+        conversa: msgs.map((m) => ({
+          deQuem: m.direcao === "ENTRADA" ? ("cliente" as const) : ("ta" as const),
+          texto: m.texto ?? "",
+        })),
+        doFormulario,
+      };
     });
 
-    const conversa = msgs.map((m) => ({
-      deQuem: m.direcao === "ENTRADA" ? ("cliente" as const) : ("ta" as const),
-      texto: m.texto ?? "",
-    }));
-
+    // ── EXTRAIR — o modelo, sem transação ───────────────────────────────
     const daConversa = await extrairSinais(conversa, p.mensagem);
-
-    // ── O QUE O FORMULÁRIO JÁ TINHA PERGUNTADO ────────────────────────────
-    //
-    // A pessoa preencheu tipo de restaurante e principal desafio antes de
-    // escrever. Ignorar isso faria o agente perguntar de novo o que ela já
-    // respondeu — e é o defeito que mais rápido faz alguém desistir.
-    const ficha = await db.siteLead.findUnique({
-      where: { id: p.leadId },
-      select: { tipo: true, desafio: true },
-    });
-
-    const doFormulario: SinaisDoLead = {
-      dorPrincipal: ficha?.desafio?.trim() || null,
-      // Tipo preenchido no formulário do site é declaração de que É restaurante.
-      // `null` quando vazio: ausência não vira `false`, que desqualificaria.
-      ehRestaurante: ficha?.tipo?.trim() ? true : null,
-    };
 
     // Engajamento observado, não declarado: quem escreveu três vezes está mais
     // quente que quem mandou "oi" e sumiu — e isso ninguém precisa perguntar.
@@ -752,7 +875,8 @@ async function qualificar(
     // primeiro argumento e usa o segundo só para preencher buraco.
     const sinais = juntarSinais({ ...daConversa, mensagensDoLead }, doFormulario);
 
-    await escreverOScore(db, { leadId: p.leadId, sinais, agora: p.agora });
+    // ── ESCREVER ────────────────────────────────────────────────────────
+    await abrir((db) => escreverOScore(db, { leadId: p.leadId, sinais, agora: p.agora }));
   } catch {
     // Modelo fora do ar, banco recusando a escrita, JSON estranho. Nada disso
     // pode transformar um atendimento que deu certo em turno quebrado.

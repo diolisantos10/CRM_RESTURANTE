@@ -32,6 +32,8 @@
 import { buscarNaVerdade, type Achado } from "./verdade";
 import { VERSAO_1, QUANDO_NAO_SEI, type TextoDaVersao } from "./ficha";
 import { gatilhosQueDispararam, type SinaisDaConversa } from "../handoff";
+import { linkPedido, fraseComLink, pediuInformacaoObjetiva } from "./links";
+import { LIMITE_DE_CARACTERES, LIMITE_DE_FRASES, contarFrases } from "./verificador";
 import type { MotivoDoHandoff } from "@prisma/client";
 
 export interface Turno {
@@ -46,10 +48,11 @@ export interface Turno {
   /**
    * Os turnos anteriores, do mais antigo para o mais novo.
    *
-   * Ignorado pelo caminho determinístico — ele responde uma pergunta por vez, e
-   * sempre respondeu. Existe aqui porque `falar()` passa o mesmo `Turno` para o
-   * modelo, e é o histórico que separa uma conversa de uma sequência de
-   * respostas soltas: sem ele, o TA cumprimenta a mesma pessoa três vezes.
+   * O caminho determinístico lê daqui UMA coisa: se a última fala do TA foi
+   * pergunta (`ultimaFalaDoTAPerguntou`), para não perguntar duas vezes
+   * seguidas. O resto é para o modelo, via `falar()` — é o histórico que
+   * separa uma conversa de uma sequência de respostas soltas: sem ele, o TA
+   * cumprimenta a mesma pessoa três vezes.
    */
   historico?: Array<{ deQuem: "cliente" | "ta"; texto: string }>;
 }
@@ -111,9 +114,33 @@ export function lerSinaisDoTexto(mensagem: string): SinaisDaConversa {
  * conversa segue.
  */
 function abertura(nome?: string | null): string {
+  // Uma frase, e não "Oi, Marina! Aqui é...": o teto de frases do verificador
+  // conta o "!" como fim de frase, e a apresentação gastava duas das quatro
+  // antes de dizer qualquer coisa.
   return nome
-    ? `Oi, ${nome.split(" ")[0]}! Aqui é o agente de atendimento do Foocci.`
-    : "Oi! Aqui é o agente de atendimento do Foocci.";
+    ? `Oi, ${nome.split(" ")[0]} — aqui é o agente de atendimento do Foocci.`
+    : "Oi — aqui é o agente de atendimento do Foocci.";
+}
+
+/**
+ * A última coisa que o TA disse nesta conversa foi uma pergunta?
+ *
+ * Lida do histórico, e não de um contador: é a mesma razão de `perguntasJaFeitas`
+ * em `atender.ts`. "No máximo uma pergunta a cada duas respostas" — pedido do
+ * CEO em 09/09/2026 — vira, em código, "não pergunta se a anterior perguntou".
+ *
+ * Sem histórico, `false`: ausência de informação não é informação, e o erro
+ * barato aqui é perguntar uma vez a mais, não emudecer a sondagem.
+ */
+export function ultimaFalaDoTAPerguntou(
+  historico: Array<{ deQuem: "cliente" | "ta"; texto: string }> | undefined,
+): boolean {
+  if (!historico?.length) return false;
+  for (let i = historico.length - 1; i >= 0; i--) {
+    const t = historico[i]!;
+    if (t.deQuem === "ta") return t.texto.includes("?");
+  }
+  return false;
 }
 
 /**
@@ -173,6 +200,15 @@ function apoiosQueValem(achados: Achado[]): Achado[] {
 export function responder(turno: Turno, ficha: TextoDaVersao = VERSAO_1): Resposta {
   const primeiroContato = (turno.jaPerguntou ?? []).length === 0;
 
+  // ── As duas regras de conversa do CEO (09/09/2026) ──────────────────────
+  //
+  // Quem pediu preço, link, demo ou como assinar recebe isso e PARA — sem
+  // pergunta no fim. E o TA não pergunta em duas mensagens seguidas.
+  const objetivo = pediuInformacaoObjetiva(turno.mensagem);
+  const acabouDePerguntar = ultimaFalaDoTAPerguntou(turno.historico);
+  const podePerguntar = !objetivo && !acabouDePerguntar;
+  const link = linkPedido(turno.mensagem);
+
   const sinais: SinaisDaConversa = {
     ...lerSinaisDoTexto(turno.mensagem),
     ...turno.sinais,
@@ -202,14 +238,12 @@ export function responder(turno: Turno, ficha: TextoDaVersao = VERSAO_1): Respos
   const achados: Achado[] = buscarNaVerdade(turno.mensagem);
   const usados = apoiosQueValem(achados);
 
-  const partes: string[] = [];
-  if (primeiroContato) partes.push(abertura(turno.nome));
-
-  if (usados.length > 0) {
-    partes.push(usados.map((a) => a.item.texto).join(" "));
-  } else if (pareceUmaPergunta(turno.mensagem)) {
+  if (usados.length === 0 && !link && pareceUmaPergunta(turno.mensagem)) {
     // Perguntou e a base não tem. Aqui é o momento em que um agente sem trava
     // inventaria — e este devolve o limite e chama gente.
+    //
+    // ⚠️ `!link`: "qual o valor?" e "como assino?" também não casam com item
+    // nenhum, e a resposta honesta para elas não é "não sei" — é o endereço.
     return {
       texto: `${primeiroContato ? abertura(turno.nome) + " " : ""}${QUANDO_NAO_SEI}`,
       apoiadoEm: [],
@@ -219,20 +253,82 @@ export function responder(turno: Turno, ficha: TextoDaVersao = VERSAO_1): Respos
     };
   }
 
-  // ── 3. A sondagem, uma pergunta ─────────────────────────────────────────
-  const pergunta = proximaPergunta(turno.jaPerguntou ?? [], ficha);
-  if (pergunta) partes.push(pergunta.texto);
+  // ── 3. A sondagem, uma pergunta — e não em toda mensagem ────────────────
+  const pergunta = podePerguntar ? proximaPergunta(turno.jaPerguntou ?? [], ficha) : null;
+
+  // ── 4. Montar dentro do teto ────────────────────────────────────────────
+  //
+  // As peças em ordem de importância: apresentação, resposta, link, pergunta.
+  // Quando não cabe, sai primeiro o que importa menos — a pergunta, depois o
+  // segundo apoio. O texto que sai daqui é o CHÃO: se ele mesmo estourasse o
+  // teto do verificador, o pior dia do TA seria uma parede de texto.
+  const montagem = montarDentroDoTeto({
+    abertura: primeiroContato ? abertura(turno.nome) : null,
+    apoios: usados.map((a) => a.item.texto),
+    link: link ? `${fraseComLink(link)}.` : null,
+    pergunta: pergunta?.texto ?? null,
+  });
+
+  const apoiosQueSairam = usados.slice(0, montagem.apoiosUsados);
+  const perguntou = montagem.perguntaSaiu ? pergunta : null;
+
+  const porque = [
+    apoiosQueSairam.length > 0
+      ? `respondeu com ${apoiosQueSairam.length} item(ns) da base`
+      : link
+        ? "respondeu com o link"
+        : "nada a responder ainda",
+    link ? `mandou o link de ${link}` : null,
+    perguntou
+      ? "seguiu a sondagem"
+      : objetivo
+        ? "sem pergunta: a pessoa pediu uma informação objetiva"
+        : acabouDePerguntar
+          ? "sem pergunta: a anterior já perguntou"
+          : "sem pergunta",
+  ]
+    .filter(Boolean)
+    .join(" — ");
 
   return {
-    texto: partes.join(" ").trim(),
-    apoiadoEm: usados.map((a) => ({ id: a.item.id, fonte: a.item.fonte })),
-    perguntouIndice: pergunta?.indice ?? null,
+    texto: montagem.texto,
+    apoiadoEm: apoiosQueSairam.map((a) => ({ id: a.item.id, fonte: a.item.fonte })),
+    perguntouIndice: perguntou?.indice ?? null,
     handoff: { deve: false, motivo: null },
-    porque:
-      usados.length > 0
-        ? `respondeu com ${usados.length} item(ns) da base e seguiu a sondagem`
-        : "nada a responder ainda — seguiu a sondagem",
+    porque,
   };
+}
+
+/** O que sai e o que ficou de fora para caber no teto. */
+function montarDentroDoTeto(p: {
+  abertura: string | null;
+  apoios: string[];
+  link: string | null;
+  pergunta: string | null;
+}): { texto: string; apoiosUsados: number; perguntaSaiu: boolean } {
+  const cabe = (t: string) =>
+    t.length <= LIMITE_DE_CARACTERES && contarFrases(t) <= LIMITE_DE_FRASES;
+
+  const montar = (apoios: number, comPergunta: boolean) =>
+    [p.abertura, ...p.apoios.slice(0, apoios), p.link, comPergunta ? p.pergunta : null]
+      .filter((x): x is string => !!x)
+      .join(" ")
+      .trim();
+
+  // Do mais completo para o mais seco. O último candidato sai mesmo que não
+  // caiba: a resposta NUNCA é vazia, e um item de verdade longo demais é
+  // defeito da base, que o teste pega — não motivo para calar.
+  const candidatos: Array<[number, boolean]> = [
+    [p.apoios.length, true],
+    [p.apoios.length, false],
+    [1, false],
+  ];
+  for (const [apoios, comPergunta] of candidatos) {
+    const texto = montar(apoios, comPergunta);
+    if (cabe(texto)) return { texto, apoiosUsados: Math.min(apoios, p.apoios.length), perguntaSaiu: comPergunta && !!p.pergunta };
+  }
+  const texto = montar(1, false);
+  return { texto, apoiosUsados: Math.min(1, p.apoios.length), perguntaSaiu: false };
 }
 
 /**

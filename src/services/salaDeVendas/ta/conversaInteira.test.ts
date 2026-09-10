@@ -26,6 +26,7 @@ vi.mock("@/lib/openai", () => ({ openai: { chat: { completions: { create: criar 
 
 import { falar } from "./falar";
 import { tabelaPublicada } from "../precos";
+import { LINKS_DO_FOOCCI } from "./links";
 
 const ambiente = { ...process.env };
 
@@ -34,7 +35,12 @@ const PRECO = tabelaPublicada()[0]!.ciclos.find((c) => c.ciclo === "MENSAL")!.do
 
 const FALAS_DO_MODELO = [
   "Oi! Aqui é o TA, do Foocci. Que tipo de restaurante você tem?",
-  `O Essencial sai por ${PRECO} por mês. Hoje você vende mais pelo marketplace ou pelo seu canal?`,
+  // ⚠️ SEM pergunta no fim, desde 09/09/2026: "quanto custa?" é pedido de
+  // informação objetiva, e a regra do CEO é entregar e parar. A versão antiga
+  // desta fala ("...Hoje você vende mais pelo marketplace ou pelo seu canal?")
+  // é REPROVADA pelo verificador agora — e este roteiro é o que o modelo
+  // escreveria depois de aprender a regra.
+  `O Essencial sai por ${PRECO} por mês. Os três planos estão em ${LINKS_DO_FOOCCI.precos}`,
   "Hoje a gente não integra com o iFood — o Foocci trabalha no seu canal próprio.",
   "Faz sentido. Com entrega própria a comissão fica bem menor que a do marketplace.",
   // O modelo TENTA chamar gente por conta própria no último turno. Não é ele
@@ -82,10 +88,13 @@ describe("do 'oi' ao pedido de gente, cinco turnos", () => {
     expect(um!.origem).toBe("modelo");
     expect(um!.perguntouIndice).toBe(0);
 
-    // 2. Preço: aprovado porque é o da tabela. Segunda pergunta feita.
+    // 2. Preço: aprovado porque é o da tabela, com o link — e SEM pergunta,
+    // porque a pessoa pediu uma informação objetiva. A sondagem não anda.
     expect(dois!.origem).toBe("modelo");
-    expect(dois!.perguntouIndice).toBe(1);
+    expect(dois!.reprovacoes).toEqual([]);
+    expect(dois!.perguntouIndice).toBeNull();
     expect(dois!.texto).toContain(PRECO);
+    expect(dois!.texto).toContain(LINKS_DO_FOOCCI.precos);
 
     // 3. ⭐ Ele NEGA a integração — resposta honesta, e o verificador deixa
     // passar. E não perguntou nada, então a sondagem NÃO anda.
@@ -103,9 +112,10 @@ describe("do 'oi' ao pedido de gente, cinco turnos", () => {
     expect(cinco!.handoff).toEqual({ deve: true, motivo: "PEDIU_HUMANO" });
     expect(cinco!.texto).not.toBe(FALAS_DO_MODELO[4]);
 
-    // E a sondagem terminou com DUAS perguntas feitas em cinco turnos — não
-    // cinco. É o número que uma conversa de verdade produz.
-    expect(jaPerguntou).toEqual([0, 1]);
+    // E a sondagem terminou com UMA pergunta feita em cinco turnos — não
+    // cinco. Era [0, 1] até 09/09/2026; a pergunta do turno 2 saiu porque a
+    // pessoa tinha pedido o preço. É o número que uma conversa de verdade produz.
+    expect(jaPerguntou).toEqual([0]);
   });
 
   it("o histórico cresce e chega ao modelo a cada turno", async () => {

@@ -143,11 +143,13 @@ export function baseDeVerdade(): ItemDeVerdade[] {
       id: `preco-${plano.id}`,
       fonte: "tabela-de-preco",
       sobre: `quanto custa o plano ${plano.nome}`,
+      // Duas frases, e não três (era "...por mês. No anual sai por... por mês.
+      // Na primeira cobrança..."): o teto do verificador é de quatro frases, e
+      // no primeiro contato a apresentação e o link já gastam duas. A
+      // informação é a mesma — mensal, anual e a primeira cobrança pela metade.
       texto:
-        `O plano ${plano.nome} é ${mensal.doCiclo} por mês. ` +
-        `No anual sai por ${anual.equivalenteAoMes} por mês. ` +
-        `Na primeira cobrança você paga ${mensal.primeiraCobranca} no mensal, ` +
-        "porque o primeiro mês é pela metade.",
+        `O plano ${plano.nome} é ${mensal.doCiclo} por mês, ou ${anual.equivalenteAoMes} por mês no anual. ` +
+        `Na primeira cobrança do mensal você paga ${mensal.primeiraCobranca}, porque o primeiro mês é pela metade.`,
     });
 
     if (posicionamento) {

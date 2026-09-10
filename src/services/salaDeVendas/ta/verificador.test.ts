@@ -214,3 +214,78 @@ describe("negar ser um agente", () => {
     expect(v.aprovada).toBe(true);
   });
 });
+
+// ── As duas travas de 09/09/2026: tamanho e pergunta fora de hora ────────────
+//
+// Pedido do CEO. Cada uma aparece duas vezes: a que prova que barra, e a que
+// prova que o caso legítimo passa — sem a segunda, o detector vira carimbo e o
+// agente para de conversar.
+
+import { contarFrases, LIMITE_DE_CARACTERES, LIMITE_DE_FRASES } from "./verificador";
+import { LINKS_DO_FOOCCI } from "./links";
+
+describe("tamanho — parede de texto no WhatsApp", () => {
+  it("reprova o que passa do teto de caracteres", () => {
+    const longa = "O Foocci monta o pedido no seu canal. ".repeat(12); // ~450
+    expect(longa.length).toBeGreaterThan(LIMITE_DE_CARACTERES);
+    const v = verificarResposta(longa);
+    expect(v.aprovada).toBe(false);
+    expect(v.motivos).toContain("longaDemais");
+    expect(v.detalhe).toMatch(/caracteres/);
+  });
+
+  it("reprova o que passa do teto de frases, mesmo curto em caracteres", () => {
+    const picada = "Sim. Dá. Pode. Claro. Vamos. Fechado.";
+    expect(picada.length).toBeLessThan(LIMITE_DE_CARACTERES);
+    expect(contarFrases(picada)).toBeGreaterThan(LIMITE_DE_FRASES);
+    expect(verificarResposta(picada).motivos).toContain("longaDemais");
+  });
+
+  it("a metade que passa: três frases curtas com link são aprovadas", () => {
+    const boa = `O Essencial é o plano de entrada. Os três planos estão em ${LINKS_DO_FOOCCI.precos}. Qualquer dúvida, me chama.`;
+    const v = verificarResposta(boa);
+    expect(v.aprovada, v.detalhe).toBe(true);
+  });
+
+  it("⭐ os pontos de um link NÃO contam como fim de frase", () => {
+    // `https://foocci.com.br/site/precos` tem dois pontos. Um contador ingênuo
+    // reprovaria toda resposta com link por "frases demais" — o oposto do pedido.
+    expect(contarFrases(`Os planos estão em ${LINKS_DO_FOOCCI.precos}`)).toBe(1);
+    expect(contarFrases(`Veja em ${LINKS_DO_FOOCCI.demo}. Depois me conta.`)).toBe(2);
+  });
+});
+
+describe("pergunta fora de hora — responde e PARA", () => {
+  const COM_PERGUNTA = "O Essencial é o plano de entrada. Quantas unidades você tem?";
+  const SEM_PERGUNTA = "O Essencial é o plano de entrada. Os três planos estão no site.";
+
+  it("reprova pergunta quando a pessoa pediu uma informação objetiva", () => {
+    const v = verificarResposta(COM_PERGUNTA, { pediuInformacaoObjetiva: true });
+    expect(v.aprovada).toBe(false);
+    expect(v.motivos).toContain("perguntouQuandoNaoDevia");
+    expect(v.detalhe).toMatch(/informação objetiva/);
+  });
+
+  it("reprova pergunta quando a última fala do TA já era pergunta", () => {
+    const v = verificarResposta(COM_PERGUNTA, { ultimaFalaDoTAPerguntou: true });
+    expect(v.aprovada).toBe(false);
+    expect(v.motivos).toContain("perguntouQuandoNaoDevia");
+    expect(v.detalhe).toMatch(/anterior/);
+  });
+
+  it("a metade que passa: pergunta é permitida quando nenhuma das duas vale", () => {
+    const v = verificarResposta(COM_PERGUNTA, { pediuInformacaoObjetiva: false, ultimaFalaDoTAPerguntou: false });
+    expect(v.aprovada, v.detalhe).toBe(true);
+  });
+
+  it("a outra metade: resposta SEM pergunta passa mesmo com as duas condições", () => {
+    const v = verificarResposta(SEM_PERGUNTA, { pediuInformacaoObjetiva: true, ultimaFalaDoTAPerguntou: true });
+    expect(v.aprovada, v.detalhe).toBe(true);
+  });
+
+  it("⭐ sem contexto, a regra NÃO dispara — ausência de informação não é informação", () => {
+    // A tela de ensaio verifica um texto solto, sem conversa em volta. Ela não
+    // tem como dizer se a pessoa pediu preço; então não finge que sabe.
+    expect(verificarResposta(COM_PERGUNTA).aprovada).toBe(true);
+  });
+});

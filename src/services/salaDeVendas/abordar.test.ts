@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { abordarLead, primeiroNome, saudacaoDoLead, resumoDoModelo, modeloConfigurado } from "./abordar";
+import { abordarLead, primeiroNome, saudacaoDoLead, restauranteDoLead, resumoDoModelo, modeloConfigurado } from "./abordar";
 
 const enviarModelo = vi.hoisted(() => vi.fn());
 const canalPronto = vi.hoisted(() => vi.fn(() => true));
@@ -32,6 +32,10 @@ const LEAD = {
   consentAt: new Date("2026-09-01T10:00:00Z"),
   createdAt: new Date("2026-09-01T10:00:00Z"),
   lastContactedAt: null as Date | null,
+  // O modelo de abordagem fria pede restaurante ({{1}}/{{2}}) e lugar ({{3}}).
+  restaurante: "Cantina da Marina" as string | null,
+  cidade: "São Paulo" as string | null,
+  fonte: null as string | null,
 };
 
 const AGORA = new Date("2026-09-07T13:00:00Z");
@@ -123,7 +127,7 @@ beforeEach(() => {
   enviarModelo.mockReset();
   enviarModelo.mockResolvedValue({ ok: true });
   canalPronto.mockReturnValue(true);
-  process.env.FOOCCI_SDR_MODELO_ABORDAGEM = "foocci_abordagem_inicial";
+  process.env.FOOCCI_SDR_MODELO_ABORDAGEM = "abordagem_restaurante_fria";
   process.env.FOOCCI_SDR_MODELO_IDIOMA = "pt_BR";
 });
 
@@ -139,17 +143,31 @@ describe("o caminho feliz", () => {
 
     expect(r.abordou).toBe(true);
     expect(gravadas[0]!.tipo).toBe("TEMPLATE");
-    expect(gravadas[0]!.templateNome).toBe("foocci_abordagem_inicial");
+    expect(gravadas[0]!.templateNome).toBe("abordagem_restaurante_fria");
     expect(gravadas[0]!.status).toBe("PENDENTE");
     expect(atualizadas[0]!.status).toBe("ENVIADA");
   });
 
-  it("leva o primeiro nome como {{1}}", async () => {
+  it("⭐ leva o MAPA do modelo: restaurante em {{1}} e {{2}}, o lugar em {{3}}", async () => {
     const { db } = banco();
     await abordarLead(db, { leadId: "L1", autorUserId: "u1", agora: AGORA });
 
     const modelo = enviarModelo.mock.calls[0]![2] as { parametros: string[] };
-    expect(modelo.parametros).toEqual(["Marina"]);
+    expect(modelo.parametros).toEqual(["Cantina da Marina", "Cantina da Marina", "São Paulo"]);
+  });
+
+  it("⭐ lead de lista: o lugar vem do ITEM (bairro, cidade), que é quem guarda o bairro", async () => {
+    const { db } = banco({
+      lead: { nome: "Bar do Zé", restaurante: null, cidade: null, fonte: "LISTA_PROSPECCAO" },
+      item: {
+        bairro: "Pinheiros", cidade: "São Paulo", estado: "SP",
+        lote: { situacao: "LIBERADO", proveniencia: "Lista pública (SP)" },
+      } as never,
+    });
+    await abordarLead(db, { leadId: "L1", autorUserId: "u1", agora: AGORA });
+
+    const modelo = enviarModelo.mock.calls[0]![2] as { parametros: string[] };
+    expect(modelo.parametros).toEqual(["Bar do Zé", "Bar do Zé", "Pinheiros, São Paulo"]);
   });
 
   it("toda mensagem sai com responsável — nunca 'o sistema mandou'", async () => {
@@ -241,12 +259,29 @@ describe("o primeiro nome", () => {
     expect(primeiroNome(null)).toBeNull();
   });
 
-  it("lead sem nome utilizável manda modelo sem variável", async () => {
-    const { db } = banco({ lead: { nome: "5511999998888" } });
-    await abordarLead(db, { leadId: "L1", autorUserId: "u1", agora: AGORA });
+  it("⛔ contato sem o campo que o modelo pede é PULADO com `campoVazio:{{n}}` — nada gravado, nada enviado", async () => {
+    const { db, gravadas } = banco({ lead: { restaurante: null } });
+    const r = await abordarLead(db, { leadId: "L1", autorUserId: "u1", agora: AGORA });
 
-    const modelo = enviarModelo.mock.calls[0]![2] as { parametros: string[] };
-    expect(modelo.parametros).toEqual([]);
+    expect(r).toEqual({ abordou: false, motivo: "campoVazio", detalhe: "campoVazio:{{1}}" });
+    expect(gravadas).toHaveLength(0);
+    expect(enviarModelo).not.toHaveBeenCalled();
+  });
+
+  it("⛔ modelo configurado sem mapa: não sai no chute", async () => {
+    process.env.FOOCCI_SDR_MODELO_ABORDAGEM = "modelo_que_ninguem_mapeou";
+    const { db } = banco();
+    const r = await abordarLead(db, { leadId: "L1", autorUserId: "u1", agora: AGORA });
+
+    expect(r.abordou).toBe(false);
+    if (!r.abordou) expect(r.motivo).toBe("semMapa");
+    expect(enviarModelo).not.toHaveBeenCalled();
+  });
+
+  it("o restaurante do mapa: lista → estabelecimento; formulário → o campo `restaurante`, nunca o primeiro nome", () => {
+    expect(restauranteDoLead({ nome: "Bar do Zé", restaurante: null, fonte: "LISTA_PROSPECCAO" })).toBe("Bar do Zé");
+    expect(restauranteDoLead({ nome: "Marina Gambarini", restaurante: "Cantina da Marina", fonte: null })).toBe("Cantina da Marina");
+    expect(restauranteDoLead({ nome: "Marina Gambarini", restaurante: null, fonte: null })).toBeNull();
   });
 });
 
@@ -258,8 +293,8 @@ describe("a configuração do modelo", () => {
 
   it("o resumo gravado na conversa diz qual modelo saiu", () => {
     // Bolha vazia na tela do vendedor é pior que uma que diz o nome do modelo.
-    expect(resumoDoModelo({ nome: "foocci_abordagem_inicial", idioma: "pt_BR", parametros: ["Marina"] }))
-      .toBe("[modelo: foocci_abordagem_inicial] (Marina)");
+    expect(resumoDoModelo({ nome: "abordagem_restaurante_fria", idioma: "pt_BR", parametros: ["Bar do Zé", "Bar do Zé", "Pinheiros, São Paulo"] }))
+      .toBe("[modelo: abordagem_restaurante_fria] (Bar do Zé · Bar do Zé · Pinheiros, São Paulo)");
   });
 });
 

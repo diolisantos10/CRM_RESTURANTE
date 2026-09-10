@@ -32,9 +32,18 @@ import { selectEngineRouted } from "@/services/brain/engines/AIEngineRouter";
 import { callStructuredJson } from "@/services/brain/engines/OpenAIEngineAdapter";
 import { buscarNoConhecimento, type PedacoDeConhecimento } from "./conhecimento";
 import { buscarNaVerdade, type Achado } from "./verdade";
-import { verificarResposta, type Veredito } from "./verificador";
+import {
+  verificarResposta,
+  LIMITE_DE_CARACTERES,
+  LIMITE_DE_FRASES,
+  type Veredito,
+  type ContextoDaVerificacao,
+} from "./verificador";
 import { VERSAO_1, type TextoDaVersao } from "./ficha";
 import { blocoDoOficio, type PosturaDoAgente } from "./oficio";
+import { LINKS_DO_FOOCCI, pediuInformacaoObjetiva } from "./links";
+import { ultimaFalaDoTAPerguntou } from "./responder";
+import { comPrazo } from "./prazo";
 
 /**
  * ⚠️ QUEM ESCOLHE O MODELO É O BRAIN, E NÃO ESTE ARQUIVO.
@@ -61,6 +70,24 @@ const AGENTE = "sdr-ta-foocci";
  * de alguém esperando no WhatsApp.
  */
 const TENTATIVAS_APOS_REPROVA = 1;
+
+/**
+ * Quanto tempo o TA espera o modelo antes de responder pelo chão.
+ *
+ * ── O INCIDENTE DE 09/09/2026 ───────────────────────────────────────────────
+ *
+ * Às 09h42 o TA falhou cinco vezes seguidas para o CEO. A causa não foi o
+ * modelo cair: foi o modelo DEMORAR. A chamada rodava dentro da transação de
+ * banco que declara a identidade ao RLS, e o Prisma fecha essa transação em
+ * 5 s. Modelo em 6 s = transação morta = turno "quebrou" = lead sem resposta.
+ *
+ * A transação saiu de volta do modelo (`atender.ts`), e ISTO é a outra metade:
+ * um teto explícito. Vinte segundos é muito para uma conversa de WhatsApp e
+ * ainda assim é um teto — sem ele, um provedor pendurado prende o turno até o
+ * socket morrer, e a pessoa fica olhando para "digitando…" por um minuto.
+ * Estourou, sai o chão determinístico, na hora, com o motivo escrito.
+ */
+export const PRAZO_DO_MODELO_MS = 20_000;
 
 export type OrigemDaFala = "modelo" | "modelo-na-segunda" | "chao-deterministico";
 
@@ -89,6 +116,11 @@ export interface PedidoAoCerebro {
    * closer em cima de quem ninguém mediu.
    */
   postura?: PosturaDoAgente;
+  /**
+   * Teto de espera pelo modelo, em milissegundos. Omitido = `PRAZO_DO_MODELO_MS`.
+   * Injetável para o teste provar o estouro sem esperar vinte segundos de relógio.
+   */
+  prazoMs?: number;
 }
 
 /**
@@ -169,6 +201,26 @@ function instrucao(
     "",
     "SE NÃO SOUBER: diga que não sabe e ofereça chamar alguém do time. Isso é",
     "uma resposta boa. Inventar é o único erro que não tem conserto.",
+    "",
+    // ── Os links, a cadência de pergunta e o tamanho — pedido do CEO, 09/09/2026.
+    //
+    // Os três são conferidos em código depois (`verificador.ts`): o teto de
+    // tamanho e a pergunta fora de hora REPROVAM a resposta. Estão escritos aqui
+    // para o modelo não gastar a tentativa em algo que vai ser barrado.
+    "LINKS QUE VOCÊ MANDA — o endereço inteiro, exatamente como está aqui, sem",
+    "encurtar e sem inventar outro:",
+    `- Site: ${LINKS_DO_FOOCCI.site}`,
+    `- Planos e preços: ${LINKS_DO_FOOCCI.precos} (mande quando perguntarem preço ou plano)`,
+    `- Ver o Foocci funcionando, sem cadastro: ${LINKS_DO_FOOCCI.demo} (mande quando pedirem demo, teste ou "como é")`,
+    `- Assinar: ${LINKS_DO_FOOCCI.assinar} (mande quando quiserem contratar, assinar ou começar)`,
+    "",
+    "TAMANHO — trava de verdade, o texto é reprovado se passar:",
+    `- No máximo ${LIMITE_DE_FRASES} frases e ${LIMITE_DE_CARACTERES} caracteres. Mire em três frases curtas.`,
+    "",
+    "PERGUNTA — trava de verdade, o texto é reprovado se passar:",
+    "- Se a pessoa pediu preço, link, demo ou como assinar: entregue e PARE. Nenhuma pergunta.",
+    "- Se a sua mensagem anterior já terminou em pergunta, esta não pergunta nada.",
+    "- No máximo uma pergunta a cada duas mensagens suas. Uma resposta sem pergunta é uma resposta completa.",
   ].join("\n");
 }
 
@@ -199,6 +251,13 @@ export async function pensar(
   const reprovacoes: Veredito[] = [];
   let correcao = "";
 
+  // O que o verificador precisa saber da conversa, calculado UMA vez: a pessoa
+  // pediu coisa objetiva? A última fala do TA já foi pergunta?
+  const contexto: ContextoDaVerificacao = {
+    pediuInformacaoObjetiva: pediuInformacaoObjetiva(pedido.mensagem),
+    ultimaFalaDoTAPerguntou: ultimaFalaDoTAPerguntou(pedido.historico),
+  };
+
   for (let tentativa = 0; tentativa <= TENTATIVAS_APOS_REPROVA; tentativa++) {
     const texto = await escrever(
       engine,
@@ -206,9 +265,9 @@ export async function pensar(
       pedido,
       correcao,
     );
-    if (texto === null) break; // rede ou modelo fora do ar — cai no chão
+    if (texto === null) break; // rede, modelo fora do ar ou prazo estourado — cai no chão
 
-    const veredito = verificarResposta(texto);
+    const veredito = verificarResposta(texto, contexto);
     if (veredito.aprovada) {
       return {
         texto,
@@ -228,7 +287,8 @@ export async function pensar(
     correcao =
       `A sua resposta anterior foi REPROVADA pela verificação da empresa: ${veredito.detalhe}. ` +
       "Reescreva corrigindo exatamente isso. Se o problema foi um valor, use apenas os valores " +
-      "que aparecem em O QUE VOCÊ PODE AFIRMAR. Se foi uma promessa, retire-a — não a suavize.";
+      "que aparecem em O QUE VOCÊ PODE AFIRMAR. Se foi uma promessa, retire-a — não a suavize. " +
+      "Se foi tamanho, corte até caber. Se foi pergunta, termine sem pergunta.";
   }
 
   const base = chao(pedido);
@@ -272,7 +332,8 @@ async function escrever(
   ].filter(Boolean).join("\n\n");
 
   try {
-    const raw = await callStructuredJson({
+    // ── O PRAZO — ver `prazo.ts`. Estourou, `null`, e o chão responde. ──────
+    const chamada = callStructuredJson({
       selection: engine,
       systemPrompt: sistema,
       userContent,
@@ -295,6 +356,9 @@ async function escrever(
       // transformar uma resposta um pouco mais longa em silêncio do modelo.
       maxTokens: 400,
     });
+
+    const raw = await comPrazo(chamada, pedido.prazoMs ?? PRAZO_DO_MODELO_MS);
+    if (raw === null) return null; // prazo estourado — o chão responde
 
     return raw.trim() || null;
   } catch {

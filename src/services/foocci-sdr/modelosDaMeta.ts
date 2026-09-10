@@ -37,6 +37,7 @@ import { countBodyVariables } from "@/services/whatsapp/MetaTemplateService";
 import { foocciSalesPhoneNumberId, comOTokenDeVendas } from "./FoocciSalesChannel";
 import { modeloConfigurado } from "@/services/salaDeVendas/abordar";
 import { MetaAppCredentialsService } from "@/services/meta/MetaAppCredentialsService";
+import { conferirMapaContraModelo } from "@/services/salaDeVendas/prospeccao/mapaDoModelo";
 
 export interface ModeloNaMeta {
   nome: string;
@@ -299,6 +300,8 @@ export type ConferenciaDoModelo =
         | "naoAchado"
         | "naoAprovado"
         | "variaveisNaoBatem"
+        /** O modelo tem variáveis e ninguém registrou o mapa delas (`mapaDoModelo.ts`). */
+        | "semMapa"
         | "metaRecusou";
       detalhe: string;
     };
@@ -312,15 +315,18 @@ export type CausaDaConferencia = Extract<ConferenciaDoModelo, { pronto: false }>
  * Responde, numa consulta: o modelo configurado existe na Meta? está aprovado?
  * quantas variáveis ele espera, e isso bate com o que o código manda?
  *
- * `parametrosQueMandamos` é **1** — a saudação (`abordarLead` monta
- * `parametros: [saudação]`, ou `[]` quando o contato não tem nome).
+ * `parametrosQueMandamos` é o tamanho do **mapa do modelo** (`mapaDoModelo.ts`):
+ * desde 10/09/2026 o envio manda um valor por `{{n}}`, pelo nome do modelo, e
+ * a conferência compara o mapa com o número de variáveis que a Meta declara —
+ * reprovando **nomeando a variável** que falta ou sobra.
  *
- * ── POR QUE 0 e 1 PASSAM, e 2 NÃO ───────────────────────────────────────────
+ * ── POR QUE A CONTAGEM ERA "1" E DEIXOU DE SER ──────────────────────────────
  *
- * Com `{{1}}`, o contato COM nome vai; o sem nome é recusado pela Meta e a
- * rodada pula (a defesa que o #216 instalou). É perda parcial e conhecida.
- * Com duas ou mais variáveis, **nenhum** contato passa — 100% de recusa, e a
- * rodada só descobriria isso queimando três contatos até bater o limite.
+ * Até 10/09 o envio mandava só a saudação. O modelo aprovado
+ * (`abordagem_restaurante_fria`) espera três, e a Meta recusou 100% com
+ * `(#132000)` — a rodada aprendeu isso queimando seis contatos. Modelo sem
+ * mapa registrado também reprova: o chute é o que esta conferência existe
+ * para impedir.
  *
  * Recusar aqui custa uma consulta. Descobrir lá custa a janela do dia.
  */
@@ -358,15 +364,12 @@ export async function conferirModeloDeAbordagem(token: string): Promise<Conferen
     };
   }
 
-  if (achado.variaveis > 1) {
-    return {
-      pronto: false,
-      causa: "variaveisNaoBatem",
-      detalhe: `o modelo espera ${achado.variaveis} variáveis e o envio manda 1`,
-    };
+  const mapa = conferirMapaContraModelo(achado.nome, achado.variaveis);
+  if (!mapa.ok) {
+    return { pronto: false, causa: mapa.causa, detalhe: mapa.detalhe };
   }
 
-  return { pronto: true, modelo: achado, parametrosQueMandamos: 1 };
+  return { pronto: true, modelo: achado, parametrosQueMandamos: mapa.parametros };
 }
 
 /**

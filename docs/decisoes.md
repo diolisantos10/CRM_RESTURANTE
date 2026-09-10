@@ -1402,3 +1402,43 @@ restaurantes e não há caminho de teste que não use o número vivo do sushi.
 
 **Exceção de régua declarada:** `SEM_AGENTE` + `URGENCIA`. O Diretor editou `src/`
 sem poder acionar o especialista `interface` nesta execução.
+
+
+---
+
+## 10/09/2026 — O envio tem MAPA por modelo: cada `{{n}}` tem dono, e campo vazio pula o item
+
+**Decisão (Diretor Geral, 10/09, com o dado que a lista TEM).** O envio da
+abordagem fria deixa de mandar "a saudação" para qualquer modelo e passa a
+montar os parâmetros por um **mapa registrado pelo nome do modelo**
+(`src/services/salaDeVendas/prospeccao/mapaDoModelo.ts`). Para
+`abordagem_restaurante_fria`:
+
+    {{1}} = restaurante · {{2}} = restaurante · {{3}} = bairro, cidade
+    (bairro vazio → cidade; cidade vazia → estado)
+
+A lista fria não tem nome de pessoa — a coluna `nome` é o restaurante. A
+repetição `{{1}}`/`{{2}}` é defeito de copy do modelo, não do mapa; o Diretor
+Geral leva ao CEO um modelo novo sem nome de pessoa.
+
+**Regras que ficam em código, não em aviso (guardrail 4):**
+
+- **Campo vazio pula o item** com motivo `campoVazio:{{n}}`. A Meta nunca recebe
+  string vazia: "Olá, ! Aqui é a Foocci" é pior que não mandar.
+- **Modelo sem mapa não sai.** O pré-voo reprova por `semMapa`; o envio devolve
+  `semMapa` e a rodada para (é a máquina, não a linha da lista).
+- **O pré-voo confere o mapa contra a Meta** e reprova **nomeando a variável**
+  que falta (`falta {{4}}`) ou que sobra — "espera 3 e o envio manda 1" mandava
+  investigar; "falta {{4}}" manda registrar o campo.
+- **O bairro passou a ser guardado** no item de prospecção (coluna + migration
+  `20260910193000`), porque só o item conhece bairro e estado.
+
+**Por quê.** A Meta recusou 100% dos envios com `(#132000) Number of parameters
+does not match`, e a rodada aprendeu isso queimando seis contatos de 4.000
+(08/09). Quantidade e ordem das variáveis são do modelo; código que manda
+"um parâmetro para todo modelo" é chute com aparência de regra.
+
+**Descartado:** adivinhar a ordem (manda "Olá São Paulo" para um restaurante);
+mandar string vazia para "não travar" (o cliente vê o defeito, não nós).
+
+Registro: PR #236, commit `fe1bb6a`.

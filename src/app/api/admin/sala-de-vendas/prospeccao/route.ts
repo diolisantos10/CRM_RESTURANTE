@@ -364,6 +364,10 @@ function fraseDaAbordagem(motivo: string, detalhe: string): string {
       return "Não consegui registrar a mensagem, então nada foi enviado.";
     case "aMetaRecusou":
       return `Registrei a mensagem, mas o WhatsApp recusou: ${detalhe}`;
+    case "campoVazio":
+      return `Este contato não tem o dado que o modelo pede (${detalhe}) — pulado.`;
+    case "semMapa":
+      return `O modelo configurado não tem mapa de variáveis: ${detalhe}`;
     default:
       return `Não foi possível abordar: ${detalhe}`;
   }
