@@ -27,6 +27,7 @@ import { ConversationStatus } from "@prisma/client";
 import { MetaAppCredentialsService } from "@/services/meta/MetaAppCredentialsService";
 import { verifyMetaChallenge, validateMetaSignature, normalizeMetaWebhook } from "@/services/whatsapp/providers/metaWebhook";
 import { foocciSalesPhoneNumberId } from "@/services/foocci-sdr/FoocciSalesChannel";
+import { aprenderWabaDaSala } from "@/services/foocci-sdr/modelosDaMeta";
 import { wabasDaSalaNoEnvelope } from "./wabaDaSala";
 import { MetaConfigService } from "@/services/whatsapp/MetaConfigService";
 import { WhatsAppBrainRuntimeService, isWhatsAppBrainEnabled } from "@/services/whatsapp/brain/WhatsAppBrainRuntimeService";
@@ -110,11 +111,20 @@ async function processMetaWebhook(payload: unknown): Promise<void> {
   // isso não existir, isto aqui é o que transforma um pedido de DADO ("copie o id da
   // tela") num pedido de GESTO ("mande um oi para o número") — e gesto não se digita
   // errado.
+  // ⭐ 10/09/2026 — A PROVISORIEDADE ACIMA ACABOU: agora ele PERSISTE.
+  //
+  // O bloco de comentário acima descreve por que isto nasceu só como log, e a
+  // última frase dele pedia o conserto definitivo: *"persistir e alimentar
+  // `contaDoNumeroDeVendas` direto, sem humano no meio."* É o que esta chamada
+  // faz. A migração é aditiva e nulável (`20260910120000_waba_da_sala_persistido`),
+  // então o risco que justificou a espera não existe mais.
+  //
+  // `aprenderWabaDaSala` só grava quando o número do envelope é EXATAMENTE o de
+  // vendas, e nunca lança — o recebimento da mensagem de um cliente não pode
+  // depender de uma escrita de configuração dar certo.
   for (const waba of wabasDaSalaNoEnvelope(payload, foocciSalesPhoneNumberId())) {
-    console.info(
-      `[webhook/meta/whatsapp] ⭐ WABA DA SALA DE VENDAS: ${waba} — escreva este valor em ` +
-      `FOOCCI_SALES_WABA_ID e a conferência de modelos para de depender de humano nenhum`,
-    );
+    console.info(`[webhook/meta/whatsapp] WABA da Sala de Vendas visto no envelope: ${waba}`);
+    void aprenderWabaDaSala({ phoneNumberId: foocciSalesPhoneNumberId(), wabaId: waba });
   }
 
   // ── Coexistência: eco da mensagem que o ATENDENTE mandou do celular ─────────

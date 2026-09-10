@@ -11,12 +11,29 @@
  *
  * O que ele NÃO vê é o desempenho individual dos colegas — e não vê porque a
  * ficha é um cargo, não uma pessoa: o número é sempre agregado.
+ *
+ * ── E, DESDE 10/09/2026, A MATRIZ DE VERDADE ────────────────────────────────
+ *
+ * A resposta leva junto quantas dessas nove fichas têm código atrás. Vai no
+ * MESMO payload de propósito: numa segunda rota, a tela poderia desenhar os nove
+ * cartões antes de a verdade chegar — e o instante em que ela mostra nove
+ * agentes sem contradição é o instante que produz o mal-entendido.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { guardarSalaDeVendas } from "../_guarda";
-import { agentesComerciais, resumir } from "@/services/salaDeVendas/agentesComerciais";
+import {
+  agentesComerciais,
+  resumir,
+  fichasComerciais,
+} from "@/services/salaDeVendas/agentesComerciais";
+import {
+  matrizDeVerdade,
+  contarAVerdade,
+  lerRuntimeDaMatriz,
+  NADA_MEDIDO,
+} from "@/services/salaDeVendas/matrizDeVerdade";
 import { comSessao } from "@/services/salaDeVendas/identidadeNoBanco";
 
 export const runtime = "nodejs";
@@ -40,9 +57,31 @@ export async function GET(req: NextRequest) {
     const agentes = await comSessao(prisma, portao.sessao, (tx) =>
       agentesComerciais(tx as never, { de, ate }),
     );
+
+    // A leitura do runtime é lida FORA do `comSessao` porque `SdrIaConfig` é
+    // configuração da casa, não dado de lead — não há linha de RLS para ela.
+    //
+    // E ela falha sozinha: uma leitura de estado que não voltou não pode derrubar
+    // as fichas, que são o conteúdo principal da tela. Sem ela, a matriz sai
+    // inteira com "não medido", que é uma resposta honesta.
+    let leitura = NADA_MEDIDO;
+    try {
+      leitura = await lerRuntimeDaMatriz(prisma);
+    } catch (e) {
+      console.error("[sala-de-vendas/agentes] estado do runtime não medido:", e);
+    }
+
+    const matriz = matrizDeVerdade(fichasComerciais(), leitura);
+
     return NextResponse.json({
       ok: true,
-      data: { agentes, resumo: resumir(agentes), periodo: { de, ate } },
+      data: {
+        agentes,
+        resumo: resumir(agentes),
+        matriz,
+        verdade: contarAVerdade(matriz),
+        periodo: { de, ate },
+      },
     });
   } catch (e) {
     // O catálogo é lido do disco. Se o arquivo sumir, a resposta diz ISSO — e

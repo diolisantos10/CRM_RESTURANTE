@@ -51,6 +51,17 @@ afterEach(() => {
   process.env = { ...ambiente };
 });
 
+/**
+ * O corpo que a Meta REALMENTE devolve num envio aceito.
+ *
+ * ⚠️ Este cenário devolvia `{}` até 10/09/2026 — um 200 sem `messages[0].id`,
+ * que a Meta nunca manda. Desde a P0.1 isso não é mais sucesso: sem o `wamid` o
+ * status (`sent`, `delivered`, `read`, `failed`) nunca casa com a mensagem, e
+ * ela ficaria ENVIADA para sempre. O cenário foi corrigido para o contrato
+ * real; a implementação não foi afrouxada.
+ */
+const ACEITO_PELA_META = { messages: [{ id: "wamid.TESTE" }] };
+
 /** Captura o corpo enviado à Meta sem tocar a rede. */
 function espionarFetch(resposta: { ok: boolean; body?: unknown } = { ok: true }) {
   const chamadas: Array<{ url: string; corpo: Record<string, unknown> }> = [];
@@ -61,7 +72,7 @@ function espionarFetch(resposta: { ok: boolean; body?: unknown } = { ok: true })
       return {
         ok: resposta.ok,
         status: resposta.ok ? 200 : 400,
-        json: async () => resposta.body ?? {},
+        json: async () => resposta.body ?? (resposta.ok ? ACEITO_PELA_META : {}),
       } as never;
     }),
   );

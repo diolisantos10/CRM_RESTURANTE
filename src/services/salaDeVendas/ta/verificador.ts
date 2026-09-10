@@ -37,6 +37,30 @@
  */
 
 import { tabelaPublicada } from "../precos";
+import { temPlaceholderNaoResolvido } from "@/services/foocci-sdr/semPlaceholder";
+import { linksPermitidos } from "./link";
+
+/**
+ * Um endereço escrito na resposta que não está na lista oficial, se houver.
+ *
+ * ⚠️ Compara sem a barra final e sem diferenciar maiúsculas: `…/precos` e
+ * `…/Precos/` são o mesmo endereço para o navegador, e reprovar um deles seria
+ * barrar o modelo por acertar.
+ */
+function linkForaDaLista(texto: string): string | null {
+  const escritos = texto.match(/https?:\/\/[^\s<>"')\]]+/gi) ?? [];
+  if (escritos.length === 0) return null;
+
+  const oficiais = new Set(linksPermitidos().map(normalizarUrl));
+  for (const url of escritos) {
+    if (!oficiais.has(normalizarUrl(url))) return url;
+  }
+  return null;
+}
+
+function normalizarUrl(u: string): string {
+  return u.trim().toLowerCase().replace(/[.,;:!?)]+$/, "").replace(/\/+$/, "");
+}
 
 export type MotivoDaReprovacao =
   | "precoForaDaTabela"
@@ -45,7 +69,37 @@ export type MotivoDaReprovacao =
   | "integracaoInventada"
   | "fechouPeloCliente"
   | "negouSerAgente"
+  /**
+   * ⛔ Sobrou um espaço reservado no texto: `[link do site]`, `{{2}}`,
+   * `undefined`. O cliente recebeu `[link do site]` literal em 09/09/2026.
+   */
+  | "placeholderNaoResolvido"
+  /** Escreveu um endereço que não está na lista oficial — ou seja, inventou. */
+  | "linkForaDaLista"
+  /**
+   * ⛔ Pediu o telefone de quem está falando com ele PELO TELEFONE.
+   *
+   * Aconteceu em 09/09/2026. É o pedido que mais rápido faz a pessoa perceber
+   * que não está sendo ouvida — o número dela é a única coisa que a casa tem
+   * com certeza absoluta, porque foi por ele que a mensagem chegou.
+   */
+  | "pediuTelefoneQueJaTem"
   | "vazio";
+
+/**
+ * Pedir o telefone, e não FALAR de WhatsApp.
+ *
+ * ⚠️ A diferença é a razão de a expressão ser tão estreita. "Você vende pelo
+ * WhatsApp?" é uma pergunta de qualificação boa e obrigatória; "me passa seu
+ * WhatsApp" é o defeito. Uma expressão que casasse a palavra solta barraria a
+ * pergunta mais importante da sondagem.
+ *
+ * ⚠️ Sem `\b` depois de palavra acentuada: em JavaScript `\b` é ASCII, e
+ * `/n[úu]mero\b/` não casa como se espera depois do "ú". A casa já pagou essa
+ * lição uma vez, com `/rob[ôo]\b/` não casando com "robô não".
+ */
+const PEDE_TELEFONE =
+  /((qual|me (passa|manda|informa|diz)|pode (me )?(passar|mandar)|deixa)\s+(o\s+|um\s+)?(seu\s+|teu\s+)?(telefone|whatsapp|whats|zap|n[úu]mero|contato)|(seu|teu)\s+(telefone|whatsapp|whats|zap|n[úu]mero)\s+(para|pra|pro|é|eh)\b)/i;
 
 export interface Veredito {
   aprovada: boolean;
@@ -250,6 +304,45 @@ export function verificarResposta(texto: string): Veredito {
   if (negou) {
     motivos.push("negouSerAgente");
     detalhes.push(`negou ser um agente ("${negou[0].trim()}")`);
+  }
+
+  // 7. Espaço reservado que não foi preenchido.
+  //
+  // ⚠️ Reaproveita `temPlaceholderNaoResolvido`, que já guarda o envio por
+  // MODELO. Escrever um segundo detector aqui daria duas listas de padrões que
+  // divergem — e a que envelhecesse seria justamente a que protege a conversa
+  // livre, que é por onde `[link do site]` vazou.
+  const sobrou = temPlaceholderNaoResolvido(limpo);
+  if (sobrou) {
+    motivos.push("placeholderNaoResolvido");
+    detalhes.push(`deixou um espaço reservado no texto ("${sobrou}")`);
+  }
+
+  // 8. Endereço inventado.
+  //
+  // A regra é lista branca, e não "parece uma URL da Foocci": um `/planos` que
+  // não existe é um 404 no meio da venda, e o modelo inventa caminho com a
+  // maior naturalidade. Item da ordem: toda URL validada antes do envio, e link
+  // inválido impede o envio daquela resposta.
+  const inventado = linkForaDaLista(limpo);
+  if (inventado) {
+    motivos.push("linkForaDaLista");
+    detalhes.push(`escreveu um endereço que não é oficial ("${inventado}")`);
+  }
+
+  // 9. Pediu o telefone de quem escreveu pelo telefone.
+  //
+  // Só o TELEFONE vira trava aqui, e não o nome. O número é conhecido SEMPRE —
+  // foi por ele que a mensagem chegou —, então pedi-lo é sempre defeito. O nome
+  // pode genuinamente não ser conhecido, e barrar a pergunta faria o agente
+  // tratar todo mundo por "você" para sempre. O nome é tratado na memória, que
+  // sabe se ele já foi dito.
+  const pediuTelefone = PEDE_TELEFONE.exec(limpo);
+  if (pediuTelefone) {
+    motivos.push("pediuTelefoneQueJaTem");
+    detalhes.push(
+      `pediu o telefone de quem já está falando pelo telefone ("${pediuTelefone[0].trim()}")`,
+    );
   }
 
   return {

@@ -153,6 +153,11 @@ function reagirA(motivo: MotivoDaFila): Reacao {
     // parar aqui deixaria um silêncio no topo da lista bloqueando os outros 249.
     case "naoVirouLead":
     case "portaoRecusou":
+    // ⭐ Contato sem o dado que o modelo aprovado exige (10/09/2026). É LINHA
+    // RUIM DA LISTA, não canal quebrado: o próximo contato pode ter o dado.
+    // Parar aqui deixaria uma planilha com um nome em branco no topo travando
+    // os outros 249 — exatamente o que o Diretor Geral mandou evitar.
+    case "semDadoParaOModelo":
       return "pula";
 
     // O freio do dia/hora. Não é defeito, e não adianta tentar o próximo: ele
@@ -467,6 +472,31 @@ export async function abordarARodadaDoDia(
         detalhe: r.detalhe,
         jaAbordadosNestaRodada: abordados,
       });
+
+      // ⛔ A PAUSA PASSA A SER PERSISTENTE — ordem do Diretor Geral, 10/09/2026.
+      //
+      // Até aqui a interrupção valia **só para esta execução**: a rodada
+      // morria, e a próxima — agendada, ou um clique de alguém que não viu o
+      // log — começava do zero contra a MESMA parede. Três recusas viravam
+      // seis, viravam nove, cada rodada gastando contatos contra um modelo
+      // errado ou um token vencido.
+      //
+      // Gravada em `pausadoEm` + `motivo`, que a fila já consulta
+      // (`selecao.ts:76`): nenhuma rodada nova sai enquanto a pausa estiver de
+      // pé. **O atendimento receptivo não é afetado** — quem escrever continua
+      // sendo respondido; o que para é a casa falar primeiro.
+      //
+      // Reativar exige ato explícito e auditável: o interruptor da tela, com
+      // nome de quem religou. Sem isso, "a pausa sumiu sozinha" volta a ser
+      // possível, que é o que esta trava existe para impedir.
+      await pausarPorRecusasDaMeta(db, {
+        agora,
+        recusasSeguidas,
+        itemId: candidato.itemId,
+        detalhe: r.detalhe,
+        abordadosAntes: abordados,
+      });
+
       return {
         abordados,
         pulados,
@@ -495,4 +525,40 @@ export async function abordarARodadaDoDia(
   }
 
   return { abordados, pulados, parouPor: "filaAcabou", falha: null, extrato };
+}
+
+
+/**
+ * Grava a pausa automática do outbound.
+ *
+ * ── O QUE ELA REGISTRA, E POR QUE CADA CAMPO ───────────────────────────────
+ *
+ * `pausadoPor` diz que foi a máquina, e não uma pessoa — quem abrir a tela
+ * amanhã precisa saber que ninguém apertou nada. `motivo` carrega a contagem,
+ * o item, o erro da Meta e quantos já tinham saído: é o que separa "o modelo
+ * está errado" de "aquele contato era ruim", e sem isso a investigação começa
+ * do zero.
+ *
+ * ⚠️ **Não derruba a rodada se falhar.** A rodada já está terminando com o
+ * motivo na resposta; perder o registro é ruim, perder o retorno é pior. A
+ * falha vai para o log e o `parouPor: "falha"` continua subindo.
+ */
+async function pausarPorRecusasDaMeta(
+  db: Cliente,
+  d: { agora: Date; recusasSeguidas: number; itemId: string; detalhe: string; abordadosAntes: number },
+): Promise<void> {
+  const motivo =
+    `Pausa automática: a Meta recusou ${d.recusasSeguidas} envios seguidos. ` +
+    `Último item ${d.itemId} — ${d.detalhe}. ` +
+    `${d.abordadosAntes} já haviam saído nesta rodada. ` +
+    `Religar exige conferir o modelo e o canal antes.`;
+
+  try {
+    await db.prospeccaoConfig.update({
+      where: { id: "singleton" },
+      data: { pausadoEm: d.agora, pausadoPor: "sistema (freio automático)", motivo },
+    });
+  } catch (e) {
+    console.error("[prospeccao] não consegui gravar a pausa automática", e);
+  }
 }

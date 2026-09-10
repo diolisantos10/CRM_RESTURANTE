@@ -14,10 +14,6 @@ vi.mock("@/services/salaDeVendas/prospeccao/abordarDaFila", () => rodada);
 vi.mock("@/lib/prisma", () => ({ prisma: {} }));
 vi.mock("@/services/foocci-sdr/FoocciSalesChannel", () => ({ canalDeVendasPronto: () => true }));
 
-// A reserva do dia (10/09/2026): só a rodada AUTOMÁTICA passa por ela.
-const agendador = vi.hoisted(() => ({ reservarRodadaAutomaticaDoDia: vi.fn() }));
-vi.mock("@/services/salaDeVendas/prospeccao/agendador", () => agendador);
-
 import { POST } from "./route";
 
 const guardado = { ...process.env };
@@ -92,34 +88,6 @@ describe("a rodada", () => {
   it("devolve o extrato para quem agendou", async () => {
     const json = await (await bater("Bearer segredo")).json();
     expect(json.data).toMatchObject({ abordados: 2, pulados: 1, parouPor: "filaAcabou" });
-  });
-});
-
-describe("⭐ a reserva do dia (10/09/2026) — o GitHub atrasado não roda por cima do agendador interno", () => {
-  it("disparo à mão NÃO reserva: o teto do dia é o freio dele", async () => {
-    await bater("Bearer segredo", { teto: 10 });
-    expect(agendador.reservarRodadaAutomaticaDoDia).not.toHaveBeenCalled();
-    expect(rodada.abordarARodadaDoDia).toHaveBeenCalledTimes(1);
-  });
-
-  it("disparo AUTOMÁTICO reserva antes, e roda quando ganha a reserva", async () => {
-    agendador.reservarRodadaAutomaticaDoDia.mockResolvedValue({ reservou: true });
-    const res = await bater("Bearer segredo", { automatica: true });
-    expect(res.status).toBe(200);
-    expect(agendador.reservarRodadaAutomaticaDoDia).toHaveBeenCalledWith(expect.anything(), expect.any(Date), "cron do GitHub");
-    expect(rodada.abordarARodadaDoDia).toHaveBeenCalledTimes(1);
-  });
-
-  it("⛔ quando o interno já rodou hoje, responde `jaRodouHoje` e NÃO aborda ninguém", async () => {
-    vi.spyOn(console, "info").mockImplementation(() => {});
-    agendador.reservarRodadaAutomaticaDoDia.mockResolvedValue({
-      reservou: false, motivo: "jaRodouHoje", detalhe: "já reservada por agendador interno às 12:00Z",
-    });
-    const res = await bater("Bearer segredo", { automatica: true });
-    const json = (await res.json()) as { data: Record<string, unknown> };
-    expect(res.status).toBe(200);
-    expect(json.data).toMatchObject({ abordados: 0, parouPor: "jaRodouHoje" });
-    expect(rodada.abordarARodadaDoDia).not.toHaveBeenCalled();
   });
 });
 

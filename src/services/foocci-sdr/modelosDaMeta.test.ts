@@ -59,9 +59,9 @@ describe("ler os modelos da conta do número de vendas", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.modelos).toEqual([
-      { nome: "sem_variavel", idioma: "pt_BR", status: "APPROVED", variaveis: 0, corpo: "Olá, tudo bem?" },
-      { nome: "uma",          idioma: "pt_BR", status: "APPROVED", variaveis: 1, corpo: "Olá {{1}}, tudo bem?" },
-      { nome: "duas",         idioma: "pt_BR", status: "PENDING",  variaveis: 2, corpo: "Olá {{1}}, aqui é {{2}}" },
+      { nome: "sem_variavel", idioma: "pt_BR", status: "APPROVED", variaveis: 0 },
+      { nome: "uma",          idioma: "pt_BR", status: "APPROVED", variaveis: 1 },
+      { nome: "duas",         idioma: "pt_BR", status: "PENDING",  variaveis: 2 },
     ]);
   });
 
@@ -95,8 +95,22 @@ describe("⭐ a conferência antes do disparo", () => {
     if (r.pronto) expect(r.modelo.variaveis).toBe(1);
   });
 
-  it("modelo aprovado SEM variável também passa — o envio manda zero quando não há nome", async () => {
+  it("⛔ modelo SEM variável não passa mais quando o envio monta uma", async () => {
+    // ── MUDOU EM 10/09/2026 (P0.2) ────────────────────────────────────────
+    // A regra antiga aceitava 0 OU 1, porque o envio montava `nome ? [nome] :
+    // []` — um payload que MUDAVA COM O CONTATO. Contra um modelo sem
+    // variável, o contato COM nome é que era recusado pela Meta, um a um.
+    // Agora a correspondência é exata: o padrão do envio é 1, então um modelo
+    // de zero variáveis é recusado no pré-voo, e a mensagem diz o que ajustar.
     metaResponde([{ name: "foocci_abordagem_v1", language: "pt_BR", status: "APPROVED", components: corpo("Olá!") }]);
+    const r = await conferirModeloDeAbordagem(TOKEN);
+    expect(r.pronto).toBe(false);
+    expect(!r.pronto && r.detalhe).toContain("FOOCCI_SDR_MODELO_VARIAVEIS");
+  });
+
+  it("⭐ e passa quando o contrato bate — a sonda de controle do caso acima", async () => {
+    // Sem esta, o teste de cima estaria verde com um pré-voo que recusa tudo.
+    metaResponde([{ name: "foocci_abordagem_v1", language: "pt_BR", status: "APPROVED", components: corpo("Olá {{1}}!") }]);
     expect((await conferirModeloDeAbordagem(TOKEN)).pronto).toBe(true);
   });
 
@@ -110,7 +124,7 @@ describe("⭐ a conferência antes do disparo", () => {
     expect(r.pronto).toBe(false);
     if (!r.pronto) {
       expect(r.causa).toBe("variaveisNaoBatem");
-      expect(r.detalhe).toContain("2 variáveis");
+      expect(r.detalhe).toContain("espera 2");
     }
   });
 

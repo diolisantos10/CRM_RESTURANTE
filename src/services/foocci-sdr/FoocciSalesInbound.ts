@@ -45,6 +45,14 @@ import { normalizaWhatsapp } from "@/services/foocci-crm/leadOrigin";
 import { registrarEntrada } from "@/services/salaDeVendas/conversa";
 import { comIdentidade, comoSistema } from "@/services/salaDeVendas/identidadeNoBanco";
 import { atenderComOTA, type ResultadoDoTurno } from "@/services/salaDeVendas/ta/atender";
+import { comATravaDaConversa } from "@/services/salaDeVendas/travaDaConversa";
+import {
+  carimbarTurno,
+  chegouEntradaDepois,
+  esperar,
+  janelaDeAgrupamento,
+  juntarEntradasDoTurno,
+} from "@/services/salaDeVendas/ta/agrupamento";
 import type { TipoDaMensagem } from "@prisma/client";
 
 // ─── A parte pura ───────────────────────────────────────────────────────────────
@@ -303,6 +311,20 @@ async function gravarNaConversa(
  *
  * `atenderComOTA` já não lança, e o `catch` aqui é o cinto do cinto.
  */
+/**
+ * ⭐ QUANTAS VOLTAS O TURNO DÁ ANTES DE DESISTIR.
+ *
+ * Enquanto este turno compõe, o lead pode escrever de novo. Essa mensagem nova
+ * **não consegue** tomar a trava — e sem o laço abaixo ela ficaria sem resposta
+ * para sempre: a trava teria trocado uma resposta dupla por uma mensagem
+ * perdida, que é pior.
+ *
+ * Três é o teto porque o laço tem de acabar. Um lead que escreve sem parar é
+ * atendido nas três primeiras voltas e, na quarta mensagem, pela chamada nova
+ * que o webhook dispara — o turno solta a trava ao sair, e ela está livre.
+ */
+const VOLTAS_DO_TURNO = 3;
+
 async function chamarOTA(
   leadId: string,
   msg: MensagemDeVendas,
@@ -315,17 +337,131 @@ async function chamarOTA(
   if (!leitura.temTexto || !msg.text) return undefined;
 
   try {
-    // Dentro de `comIdentidade` pelo mesmo motivo da gravação da entrada: o RLS
-    // precisa do papel declarado, senão a escrita do TA não passa pela trava.
-    return await comIdentidade(
-      prisma,
-      comoSistema("webhook da Meta: o TA respondendo, sem usuário logado"),
-      (tx) => atenderComOTA(tx, { leadId, mensagem: msg.text!, agora }),
+    const r = await comATravaDaConversa(prisma, { leadId, agora }, async (donoDoTurno) =>
+      turnoConsolidado(leadId, donoDoTurno, agora, msg.text!),
     );
+
+    // `null` = a conversa já tinha um turno correndo. **Não é perda**: a nossa
+    // mensagem já está gravada, e o turno vizinho relê as entradas depois da
+    // janela — então ele responde por nós. Este é o caminho que faz três
+    // mensagens em rajada virarem UMA resposta.
+    if (r === null) {
+      console.info(`[foocci-sdr] turno vizinho já atende o lead ${leadId}; esta mensagem entra nele`);
+      return undefined;
+    }
+    return r;
   } catch (e) {
     console.error(`[foocci-sdr] o TA não conseguiu atender o lead ${leadId}:`, e);
     return undefined;
   }
+}
+
+/**
+ * O turno, já com a trava na mão.
+ *
+ * ── A ORDEM AQUI É O CONSERTO INTEIRO ───────────────────────────────────────
+ *
+ *   1. **espera a janela** — só na primeira volta, para juntar a rajada;
+ *   2. **relê as entradas do banco** — e não usa o texto que chegou no webhook.
+ *      Esta é a linha que consolida: o que responde é *tudo o que ele escreveu
+ *      desde a última vez que falamos*, na ordem do relógio;
+ *   3. **compõe e entrega**;
+ *   4. **confere se chegou mensagem nova** enquanto compunha. Se chegou, dá
+ *      outra volta — sem esperar de novo, porque a rajada já passou.
+ */
+async function turnoConsolidado(
+  leadId: string,
+  donoDoTurno: string,
+  agora: Date,
+  /**
+   * ⭐ O CHÃO: o texto que chegou no webhook, agora mesmo.
+   *
+   * A consolidação lê do banco porque é lá que estão as mensagens irmãs. Mas o
+   * banco pode não ter esta: `gravarNaConversa` desiste em silêncio quando a
+   * Meta manda um evento sem `waMessageId`, e uma leitura que devolve vazio
+   * faria o agente **não responder a alguém que acabou de escrever**.
+   *
+   * Consolidar é melhoria. Responder é obrigação. Quando a melhoria não tem o
+   * que ler, responde-se ao texto que chegou — que é o comportamento de ontem,
+   * e ontem pelo menos respondia.
+   */
+  textoQueChegou: string,
+): Promise<ResultadoDoTurno | undefined> {
+  let ultimo: ResultadoDoTurno | undefined;
+
+  for (let volta = 0; volta < VOLTAS_DO_TURNO; volta++) {
+    if (volta === 0) await esperar(janelaDeAgrupamento());
+
+    // ⛔ A CONSOLIDAÇÃO INTEIRA É OPCIONAL, E O `catch` É O QUE DIZ ISSO.
+    //
+    // Medido em 10/09/2026, ao ligar esta máquina: cada peça nova que entrou no
+    // caminho do turno — a trava, a memória, esta leitura — trouxe junto a
+    // mesma armadilha. Se ela falha, a exceção sobe, o `catch` lá de cima
+    // devolve `undefined`, o webhook responde 200, e **o lead nunca recebe
+    // resposta**. Três vezes o mesmo defeito, com três causas diferentes.
+    //
+    // Então a regra é estrutural, e não peça por peça: falhou a consolidação,
+    // responde-se ao texto que chegou. Nenhuma melhoria desta entrega tem
+    // permissão de calar o agente.
+    const entradas = await juntarEntradasDoTurno(prisma, leadId).catch((e) => {
+      console.error(`[foocci-sdr] não consegui consolidar as entradas do lead ${leadId}:`, e);
+      return null;
+    });
+
+    // Nada pendente no banco. Duas causas, e elas pedem coisas opostas:
+    //
+    //   · na PRIMEIRA volta é a gravação que não aconteceu (ou a leitura
+    //     falhou) — e aí o chão responde, porque há alguém esperando do outro
+    //     lado;
+    //   · nas voltas SEGUINTES é o resultado bom: já respondemos tudo o que
+    //     ele escreveu. Aqui, insistir com o texto do chão mandaria uma
+    //     segunda resposta para a mesma frase — o defeito que viemos consertar.
+    if (!entradas) {
+      if (volta > 0) return ultimo;
+
+      console.warn(
+        `[foocci-sdr] lead ${leadId}: nenhuma entrada pendente no banco; ` +
+          "respondendo ao texto que chegou no webhook",
+      );
+      return await comIdentidade(
+        prisma,
+        comoSistema("webhook da Meta: o TA respondendo, sem usuário logado"),
+        (tx) =>
+          atenderComOTA(tx, {
+            leadId,
+            mensagem: textoQueChegou,
+            agora,
+            turnoId: `${donoDoTurno}:chao`,
+          }),
+      );
+    }
+
+    const turnoId = `${donoDoTurno}:${volta}`;
+    await carimbarTurno(prisma, entradas.ids, turnoId);
+
+    // Dentro de `comIdentidade` pelo mesmo motivo da gravação da entrada: o RLS
+    // precisa do papel declarado, senão a escrita do TA não passa pela trava.
+    ultimo = await comIdentidade(
+      prisma,
+      comoSistema("webhook da Meta: o TA respondendo, sem usuário logado"),
+      (tx) => atenderComOTA(tx, { leadId, mensagem: entradas.texto, agora, turnoId }),
+    );
+
+    // Mesma regra: se não dá para saber se chegou algo novo, encerra o turno.
+    // Errar aqui para o lado de "dar mais uma volta" mandaria uma segunda
+    // resposta; errar para o lado de parar deixa a mensagem seguinte para a
+    // chamada nova do webhook, que já vem a caminho.
+    const chegouNovo = await chegouEntradaDepois(prisma, leadId, entradas.ateQuando).catch(
+      () => false,
+    );
+    if (!chegouNovo) return ultimo;
+
+    console.info(
+      `[foocci-sdr] lead ${leadId} escreveu enquanto o turno compunha; consolidando de novo`,
+    );
+  }
+
+  return ultimo;
 }
 
 // ─── Peças ──────────────────────────────────────────────────────────────────────

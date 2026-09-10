@@ -224,16 +224,63 @@ describe("importar a lista", () => {
     expect(itensCriados[0].motivo).toBeTruthy();
   });
 
-  it("o lote nasce RASCUNHO — importar não autoriza abordar", async () => {
+  /**
+   * ⛔ ESTE CASO MUDOU DE LADO EM 10/09/2026, POR ORDEM — e a troca fica
+   * registrada, porque até ontem ele provava exatamente o contrário.
+   *
+   * Ele exigia que o lote nascesse `RASCUNHO`: importar não autorizava abordar,
+   * e alguém tinha de clicar "Liberar". A regra era boa e virou defeito quando a
+   * operação cresceu — o arquivo é fatiado de 500 em 500, então uma lista de
+   * 8.000 contatos pedia **dezesseis** cliques de liberação para uma decisão que
+   * a pessoa já tinha tomado ao subir o arquivo. Ordem do Diretor Geral: a base
+   * é contínua, e importação válida entra no estoque.
+   *
+   * ── ⚠️ O QUE NÃO PODE TER SE PERDIDO NA TROCA ─────────────────────────────
+   *
+   * A autorização não sumiu; mudou de lugar. Continua havendo ato humano
+   * declarado e com dono: a **proveniência** (obrigatória — o caso da
+   * `ProvenienciaAusente` acima é a sonda de controle disso) e o
+   * `liberadoPorUserId`, que grava QUEM assinou. Sem estas duas linhas, "base
+   * contínua" teria virado "abordar sem ninguém ter assinado", que é outra
+   * coisa e é justamente o que a regra velha existia para impedir.
+   */
+  it("⭐ a importação já entra na base contínua — e ainda assim tem quem assinou", async () => {
     const { db } = dbDeImportacao();
     await importarLote(db, {
       nome: "Curitiba",
       proveniencia: "Lista pública, 08/2026",
+      criadoPor: "Dioli (u-1)",
+      criadoPorUserId: "u-1",
       linhas: [{ whatsapp: "11987654321" }],
     });
     const dados = (db.loteDeProspeccao.create as any).mock.calls[0][0].data;
-    expect(dados.situacao).toBeUndefined(); // o padrão do schema é RASCUNHO
+
+    expect(dados.situacao).toBe("LIBERADO");
+    // A base legal declarada continua viajando com o lote.
     expect(dados.proveniencia).toBe("Lista pública, 08/2026");
+    // E continua havendo um responsável que o banco reconhece.
+    expect(dados.liberadoPorUserId).toBe("u-1");
+    expect(dados.liberadoEm).toBeInstanceOf(Date);
+  });
+
+  it("⛔ sem id de responsável, o lote entra SEM assinatura — e a rodada não o aborda", async () => {
+    // A sonda de controle da regra acima. `liberadoPorUserId` vem da sessão; se
+    // um chamador antigo não o mandar, o campo tem de ficar AUSENTE em vez de
+    // receber o rótulo de tela. Foi essa confusão exata — rótulo `Nome (id)`
+    // entregue a uma coluna com chave estrangeira — que derrubou a primeira
+    // rodada real em 08/09/2026, com HTTP 500 levando junto outros nove
+    // contatos que não tinham nada a ver com o problema.
+    const { db } = dbDeImportacao();
+    await importarLote(db, {
+      nome: "Curitiba",
+      proveniencia: "Lista pública, 08/2026",
+      criadoPor: "Dioli (u-1)",
+      linhas: [{ whatsapp: "11987654321" }],
+    });
+    const dados = (db.loteDeProspeccao.create as any).mock.calls[0][0].data;
+
+    expect(dados.liberadoPorUserId).toBeUndefined();
+    expect(dados.liberadoPor).toBe("Dioli (u-1)");
   });
 });
 
@@ -275,8 +322,23 @@ describe("liberar o lote", () => {
 // A FILA DO DIA
 // ═══════════════════════════════════════════════════════════════════════════
 
-function dbDeFila(config: any, itens: any[] = [], abordagensHoje = 0, leadNaBase: any = null) {
+/**
+ * @param abordagensHoje quantas saíram desde a meia-noite de São Paulo.
+ * @param janela quantas saíram nas últimas 24h corridas (a conta da Meta) e na
+ *   última hora. Separado de `abordagensHoje` de propósito: os dois divergem
+ *   todo dia, e é dessa divergência que nasce o defeito da meia-noite.
+ */
+function dbDeFila(
+  config: any,
+  itens: any[] = [],
+  abordagensHoje = 0,
+  leadNaBase: any = null,
+  janela: { nas24h?: number; naHora?: number } = {},
+) {
   const leadsCriados: any[] = [];
+  const nas24h = janela.nas24h ?? 0;
+  const naHora = janela.naHora ?? 0;
+
   return {
     leadsCriados,
     db: {
@@ -294,7 +356,18 @@ function dbDeFila(config: any, itens: any[] = [], abordagensHoje = 0, leadNaBase
           return { id: "novo-lead", optOutAt: null, lastContactedAt: null };
         }),
       },
-      leadMensagem: { count: vi.fn().mockResolvedValue(0) },
+      leadMensagem: {
+        // O freio faz DUAS contagens na mesma tabela — hora e 24h — e o dublê
+        // precisa distinguir qual é qual, senão um teste da janela derrubaria o
+        // teto da hora junto e passaria pelo motivo errado. A janela pedida
+        // está no `gte`.
+        count: vi.fn(async (args: any) => {
+          const gte: Date | undefined = args?.where?.ocorreuEm?.gte;
+          if (!gte) return 0;
+          const atras = AGORA.getTime() - gte.getTime();
+          return atras <= 60 * 60 * 1000 + 1000 ? naHora : nas24h;
+        }),
+      },
     } as any,
   };
 }
@@ -624,5 +697,78 @@ describe("o descanso configurável só aperta", () => {
 
     expect(fila.liberados).toHaveLength(0);
     expect(fila.barrados[0]!.decisao.reason).toBe("DESCANSO_ATIVO");
+  });
+});
+
+/**
+ * ⭐⭐ A JANELA MÓVEL DE 24 HORAS DA META
+ *
+ * Evidência confirmada no Gerenciador do WhatsApp em 10/09/2026: o número da
+ * Foocci pode iniciar **2.000 conversas numa janela contínua de 24 horas**.
+ *
+ * ── O DEFEITO QUE ESTES CASOS IMPEDEM ──────────────────────────────────────
+ *
+ * `contarAbordagensDeHoje` conta pelo DIA CIVIL de São Paulo. A Meta não. À
+ * 00h01, o contador do dia zera e a fila ofereceria o teto inteiro — sobre um
+ * saldo que a Meta já gastou nas horas anteriores.
+ *
+ * O excedente não vira um erro isolado: vira recusa em série, e recusa em série
+ * é como a nota de qualidade do número cai. O número é o mesmo por onde a casa
+ * atende quem já é cliente.
+ */
+describe("⭐⭐ o saldo é o da janela de 24h, não o do dia civil", () => {
+  const LIGADA = { outboundLigado: true, limiteDiario: 2000, pausadoEm: null };
+
+  it("⛔ à meia-noite o dia zera, e a fila NÃO oferece o teto inteiro", async () => {
+    // O caso exato: `usadosHoje = 0` (o dia acabou de virar) e 1.900 conversas
+    // pesando das últimas 24 horas. Sobram 100, não 2.000.
+    const itens = Array.from({ length: 150 }, (_, i) => ({ ...ITEM, id: `i${i}` }));
+    const { db } = dbDeFila(LIGADA, itens, 0, null, { nas24h: 1900 });
+
+    const fila = await montarFilaDeProspeccao(db, { canalPronto: true, agora: AGORA });
+
+    expect(fila.usadosHoje).toBe(0);
+    expect(fila.usadosNaJanela).toBe(1900);
+    expect(fila.saldoDaJanela).toBe(100);
+
+    // A prova: a consulta pediu no máximo o saldo da janela, e não o teto.
+    const pedidos = (db.itemDeProspeccao.findMany as any).mock.calls[0][0].take;
+    expect(pedidos).toBeLessThanOrEqual(100);
+  });
+
+  it("⛔ janela esgotada fecha a fila, mesmo com o dia civil zerado", async () => {
+    const { db } = dbDeFila(LIGADA, [ITEM], 0, null, { nas24h: 2000 });
+
+    const fila = await montarFilaDeProspeccao(db, { canalPronto: true, agora: AGORA });
+
+    expect(fila.liberados).toHaveLength(0);
+    expect(fila.saldoDaJanela).toBe(0);
+    // A frase precisa dizer JANELA, e não "teto do dia": quem lê às 00h05
+    // precisa entender por que não pode mandar com o contador do dia em zero.
+    expect(fila.motivoDaFilaVazia?.toLowerCase()).toContain("24h");
+  });
+
+  it("⭐ a sonda de controle: com a janela livre, os 2.000 estão disponíveis", async () => {
+    // Sem este caso, os dois acima passariam numa implementação que
+    // simplesmente nunca libera nada — e a operação ficaria parada com a tela
+    // dizendo que está tudo bem.
+    const itens = Array.from({ length: 3 }, (_, i) => ({ ...ITEM, id: `i${i}` }));
+    const { db } = dbDeFila(LIGADA, itens, 0, null, { nas24h: 0 });
+
+    const fila = await montarFilaDeProspeccao(db, { canalPronto: true, agora: AGORA });
+
+    expect(fila.saldoDaJanela).toBe(2000);
+    expect(fila.liberados.length).toBeGreaterThan(0);
+  });
+
+  it("⛔ e o teto da HORA continua valendo por cima da janela", async () => {
+    // A janela de 24h com saldo de sobra não autoriza rajada: 2.000 numa hora
+    // queima o número tão rápido quanto 2.500 num dia.
+    const { db } = dbDeFila(LIGADA, [ITEM], 0, null, { nas24h: 10, naHora: 200 });
+
+    const fila = await montarFilaDeProspeccao(db, { canalPronto: true, agora: AGORA });
+
+    expect(fila.liberados).toHaveLength(0);
+    expect(fila.motivoDaFilaVazia?.toLowerCase()).toContain("hora");
   });
 });

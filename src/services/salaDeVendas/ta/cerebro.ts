@@ -89,6 +89,19 @@ export interface PedidoAoCerebro {
    * closer em cima de quem ninguém mediu.
    */
   postura?: PosturaDoAgente;
+  /**
+   * O que a casa já sabe sobre este lead, pronto para o prompt.
+   *
+   * Vem de `memoria.blocoDeMemoria`. Sem ele o modelo reextrai os fatos do
+   * histórico cru a cada turno — e reextrai mal, que é como o TA perguntou o
+   * tipo de cozinha para quem tinha acabado de dizer "é padaria".
+   */
+  memoria?: string;
+  /**
+   * Regras de conduta que valem SÓ nesta conversa: ele pediu para parar de
+   * responder perguntas, está irritado, já pediu uma pessoa.
+   */
+  conduta?: string;
 }
 
 /**
@@ -134,6 +147,8 @@ function instrucao(
   ficha: TextoDaVersao,
   ctx: ReturnType<typeof montarContexto>,
   postura: PosturaDoAgente = "qualificar",
+  memoria = "",
+  conduta = "",
 ): string {
   const verdades = ctx.verdade.map((a) => `- ${a.item.texto}`).join("\n");
   const conhecimento = ctx.conhecimento
@@ -148,6 +163,27 @@ function instrucao(
     // O ofício vem de `oficio.ts` e não digitado aqui: é texto que se revisa
     // lendo, e enterrado no meio de uma função ninguém o lê inteiro nunca mais.
     blocoDoOficio(postura),
+    "",
+    // ⭐ A MEMÓRIA VEM ANTES DA VERDADE, e a ordem não é estética.
+    //
+    // O modelo lê de cima para baixo e ancora no que vem primeiro. Com os fatos
+    // do lead no topo, a resposta sai sobre a padaria DELE; com eles no rodapé,
+    // sai um texto genérico sobre restaurantes com o nome dele colado no fim.
+    //
+    // Vazio quando não se sabe nada — e vazio de propósito: um cabeçalho "O QUE
+    // JÁ SEI:" seguido de nada ensina o modelo a preencher o buraco.
+    ...(memoria ? [memoria, ""] : []),
+    ...(conduta ? ["COMO CONDUZIR ESTA CONVERSA AGORA:", conduta, ""] : []),
+    // ── A ORDEM DA RESPOSTA, e ela nasceu de um defeito medido ──
+    //
+    // Em 09/09/2026 o lead perguntou "então o serviço vende pelo WhatsApp?" e
+    // recebeu de volta outra pergunta. Quem pergunta e leva pergunta desiste —
+    // e com razão, porque a conversa deixou de ser sobre ele.
+    "A ORDEM DA SUA RESPOSTA, quando ele perguntar alguma coisa:",
+    "1. responda a pergunta dele, objetivamente, na primeira frase;",
+    "2. ligue a resposta ao que ele já contou que precisa;",
+    "3. só então, no máximo UMA pergunta — e só se ela fizer a venda avançar.",
+    "Nunca devolva uma pergunta antes de responder.",
     "",
     "O QUE VOCÊ PODE AFIRMAR — palavra por palavra, sem alterar número nenhum:",
     verdades || "(nada específico foi encontrado para esta pergunta)",
@@ -202,7 +238,7 @@ export async function pensar(
   for (let tentativa = 0; tentativa <= TENTATIVAS_APOS_REPROVA; tentativa++) {
     const texto = await escrever(
       engine,
-      instrucao(ficha, ctx, pedido.postura),
+      instrucao(ficha, ctx, pedido.postura, pedido.memoria, pedido.conduta),
       pedido,
       correcao,
     );

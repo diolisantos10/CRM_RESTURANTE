@@ -33,7 +33,9 @@ import type { FoocciLeadStage } from "@/services/foocci-crm/foocciCrmFunnel";
  */
 export const ROTULO_CURTO: Record<FoocciLeadStage, string> = {
   NOVO: "Novo lead",
-  PRIMEIRO_CONTATO: "Primeiro contato",
+  DISPONIVEL_PARA_PROSPECCAO: "Na base fria",
+  PRIMEIRO_CONTATO: "Abordado",
+  RESPONDEU: "Respondeu",
   EM_QUALIFICACAO: "Em qualificação",
   QUALIFICADO: "Qualificado",
   DEMO_AGENDADA: "Demo agendada",

@@ -44,6 +44,7 @@ import {
   type LeadSafetyDecision,
 } from "@/services/foocci-sdr/LeadContactSafety";
 import { contarAbordagensDeHoje } from "./prospeccao/selecao";
+import { parametrosDoEnvioAgora } from "@/services/foocci-sdr/modelosDaMeta";
 import {
   canalDeVendasPronto,
   enviarModeloDeVendas,
@@ -60,6 +61,8 @@ export type ResultadoDaAbordagem =
         | "leadNaoExiste"
         /** O portão do lead recusou. `detalhe` traz o motivo declarado por ele. */
         | "portaoRecusou"
+        /** O modelo exige uma variável que este contato não tem. Linha ruim da lista, não defeito do canal. */
+        | "semDadoParaOModelo"
         /** Teto de abordagens da hora ou do dia. Não é falha — é o freio. */
         | "ritmo"
         | "naoConseguiuGravar"
@@ -424,11 +427,33 @@ export async function abordarLead(
   }
 
   const cfg = modeloConfigurado();
-  const nome = saudacaoDoLead(lead);
+
+  // ⛔ O PAYLOAD TEM DE TER SEMPRE O MESMO TAMANHO — ordem do Diretor Geral,
+  // 10/09/2026: *"impedir que contato sem nome produza payload incompatível."*
+  //
+  // Até hoje era `nome ? [nome] : []`: **o formato do que sai mudava com o
+  // contato**. Contra um modelo de `{{1}}`, quem não tinha nome era recusado
+  // pela Meta — e a rodada só descobria isso queimando contatos, um a um.
+  //
+  // Agora o número vem do contrato (conferido no pré-voo contra o modelo
+  // aprovado) e a montagem é exata. Faltando dado, **não sai**: recusar aqui
+  // custa um contato; mandar payload incompatível custa a reputação do número.
+  //
+  // ⚠️ `parametrosDoEnvioAgora` e NÃO `parametrosQueOEnvioMonta()` seco: desde
+  // 10/09/2026 o número vem do modelo persistido, e o pré-voo confere por essa
+  // mesma fonte. Se aqui continuasse lendo só o ambiente, a conferência
+  // aprovaria um contrato e o disparo montaria outro — o defeito que a P0.2
+  // existe para matar, de volta pela porta dos fundos e com pré-voo verde por
+  // cima. Sem banco, a função cai na reserva do ambiente e nada muda.
+  const montagem = montarParametros(await parametrosDoEnvioAgora(db), lead);
+  if (!montagem.ok) {
+    return { abordou: false, motivo: "semDadoParaOModelo", detalhe: montagem.falta };
+  }
+
   const modelo: ModeloDeAbordagem = {
     nome: cfg.nome,
     idioma: cfg.idioma,
-    parametros: nome ? [nome] : [],
+    parametros: montagem.parametros,
   };
 
   // ── Trava 3: gravar antes de enviar ────────────────────────────────────
@@ -460,10 +485,71 @@ export async function abordarLead(
     return { abordou: false, motivo: "aMetaRecusou", detalhe: envio.error ?? "erro sem motivo" };
   }
 
+  // ⭐ O `wamid` REAL da Meta, e nunca mais um id nosso.
+  //
+  // Até 10/09/2026 esta linha gravava `local:<mensagemId>` — um id que a Meta
+  // nunca viu. Os eventos de `sent`, `delivered`, `read` e `failed` chegam pelo
+  // webhook carregando o `wamid` da Meta e não casavam com linha nenhuma: a
+  // Sala não sabia se a mensagem tinha chegado.
+  //
+  // `enviarModeloDeVendas` agora RECUSA um 200 sem id, então chegar aqui já
+  // garante que ele existe — o `??` abaixo é cinto, não regra.
   await confirmarEnvio(db, {
     mensagemId: gravada.mensagemId,
-    waMessageId: `local:${gravada.mensagemId}`,
+    waMessageId: envio.providerMessageId ?? `local:${gravada.mensagemId}`,
   });
 
   return { abordou: true, mensagemId: gravada.mensagemId };
+}
+
+
+/**
+ * Monta EXATAMENTE `quantas` variáveis para o modelo, ou diz o que falta.
+ *
+ * ── A ORDEM DAS VARIÁVEIS É O CONTRATO ─────────────────────────────────────
+ *
+ * `{{1}}` é a saudação (primeiro nome, ou o nome do restaurante quando não há
+ * pessoa). `{{2}}`, quando o modelo aprovado pedir, é a cidade. Trocar as duas
+ * de lugar manda o nome do restaurante onde deveria ir a cidade — e a Meta
+ * aceita numa boa: quem vê o erro é o cliente.
+ *
+ * ⚠️ Não inventa conteúdo. Faltando dado para uma posição, a função RECUSA em
+ * vez de preencher com espaço, traço ou "cliente" — texto inventado no meio de
+ * uma abordagem é pior que abordagem nenhuma.
+ */
+export function montarParametros(
+  quantas: number,
+  lead: { nome: string | null; restaurante: string | null; fonte: string | null; cidade?: string | null },
+): { ok: true; parametros: string[] } | { ok: false; falta: string } {
+  if (quantas <= 0) return { ok: true, parametros: [] };
+
+  const disponiveis: Array<{ rotulo: string; valor: string | null }> = [
+    // ⚠️ O restaurante é a queda de propósito: `saudacaoDoLead` recusa nome que
+    // é telefone (e faz bem — "Olá 5511988887777" é pior que não chamar pelo
+    // nome), mas uma lista de prospecção quase sempre traz o NOME DA CASA. Sem
+    // esta queda, metade da lista seria recusada por falta de dado que existe.
+    {
+      rotulo: "saudação (nome ou restaurante)",
+      valor: saudacaoDoLead(lead) ?? ((lead.restaurante ?? "").trim() || null),
+    },
+    { rotulo: "cidade", valor: (lead.cidade ?? "").trim() || null },
+  ];
+
+  if (quantas > disponiveis.length) {
+    return {
+      ok: false,
+      falta: `o modelo pede ${quantas} variáveis e o sistema só sabe preencher ${disponiveis.length}`,
+    };
+  }
+
+  const parametros: string[] = [];
+  for (let i = 0; i < quantas; i++) {
+    const campo = disponiveis[i]!;
+    if (!campo.valor) {
+      return { ok: false, falta: `este contato não tem ${campo.rotulo} para a variável {{${i + 1}}}` };
+    }
+    parametros.push(campo.valor);
+  }
+
+  return { ok: true, parametros };
 }

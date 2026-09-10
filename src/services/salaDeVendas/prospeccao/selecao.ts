@@ -30,6 +30,7 @@ import {
   type LeadSafetyDecision,
 } from "@/services/foocci-sdr/LeadContactSafety";
 import { acharLeadPeloTelefone } from "./casamento";
+import { conferirRitmo, tetosEmVigor } from "../freioDeRitmo";
 
 type Cliente = PrismaClient | Prisma.TransactionClient;
 
@@ -47,8 +48,31 @@ export interface FilaDeProspeccao {
   liberados: CandidatoAAbordagem[];
   barrados: CandidatoAAbordagem[];
   motivoDaFilaVazia: string | null;
+  /** Conversas iniciadas desde a meia-noite de São Paulo. */
   usadosHoje: number;
   tetoDoDia: number;
+
+  // ── ⭐ A JANELA MÓVEL DA META — acrescentada em 10/09/2026 ────────────────
+  //
+  // Evidência confirmada no Gerenciador do WhatsApp: o número da Foocci pode
+  // iniciar **2.000 conversas numa janela contínua de 24 horas**. Não é cota
+  // diária: não reinicia à meia-noite.
+  //
+  // ⚠️ E `usadosHoje` conta pelo DIA CIVIL. Os dois números divergem todo dia,
+  // e divergem no pior sentido possível: à 00h01 o contador do dia zera e a
+  // tela diria "0 de 2.000 usadas" enquanto a Meta ainda tem 1.500 conversas
+  // pesando das últimas horas de ontem. Uma rodada que confiasse só no
+  // `usadosHoje` tentaria 2.000 sobre um saldo de 500 — e o excedente não vira
+  // erro isolado, vira recusa em série, que é como a nota de qualidade do
+  // número cai.
+  //
+  // Os dois ficam expostos porque respondem a perguntas diferentes: `usadosHoje`
+  // é a produção do dia, que a operação acompanha; `saldoDaJanela` é o que a
+  // Meta REALMENTE deixa mandar agora, e é ele que manda na fila.
+  /** Conversas iniciadas nas últimas 24 horas corridas. */
+  usadosNaJanela: number;
+  /** Quanto ainda cabe na janela de 24h da Meta. É este que limita a fila. */
+  saldoDaJanela: number;
 }
 
 /**
@@ -86,8 +110,23 @@ export async function montarFilaDeProspeccao(
     config?.horasEntreAbordagens ?? REGRA.descansoHoras,
   );
 
-  const usadosHoje = await contarAbordagensDeHoje(db, agora);
-  const cabeNoTeto = Math.max(0, tetoDoDia - usadosHoje);
+  // ── ⭐ DOIS CONTADORES, E O QUE MANDA É O DA JANELA ───────────────────────
+  //
+  // `contarAbordagensDeHoje` conta pelo dia civil de São Paulo. `conferirRitmo`
+  // conta as últimas 24 HORAS CORRIDAS — que é exatamente como a Meta conta as
+  // conversas iniciadas pela empresa.
+  //
+  // A fila respeita o MENOR dos dois saldos. Sem isso, à meia-noite o contador
+  // do dia zera e a fila ofereceria o teto inteiro sobre um saldo que a Meta já
+  // gastou nas horas anteriores.
+  const [usadosHoje, ritmo] = await Promise.all([
+    contarAbordagensDeHoje(db, agora),
+    conferirRitmo(db, agora, tetosEmVigor(process.env, tetoDoDia)),
+  ]);
+
+  const usadosNaJanela = ritmo.nasUltimas24h;
+  const saldoDaJanela = Math.max(0, tetoDoDia - usadosNaJanela);
+  const cabeNoTeto = Math.min(Math.max(0, tetoDoDia - usadosHoje), saldoDaJanela);
 
   const vazia = (motivo: string): FilaDeProspeccao => ({
     liberados: [],
@@ -95,6 +134,8 @@ export async function montarFilaDeProspeccao(
     motivoDaFilaVazia: motivo,
     usadosHoje,
     tetoDoDia,
+    usadosNaJanela,
+    saldoDaJanela,
   });
 
   if (!ligada) {
@@ -104,60 +145,71 @@ export async function montarFilaDeProspeccao(
         : "Prospecção desligada.",
     );
   }
+
+  // O freio de ritmo já barrou por conta própria — hora ou janela de 24h. A
+  // frase vem dele, e não de uma reescrita aqui, para a tela dizer o mesmo que
+  // o envio diria.
+  if (!ritmo.pode) return vazia(ritmo.detalhe);
+
   if (cabeNoTeto <= 0) {
-    return vazia(`Teto do dia atingido (${usadosHoje}/${tetoDoDia}).`);
+    return vazia(
+      saldoDaJanela <= 0
+        ? `Saldo da janela de 24h esgotado (${usadosNaJanela}/${tetoDoDia} conversas iniciadas).`
+        : `Teto do dia atingido (${usadosHoje}/${tetoDoDia}).`,
+    );
   }
 
   const quantos = Math.min(cabeNoTeto, opcoes.limite ?? cabeNoTeto);
 
+  // ── ⭐ A BASE É UMA SÓ — E O FILTRO DE LOTE MUDOU DE PAPEL EM 10/09/2026 ───
+  //
+  // `lote: { situacao: "LIBERADO" }` continua aqui, e continua sendo obrigatório,
+  // mas ele já **não é mais o portão de autorização**: o lote nasce LIBERADO
+  // desde que a importação passou a assinar a liberação (ver `lote.ts`). O que
+  // ele faz agora é EXCLUIR o lote que alguém parou de propósito — o botão de
+  // pausa, e o cancelamento de uma importação inteira, que pausa todos os lotes
+  // daquele arquivo. Sem esta linha, cancelar uma importação não teria efeito
+  // nenhum sobre quem é abordado amanhã de manhã.
+  //
+  // ⚠️ `limiteDiario` do lote NÃO é mais lido. A coluna continua no banco (é
+  // registro de como o lote entrou), e a fila deixou de obedecê-la: com o
+  // arquivo entrando em 16 partes de 20, ela cortava a base unificada em 320 por
+  // dia enquanto a tela mostrava o teto global de 2.000 ao lado — dois tetos, um
+  // deles invisível, e ninguém entendendo por que a fila parava. Pedir só o que
+  // se usa é o que impede a coluna de voltar a valer por descuido.
   const itens = await db.itemDeProspeccao.findMany({
     where: { situacao: "PENDENTE", lote: { situacao: "LIBERADO" } },
     orderBy: { criadoEm: "asc" },
     take: quantos,
     include: {
-      lote: { select: { id: true, proveniencia: true, limiteDiario: true } },
+      lote: { select: { id: true, proveniencia: true } },
     },
   });
 
   const liberados: CandidatoAAbordagem[] = [];
   const barrados: CandidatoAAbordagem[] = [];
 
-  /** Quantos já entraram na fila por lote, para o teto do lote também valer. */
-  const porLote = new Map<string, number>();
-
   for (const item of itens) {
     // Leitura, nunca criação: se o contato já é lead, aproveitamos o histórico
     // dele; se não é, avaliamos com histórico zero — que é a verdade.
     const lead = await lerLeadDoItem(db, item);
 
-    // Zero é "nada sai", igual ao teto global. A leitura oposta ("0 = sem
-    // limite") inverteria a semântica entre dois campos com o mesmo nome — e é
-    // o tipo de inversão que só aparece no dia em que alguém importa com 0.
-    const tetoDoLote = item.lote.limiteDiario ?? 0;
-    const jaNoLote = porLote.get(item.loteId) ?? 0;
-
-    const decisao =
-      jaNoLote >= tetoDoLote
-        ? {
-            sendable: false as const,
-            reason: "PROSPECCAO_DESLIGADA" as const,
-            detail: `Teto do lote atingido (${jaNoLote}/${tetoDoLote}).`,
-          }
-        : avaliarAbordagemDeProspeccao({
-            telefone: item.whatsapp,
-            optOutAt: lead?.optOutAt ?? null,
-            tentativas: lead?.tentativas ?? 0,
-            ultimoContatoEm: lead?.lastContactedAt ?? null,
-            // Verdadeiro porque os três campos acima saíram do banco agora: ou
-            // o lead existe e foi lido, ou ele não existe e o histórico é
-            // genuinamente zero.
-            historicoConhecido: true,
-            canalPronto: opcoes.canalPronto,
-            prospeccaoLiberada: true,
-            baseLegalDeclarada: item.lote.proveniencia,
-            descansoHoras,
-            agora,
-          });
+    // O teto que vale é o do dia (contado acima, no banco) mais o teto explícito
+    // da rodada, que quem aperta o botão escolhe. Nenhum outro.
+    const decisao = avaliarAbordagemDeProspeccao({
+      telefone: item.whatsapp,
+      optOutAt: lead?.optOutAt ?? null,
+      tentativas: lead?.tentativas ?? 0,
+      ultimoContatoEm: lead?.lastContactedAt ?? null,
+      // Verdadeiro porque os três campos acima saíram do banco agora: ou o lead
+      // existe e foi lido, ou ele não existe e o histórico é genuinamente zero.
+      historicoConhecido: true,
+      canalPronto: opcoes.canalPronto,
+      prospeccaoLiberada: true,
+      baseLegalDeclarada: item.lote.proveniencia,
+      descansoHoras,
+      agora,
+    });
 
     const candidato: CandidatoAAbordagem = {
       itemId: item.id,
@@ -168,12 +220,8 @@ export async function montarFilaDeProspeccao(
       decisao,
     };
 
-    if (decisao.sendable) {
-      liberados.push(candidato);
-      porLote.set(item.loteId, jaNoLote + 1);
-    } else {
-      barrados.push(candidato);
-    }
+    if (decisao.sendable) liberados.push(candidato);
+    else barrados.push(candidato);
   }
 
   return {
@@ -181,10 +229,12 @@ export async function montarFilaDeProspeccao(
     barrados,
     motivoDaFilaVazia:
       liberados.length === 0 && barrados.length === 0
-        ? "Nenhum item pendente em lote liberado."
+        ? "Nenhum contato pendente na base — ou a lista acabou, ou os lotes estão pausados."
         : null,
     usadosHoje,
     tetoDoDia,
+    usadosNaJanela,
+    saldoDaJanela,
   };
 }
 

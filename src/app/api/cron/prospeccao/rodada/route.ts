@@ -46,7 +46,6 @@ import {
 } from "@/services/salaDeVendas/prospeccao/abordarDaFila";
 import { canalDeVendasPronto } from "@/services/foocci-sdr/FoocciSalesChannel";
 import { preVooDoModelo } from "@/services/foocci-sdr/modelosDaMeta";
-import { reservarRodadaAutomaticaDoDia } from "@/services/salaDeVendas/prospeccao/agendador";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -111,37 +110,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: guarda.erro }, { status: guarda.status });
   }
 
-  const corpo = (await req.json().catch(() => ({}))) as { teto?: unknown; automatica?: unknown };
+  const corpo = (await req.json().catch(() => ({}))) as { teto?: unknown };
   const teto =
     typeof corpo.teto === "number" && Number.isInteger(corpo.teto) && corpo.teto > 0
       ? corpo.teto
       : undefined;
-
-  // ── A RODADA AUTOMÁTICA RESERVA O DIA — a manual, não ─────────────────────
-  //
-  // Desde 10/09/2026 existem dois agendadores para a rodada das 9h: o interno
-  // (`AgendadorDaProspeccao`) e este cron do GitHub, que ficou como reserva
-  // porque atrasou 3h43 num dia e não disparou no outro. Quando o GitHub acorda
-  // atrasado e o interno já rodou, esta linha é o que impede o dia de mandar o
-  // dobro. `automatica: true` vem do evento `schedule` do workflow; disparo à
-  // mão (`workflow_dispatch`) não reserva — o teto do dia já é o freio dele.
-  if (corpo.automatica === true) {
-    const reserva = await reservarRodadaAutomaticaDoDia(prisma, new Date(), "cron do GitHub");
-    if (!reserva.reservou) {
-      console.info(`[cron/prospeccao/rodada] rodada automática NÃO rodou — ${reserva.detalhe}`);
-      return NextResponse.json({
-        ok: true,
-        data: {
-          abordados: 0,
-          pulados: 0,
-          parouPor: reserva.motivo,
-          falha: null,
-          extrato: [],
-          detalhe: reserva.detalhe,
-        },
-      });
-    }
-  }
 
   const r = await abordarARodadaDoDia(prisma, {
     autor: "SISTEMA",

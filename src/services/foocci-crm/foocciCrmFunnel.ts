@@ -31,7 +31,8 @@
  * O mapeamento do que já estava gravado está na migração, com `CASE` explícito.
  */
 export type FoocciLeadStage =
-  | "NOVO" | "PRIMEIRO_CONTATO" | "EM_QUALIFICACAO" | "QUALIFICADO"
+  | "NOVO" | "DISPONIVEL_PARA_PROSPECCAO" | "PRIMEIRO_CONTATO" | "RESPONDEU"
+  | "EM_QUALIFICACAO" | "QUALIFICADO"
   | "DEMO_AGENDADA" | "DEMO_REALIZADA" | "PROPOSTA_ENVIADA" | "EM_NEGOCIACAO"
   | "GANHO" | "PERDIDO" | "NUTRICAO";
 
@@ -47,8 +48,22 @@ export type FoocciLeadStage =
  * inflaria o resultado; somá-lo à perda apagaria a lista de quem voltaria a
  * conversar daqui a três meses. É estado de espera, e espera não é degrau.
  */
+/**
+ * ── OS DOIS DEGRAUS ACRESCENTADOS EM 10/09/2026 ─────────────────────────────
+ *
+ * `DISPONIVEL_PARA_PROSPECCAO` e `RESPONDEU` entram na SEQUÊNCIA, e não fora
+ * dela, porque os dois são avanço de verdade — e a régua de conversão precisa
+ * vê-los para responder às duas perguntas que a prospecção fria faz:
+ * **quantos da base a gente abordou** e **quantos responderam**.
+ *
+ * `RESPONDEU` fica ANTES de EM_QUALIFICACAO porque existe um vão real entre as
+ * duas: ele falou de volta e ninguém começou a descoberta ainda. Enfiar os dois
+ * no mesmo degrau escondia exatamente o lead que mais vale — o que respondeu e
+ * está esfriando enquanto espera.
+ */
 export const SEQUENCIA_FUNIL = [
-  "NOVO", "PRIMEIRO_CONTATO", "EM_QUALIFICACAO", "QUALIFICADO",
+  "NOVO", "DISPONIVEL_PARA_PROSPECCAO", "PRIMEIRO_CONTATO", "RESPONDEU",
+  "EM_QUALIFICACAO", "QUALIFICADO",
   "DEMO_AGENDADA", "DEMO_REALIZADA", "PROPOSTA_ENVIADA", "EM_NEGOCIACAO",
   "GANHO",
 ] as const;
@@ -57,7 +72,9 @@ export type FoocciFunnelStage = (typeof SEQUENCIA_FUNIL)[number];
 
 export const ROTULO_ETAPA: Record<FoocciLeadStage, string> = {
   NOVO:             "Novo lead",
-  PRIMEIRO_CONTATO: "Primeiro contato",
+  DISPONIVEL_PARA_PROSPECCAO: "Disponível para prospecção",
+  PRIMEIRO_CONTATO: "Abordado",
+  RESPONDEU:        "Respondeu",
   EM_QUALIFICACAO:  "Em qualificação",
   QUALIFICADO:      "Qualificado",
   DEMO_AGENDADA:    "Demonstração agendada",
@@ -72,7 +89,10 @@ export const ROTULO_ETAPA: Record<FoocciLeadStage, string> = {
 /** O que cada etapa significa comercialmente — vai na tela, para não virar folclore. */
 export const DESCRICAO_ETAPA: Record<FoocciLeadStage, string> = {
   NOVO:             "Chegou na base. Ninguém falou com ele ainda.",
+  DISPONIVEL_PARA_PROSPECCAO:
+    "Contato frio conferido e elegível, esperando a vez. Nós fomos buscar — ele não pediu contato.",
   PRIMEIRO_CONTATO: "Recebeu a primeira mensagem nossa e ainda não disse nada que qualifique.",
+  RESPONDEU:        "Falou de volta. A descoberta ainda não começou — e é aqui que ele esfria.",
   EM_QUALIFICACAO:  "Está respondendo. A descoberta está em andamento.",
   QUALIFICADO:      "Tem perfil, tem a dor e tem interesse. Vale tempo de gente.",
   DEMO_AGENDADA:    "Marcou a demonstração. Ainda não aconteceu.",

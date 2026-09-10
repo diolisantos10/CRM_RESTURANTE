@@ -45,6 +45,7 @@ import {
   maskGraphResponse,
 } from "@/services/whatsapp/providers/metaPayload";
 import type { LeadSafetyDecision } from "./LeadContactSafety";
+import { temPlaceholderNaoResolvido } from "./semPlaceholder";
 
 // ─── Identidade do canal ────────────────────────────────────────────────────────
 
@@ -368,6 +369,21 @@ export interface EnvioDeVendasResult {
   ok: boolean;
   /** Motivo real, mascarado. Nunca um booleano mudo (guardrail 6). */
   error?: string;
+  /**
+   * ⭐ O `wamid` que a Meta devolveu — o ÚNICO id que o webhook de status usa.
+   *
+   * ── O DEFEITO, ATÉ 10/09/2026 ─────────────────────────────────────────────
+   *
+   * A resposta de sucesso da Graph API era descartada e a chamada devolvia
+   * `{ ok: true }` seco. `abordarLead` então gravava `waMessageId:
+   * local:<mensagemId>` — um id nosso, que a Meta nunca viu.
+   *
+   * Consequência: `sent`, `delivered`, `read` e `failed` chegam pelo webhook
+   * carregando o `wamid` da Meta, **não casavam com linha nenhuma**, e a Sala
+   * ficava sem saber se a mensagem chegou. Entregue, lida e falhou eram
+   * impossíveis de mostrar — não por falta de tela, por falta de chave.
+   */
+  providerMessageId?: string;
 }
 
 /**
@@ -418,16 +434,35 @@ export async function enviarTextoDeVendas(
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify(buildMetaTextPayload(recipient, text)),
     });
+    const json: unknown = await res.json().catch(() => ({}));
+
     if (!res.ok) {
-      const json: unknown = await res.json().catch(() => ({}));
       const err = (json as { error?: { message?: string } }).error ?? {};
       return { ok: false, error: maskGraphResponse(err.message ?? `HTTP_${res.status}`) };
     }
-    return { ok: true };
+
+    // ⛔ 200 SEM `wamid` NÃO É SUCESSO, e esta é a linha que decide.
+    //
+    // Sem o id, o webhook de status nunca casa com esta mensagem: ela ficaria
+    // ENVIADA para sempre, sem entregue, sem lida e — o pior — sem falhou. Uma
+    // mensagem que a Meta descartou depois apareceria na tela como enviada.
+    //
+    // Melhor recusar aqui: PENDENTE com motivo é visível e recuperável;
+    // ENVIADA sem rastro é uma mentira que ninguém descobre.
+    const wamid = idDaMensagemNaResposta(json);
+    if (!wamid) {
+      return {
+        ok: false,
+        error: "a Meta respondeu 200 sem id de mensagem — sem ele o status nunca casa",
+      };
+    }
+
+    return { ok: true, providerMessageId: wamid };
   } catch (e) {
     return { ok: false, error: maskGraphResponse(e instanceof Error ? e.message : String(e)) };
   }
 }
+
 
 // ─── Envio por MODELO (abordagem) ───────────────────────────────────────────────
 
@@ -505,6 +540,25 @@ export async function enviarModeloDeVendas(
     return { ok: false, error: `variável {{${vazio + 1}}} do modelo veio vazia` };
   }
 
+  // ⛔ E TAMPOUCO SAI COM VARIÁVEL NÃO RESOLVIDA — a trava acima só pega o
+  // vazio; esta pega o **preenchido errado**.
+  //
+  // Um parâmetro que ainda carrega `{{2}}`, um rascunho `[nome do restaurante]`
+  // ou um `undefined` coagido a texto passa por todas as conferências de
+  // CONTAGEM — o pré-voo mede quantas variáveis saem, nunca o que vai dentro
+  // delas — e a Meta aceita numa boa, porque ela confere formato, não sentido.
+  // Quem lê "Olá undefined, aqui é a Foocci" é o prospecto, e a abordagem fria
+  // só tem uma primeira impressão.
+  for (let i = 0; i < modelo.parametros.length; i++) {
+    const ofensor = temPlaceholderNaoResolvido(modelo.parametros[i]);
+    if (ofensor) {
+      return {
+        ok: false,
+        error: `variável {{${i + 1}}} do modelo saiu com trecho não resolvido: "${ofensor}"`,
+      };
+    }
+  }
+
   const recipient = toMetaRecipient(toPhone);
   if (!recipient) return { ok: false, error: "telefone inválido" };
 
@@ -514,13 +568,45 @@ export async function enviarModeloDeVendas(
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify(buildMetaTemplatePayload(recipient, nome, idioma, modelo.parametros)),
     });
+    const json: unknown = await res.json().catch(() => ({}));
+
     if (!res.ok) {
-      const json: unknown = await res.json().catch(() => ({}));
       const err = (json as { error?: { message?: string } }).error ?? {};
       return { ok: false, error: maskGraphResponse(err.message ?? `HTTP_${res.status}`) };
     }
-    return { ok: true };
+
+    // ⛔ 200 SEM `wamid` NÃO É SUCESSO, e esta é a linha que decide.
+    //
+    // Sem o id, o webhook de status nunca casa com esta mensagem: ela ficaria
+    // ENVIADA para sempre, sem entregue, sem lida e — o pior — sem falhou. Uma
+    // mensagem que a Meta descartou depois apareceria na tela como enviada.
+    //
+    // Melhor recusar aqui: PENDENTE com motivo é visível e recuperável;
+    // ENVIADA sem rastro é uma mentira que ninguém descobre.
+    const wamid = idDaMensagemNaResposta(json);
+    if (!wamid) {
+      return {
+        ok: false,
+        error: "a Meta respondeu 200 sem id de mensagem — sem ele o status nunca casa",
+      };
+    }
+
+    return { ok: true, providerMessageId: wamid };
   } catch (e) {
     return { ok: false, error: maskGraphResponse(e instanceof Error ? e.message : String(e)) };
   }
+}
+
+/**
+ * O `wamid` dentro da resposta da Graph API.
+ *
+ * Formato documentado: `{ messages: [{ id: "wamid.HBg..." }] }`. Lido de forma
+ * defensiva e PURA — a resposta vem de fora, e "vem de fora" é sempre `unknown`
+ * até alguém conferir.
+ */
+export function idDaMensagemNaResposta(json: unknown): string | null {
+  const msgs = (json as { messages?: unknown })?.messages;
+  if (!Array.isArray(msgs) || msgs.length === 0) return null;
+  const id = (msgs[0] as { id?: unknown })?.id;
+  return typeof id === "string" && id.trim() ? id.trim() : null;
 }

@@ -9,23 +9,35 @@
  * ela só aceitava um JSON montado à mão. O CEO tinha listas e não tinha onde
  * pôr. Uma porta sem maçaneta é uma porta fechada.
  *
+ * ── O SEGUNDO BURACO, FECHADO EM 10/09/2026 ─────────────────────────────────
+ *
+ * O servidor recusa mais de 500 linhas por vez, então esta tela sempre fatiou o
+ * arquivo. O que ela não fazia era **costurar as partes de volta**: uma lista de
+ * 8.000 virava dezesseis lotes com nome "(parte 7/16)", dezesseis liberações
+ * manuais e nenhum lugar onde o arquivo somasse. Para quem operou, aquilo nunca
+ * foi uma lista.
+ *
+ * Agora as partes continuam existindo — é limite técnico de conferência — e
+ * todas carregam o MESMO `importacaoId`. Uma abertura antes, uma conclusão
+ * depois, e no meio o número que a tela mostra é o do arquivo inteiro.
+ *
  * ── AS TRÊS COISAS QUE ESTA TELA SE RECUSA A FAZER ─────────────────────────
  *
  * 1. **Importar sem mostrar o que entendeu.** Coluna trocada não quebra nada e
  *    não acusa erro — só faz a Foocci mandar "Olá 5511988887777" para o dono de
- *    um restaurante. Por isso o mapa de colunas aparece ANTES do botão, e o
- *    botão fica embaixo dele.
+ *    um restaurante. Por isso o mapa de colunas aparece ANTES do botão.
  * 2. **Esconder o que foi descartado.** Linha sem telefone é contada e dita. O
  *    silêncio aqui é o que faz alguém achar que subiu 900 e ter subido 300.
- * 3. **Aceitar lista sem dizer de onde veio.** O campo de procedência é
- *    obrigatório nesta tela porque é obrigatório no servidor — e é melhor a
- *    pessoa saber disso antes de escolher o arquivo do que depois de esperar
- *    a subida.
+ * 3. **Aceitar lista sem dizer de onde veio.** Procedência é obrigatória nesta
+ *    tela porque é obrigatória no servidor — e é melhor saber disso antes de
+ *    escolher o arquivo do que depois de esperar a subida.
  *
- * ── ⚠️ E ELA NÃO ABORDA NINGUÉM ─────────────────────────────────────────────
+ * ── ⚠️ E SUBIR AGORA LIBERA ─────────────────────────────────────────────────
  *
- * Subir a lista **não** libera a lista. O lote entra como RASCUNHO e continua
- * precisando da liberação explícita, que é outro botão, com outro dono.
+ * Isto mudou, e a tela precisa dizer com todas as letras. O lote nasce LIBERADO:
+ * a procedência declarada mais a assinatura de quem subiu É a autorização.
+ * Ninguém é abordado ainda — quem manda mensagem sair é o interruptor da
+ * Prospecção, que é outro botão, mais abaixo, e continua desligado por padrão.
  */
 
 import { useCallback, useRef, useState } from "react";
@@ -38,6 +50,10 @@ const POR_LOTE = 500;
 
 interface ArquivoLido {
   nome: string;
+  tipo: string | null;
+  bytes: number | null;
+  /** SHA-256 do conteúdo. `null` quando o navegador não oferece `crypto.subtle`. */
+  hash: string | null;
   linhas: LinhaLida[];
   colunas: ColunaLida[];
   descartadas: number;
@@ -54,6 +70,16 @@ interface Conferencia {
   invalidas: number;
 }
 
+interface ImportacaoAnterior {
+  id: string;
+  arquivoNome: string;
+  iniciadaEm: string;
+  situacao: string;
+  linhasTotais: number;
+  linhasAceitas: number;
+  criadoPorNome: string | null;
+}
+
 const ROTULO_CAMPO: Record<string, string> = {
   nome: "Nome da pessoa",
   whatsapp: "WhatsApp",
@@ -63,15 +89,46 @@ const ROTULO_CAMPO: Record<string, string> = {
   tipo: "Tipo",
 };
 
+/**
+ * A impressão digital do arquivo, calculada no navegador.
+ *
+ * ── POR QUE DO CONTEÚDO, E NÃO DO NOME ──────────────────────────────────────
+ *
+ * Porque a subida repetida quase nunca repete o nome: é "lista (1).xlsx",
+ * "lista final.xlsx", "lista final DE VERDADE.xlsx". Nome não reconhece nada.
+ *
+ * ── ⚠️ E POR QUE ELA PODE DEVOLVER `null` ───────────────────────────────────
+ *
+ * `crypto.subtle` só existe em contexto seguro (https, ou localhost). Numa
+ * eventual abertura por http simples ele é `undefined` — e um `throw` aqui
+ * derrubaria a importação inteira por causa do aviso de planilha repetida, que é
+ * o acessório. Sem hash, o arquivo sobe do mesmo jeito e o aviso simplesmente
+ * não existe. Perder o aviso é aceitável; perder a importação, não.
+ */
+async function hashDoArquivo(f: File): Promise<string | null> {
+  try {
+    if (typeof crypto === "undefined" || !crypto.subtle) return null;
+    const digest = await crypto.subtle.digest("SHA-256", await f.arrayBuffer());
+    return Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  } catch {
+    return null;
+  }
+}
+
 export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
   const [arquivos, setArquivos] = useState<ArquivoLido[]>([]);
   const [procedencia, setProcedencia] = useState("");
+  const [canalDeObtencao, setCanalDeObtencao] = useState("");
   const [nomeDoLote, setNomeDoLote] = useState("");
   const [ocupado, setOcupado] = useState(false);
+  const [progresso, setProgresso] = useState<{ parte: number; de: number } | null>(null);
   const [resultado, setResultado] = useState<string | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [conferencia, setConferencia] = useState<Conferencia | null>(null);
   const [conferindo, setConferindo] = useState(false);
+  const [repetida, setRepetida] = useState<ImportacaoAnterior | null>(null);
   const entrada = useRef<HTMLInputElement>(null);
 
   const total = arquivos.reduce((n, a) => n + a.linhas.length, 0);
@@ -83,7 +140,15 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
    * vez, em vez de dois que divergem.
    */
   const lerArquivo = useCallback(async (f: File): Promise<ArquivoLido> => {
-    const base = { nome: f.name, linhas: [], colunas: [], descartadas: 0 };
+    const base = {
+      nome: f.name,
+      tipo: f.type || null,
+      bytes: f.size,
+      hash: await hashDoArquivo(f),
+      linhas: [] as LinhaLida[],
+      colunas: [] as ColunaLida[],
+      descartadas: 0,
+    };
     try {
       const ehExcel = /\.(xlsx|xlsm|xls)$/i.test(f.name);
       let texto: string;
@@ -100,7 +165,7 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
 
       const r = lerPlanilha(texto);
       return {
-        nome: f.name,
+        ...base,
         linhas: r.linhas,
         colunas: r.colunas,
         descartadas: r.descartadas,
@@ -115,6 +180,7 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
     async (lista: FileList | File[]) => {
       setErro(null);
       setResultado(null);
+      setRepetida(null);
       // A conferência anterior deixa de valer no instante em que a lista muda.
       // Número velho ao lado de arquivo novo é pior que número nenhum.
       setConferencia(null);
@@ -129,11 +195,19 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
   const colar = useCallback((texto: string) => {
     if (!texto.trim()) return;
     setConferencia(null);
+    setRepetida(null);
     const r = lerPlanilha(texto);
     setArquivos((a) => [
       ...a,
       {
         nome: "texto colado",
+        tipo: "text/plain",
+        bytes: texto.length,
+        // Texto colado não tem impressão digital de arquivo: ele não é um
+        // arquivo. Inventar um hash aqui faria dois textos diferentes com o
+        // mesmo conteúdo virarem "a mesma planilha" — que é verdade, e é
+        // justamente o caso em que a pessoa quer mesmo colar de novo.
+        hash: null,
         linhas: r.linhas,
         colunas: r.colunas,
         descartadas: r.descartadas,
@@ -145,10 +219,8 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
   /**
    * ⭐ "Destes, quantos já temos?" — respondido ANTES de subir.
    *
-   * Pedido do CEO: *"quando um arquivo chegar, fale: esses cinquenta já estão,
-   * esses vinte são novos."* Roda no servidor, com a MESMA função que a
-   * importação usa depois — por isso o número da conferência e o do resultado
-   * não podem discordar.
+   * Roda no servidor, com a MESMA função que a importação usa depois — por isso
+   * o número da conferência e o do resultado não podem discordar.
    *
    * ⚠️ Confere só a primeira parte quando a lista passa de 500. Dizer "conferi
    * 500 de 3.000" é honesto; conferir tudo antes de o operador decidir se vai
@@ -181,7 +253,14 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
     }
   }
 
-  async function importar() {
+  /**
+   * Sobe o arquivo inteiro: abre, manda as partes, conclui.
+   *
+   * `confirmandoRepetida` só é verdadeiro no segundo clique, depois de o
+   * servidor ter recusado por impressão digital repetida e a pessoa ter lido o
+   * aviso. Insistir vira decisão consciente, e não um `?force=true` escondido.
+   */
+  async function importar(confirmandoRepetida = false) {
     if (!procedencia.trim()) {
       setErro("Escreva de onde veio esta lista. Sem isso o servidor recusa, e com razão.");
       return;
@@ -194,25 +273,84 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
     setOcupado(true);
     setErro(null);
     setResultado(null);
+    if (!confirmandoRepetida) setRepetida(null);
 
     const todas = arquivos.flatMap((a) => a.linhas);
     const partes: LinhaLida[][] = [];
     for (let i = 0; i < todas.length; i += POR_LOTE) partes.push(todas.slice(i, i + POR_LOTE));
 
-    let aceitas = 0;
-    let repetidas = 0;
-    let invalidas = 0;
+    // ⚠️ A impressão digital só vale quando é UM arquivo. Com três arquivos na
+    // mesma subida não existe "o arquivo": um hash inventado para o conjunto
+    // reconheceria como repetida uma combinação que ninguém repetiu, e deixaria
+    // de reconhecer o mesmo arquivo subindo sozinho depois.
+    const unico = arquivos.length === 1 ? arquivos[0]! : null;
+    const nomeDaLista =
+      nomeDoLote.trim() ||
+      (unico ? unico.nome : `Lista de ${new Date().toLocaleDateString("pt-BR")}`);
+
+    let importacaoId: string | null = null;
 
     try {
+      // ── 1. Abrir. O arquivo é declarado antes de qualquer linha entrar ──
+      const abertura = await fetch(ROTA, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          acao: "abrirImportacao",
+          arquivoNome: nomeDaLista,
+          arquivoTipo: unico?.tipo ?? null,
+          arquivoHash: unico?.hash ?? null,
+          arquivoBytes: unico?.bytes ?? null,
+          linhasTotais: total,
+          proveniencia: procedencia.trim(),
+          canalDeObtencao: canalDeObtencao.trim() || null,
+          ...(confirmandoRepetida ? { confirmarRepetido: true } : {}),
+        }),
+      });
+
+      const jsonAbertura = (await abertura.json().catch(() => null)) as {
+        error?: string;
+        data?: { importacaoId?: string; anterior?: ImportacaoAnterior | null };
+      } | null;
+
+      // 409 = a mesma planilha já subiu. Nada foi criado no servidor; quem
+      // decide se sobe de novo é quem está lendo o aviso.
+      if (abertura.status === 409 && jsonAbertura?.data?.anterior) {
+        setRepetida(jsonAbertura.data.anterior);
+        setErro(jsonAbertura.error ?? null);
+        return;
+      }
+
+      if (!abertura.ok || !jsonAbertura?.data?.importacaoId) {
+        setErro(jsonAbertura?.error ?? `Não consegui abrir a importação (${abertura.status}).`);
+        return;
+      }
+
+      importacaoId = jsonAbertura.data.importacaoId;
+
+      // ── 2. As partes, uma de cada vez, todas com o mesmo importacaoId ──
+      //
+      // Em sequência, e não em paralelo, de propósito: a deduplicação contra
+      // "já pendente em outro lote" lê o banco a cada parte, e duas partes
+      // simultâneas com o mesmo telefone passariam as duas pela leitura.
+      let aceitas = 0;
+      let repetidas = 0;
+      let invalidas = 0;
+
       for (let i = 0; i < partes.length; i++) {
+        setProgresso({ parte: i + 1, de: partes.length });
+
         const res = await fetch(ROTA, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             acao: "importar",
-            nome:
-              (nomeDoLote.trim() || `Lista de ${new Date().toLocaleDateString("pt-BR")}`) +
-              (partes.length > 1 ? ` (parte ${i + 1}/${partes.length})` : ""),
+            importacaoId,
+            // O nome da PARTE ainda existe no lote, porque lote é a unidade de
+            // pausa e precisa ser identificável. O que não existe mais é a
+            // pessoa tendo que somar as partes na cabeça: quem faz isso agora é
+            // a importação.
+            nome: nomeDaLista + (partes.length > 1 ? ` (parte ${i + 1}/${partes.length})` : ""),
             proveniencia: procedencia.trim(),
             linhas: partes[i],
           }),
@@ -220,15 +358,22 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
 
         const json = (await res.json().catch(() => null)) as {
           error?: string;
-          data?: { aceitas: number; repetidasNoArquivo: number; repetidasEmOutroLote: number; invalidas: number };
+          data?: {
+            aceitas: number;
+            repetidasNoArquivo: number;
+            repetidasEmOutroLote: number;
+            invalidas: number;
+          };
         } | null;
 
         if (!res.ok || !json?.data) {
           // Para na primeira recusa e diz quantas partes já entraram. Continuar
-          // depois de um erro deixaria o operador sem saber o que subiu.
+          // depois de um erro deixaria o operador sem saber o que subiu — e o
+          // servidor já marcou a importação como FALHOU, então a tela de
+          // importações mostra o mesmo fato.
           setErro(
             `${json?.error ?? `O servidor recusou (${res.status}).`}` +
-              (i > 0 ? ` — as ${i} primeiras partes já entraram.` : ""),
+              (i > 0 ? ` — as ${i} primeiras partes já entraram, e continuam valendo.` : ""),
           );
           return;
         }
@@ -238,21 +383,39 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
         invalidas += json.data.invalidas;
       }
 
+      // ── 3. Concluir ──
+      const fim = await fetch(ROTA, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ acao: "concluirImportacao", importacaoId }),
+      });
+      if (!fim.ok) {
+        const j = (await fim.json().catch(() => null)) as { error?: string } | null;
+        // Os contatos entraram. O que falhou foi fechar o registro — e dizer
+        // "erro" seco aqui faria a pessoa subir tudo de novo por engano.
+        setErro(
+          `Os ${aceitas} contatos entraram, mas não consegui fechar o registro da importação` +
+            `${j?.error ? `: ${j.error}` : "."}`,
+        );
+      }
+
       setResultado(
-        `${aceitas} contatos entraram` +
+        `${aceitas} contatos entraram na base` +
           (repetidas ? ` · ${repetidas} já estavam na base` : "") +
           (invalidas ? ` · ${invalidas} com telefone inválido` : "") +
-          (descartadas ? ` · ${descartadas} linhas sem telefone foram deixadas de fora` : "") +
-          ". O lote entra como rascunho — ninguém é abordado até você liberar.",
+          (descartadas ? ` · ${descartadas} linhas sem telefone ficaram de fora` : "") +
+          ". A lista já está liberada; ninguém é abordado enquanto a prospecção estiver desligada.",
       );
       setArquivos([]);
       setNomeDoLote("");
       setConferencia(null);
+      setRepetida(null);
       aoImportar();
     } catch (e) {
       setErro(e instanceof Error ? e.message : "Não consegui subir a lista.");
     } finally {
       setOcupado(false);
+      setProgresso(null);
     }
   }
 
@@ -260,9 +423,9 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
     <section className="mb-4 rounded-2xl border border-line bg-paper p-4">
       <h2 className="text-[15px] font-semibold text-ink">Receber lista de contatos</h2>
       <p className="mt-0.5 max-w-[70ch] text-[12.5px] leading-relaxed text-muted">
-        Excel ou CSV, vários arquivos de uma vez. A tela mostra o que entendeu de cada
-        coluna <strong>antes</strong> de subir — e subir não aborda ninguém: o lote
-        entra como rascunho.
+        Excel ou CSV. A tela mostra o que entendeu de cada coluna <strong>antes</strong> de
+        subir. Uma lista grande entra em partes de {POR_LOTE} por limite técnico —
+        para você é <strong>uma</strong> lista, com um histórico só.
       </p>
 
       {/* ── Escolher arquivos ── */}
@@ -319,6 +482,7 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
                   type="button"
                   onClick={() => {
                     setConferencia(null);
+                    setRepetida(null);
                     setArquivos((x) => x.filter((_, j) => j !== i));
                   }}
                   className="text-[11.5px] font-semibold text-muted underline underline-offset-2"
@@ -378,7 +542,6 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
         </div>
       )}
 
-      {/* ── De onde veio, e o nome do lote ── */}
       {/* ── "Destes, quantos já temos?" ────────────────────────────────────
           Antes de subir, e sem gravar nada. É a pergunta que o CEO faz ao
           receber um arquivo, e a resposta vem do MESMO cálculo que a
@@ -411,7 +574,7 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
                   <span className="tabular-nums">{conferencia.jaEramLead}</span>
                 </li>
                 <li className="flex items-baseline justify-between gap-2 text-ink2">
-                  <span>Já esperando em outro lote</span>
+                  <span>Já esperando de outra importação</span>
                   <span className="tabular-nums">{conferencia.repetidasEmOutroLote}</span>
                 </li>
                 <li className="flex items-baseline justify-between gap-2 text-ink2">
@@ -440,6 +603,35 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
         </div>
       )}
 
+      {/* ── ⚠️ A MESMA PLANILHA DE NOVO ────────────────────────────────────
+          O servidor barra e não cria nada. Este bloco é onde a pessoa decide,
+          com o dado na frente, se insiste. */}
+      {repetida && (
+        <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3">
+          <p className="text-[13px] font-semibold text-amber-900">
+            Esta mesma planilha já subiu.
+          </p>
+          <p className="mt-0.5 text-[12.5px] leading-relaxed text-amber-900">
+            &quot;{repetida.arquivoNome}&quot; ·{" "}
+            {new Date(repetida.iniciadaEm).toLocaleString("pt-BR")}
+            {repetida.criadoPorNome ? ` · por ${repetida.criadoPorNome}` : ""} ·{" "}
+            {repetida.linhasAceitas} de {repetida.linhasTotais} linhas entraram.
+          </p>
+          <p className="mt-1 text-[11.5px] leading-relaxed text-amber-800">
+            Se a lista foi atualizada desde então, subir de novo faz sentido: o que já
+            existe entra marcado e não é abordado outra vez.
+          </p>
+          <button
+            type="button"
+            disabled={ocupado}
+            onClick={() => void importar(true)}
+            className="mt-2 rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-amber-900 disabled:opacity-50"
+          >
+            Subir mesmo assim
+          </button>
+        </div>
+      )}
+
       <label className="mt-3 block">
         <span className="block text-[11.5px] font-semibold uppercase tracking-[.04em] text-muted">
           De onde veio esta lista *
@@ -456,9 +648,24 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
         </span>
       </label>
 
+      {/* Procedência é o PORQUÊ; canal de obtenção é o COMO. Guardados
+          separados porque a pergunta que chega é sempre a segunda ("onde vocês
+          conseguiram isso?"), e ela se perde quando vira uma frase só. */}
       <label className="mt-2 block">
         <span className="block text-[11.5px] font-semibold uppercase tracking-[.04em] text-muted">
-          Nome do lote (opcional)
+          Como a lista foi obtida
+        </span>
+        <input
+          value={canalDeObtencao}
+          onChange={(e) => setCanalDeObtencao(e.target.value)}
+          placeholder="Ex.: busca no Google Maps · feira do setor · indicação de parceiro"
+          className="mt-0.5 w-full rounded-xl border border-line2 bg-paper px-3 py-2 text-[13px] text-ink outline-none focus:border-brand-400"
+        />
+      </label>
+
+      <label className="mt-2 block">
+        <span className="block text-[11.5px] font-semibold uppercase tracking-[.04em] text-muted">
+          Nome da lista (opcional)
         </span>
         <input
           value={nomeDoLote}
@@ -471,7 +678,7 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
       {total > POR_LOTE && (
         <p className="mt-2 text-[12px] text-ink2">
           {total} contatos entram em {Math.ceil(total / POR_LOTE)} partes de até {POR_LOTE} —
-          é o teto de segurança do servidor, e a tela cuida disso sozinha.
+          limite técnico do servidor, com um histórico só. A tela cuida disso sozinha.
         </p>
       )}
 
@@ -480,8 +687,20 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
         disabled={ocupado || total === 0}
         className="mt-3 w-full rounded-xl bg-brand-500 px-4 py-2.5 text-[13.5px] font-semibold text-white transition-colors hover:bg-brand-600 disabled:opacity-40"
       >
-        {ocupado ? "Subindo…" : total > 0 ? `Subir ${total} contatos` : "Escolha um arquivo"}
+        {ocupado
+          ? progresso
+            ? `Subindo parte ${progresso.parte} de ${progresso.de}…`
+            : "Subindo…"
+          : total > 0
+            ? `Subir ${total} contatos`
+            : "Escolha um arquivo"}
       </button>
+
+      <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted">
+        Subir <strong>libera</strong> a lista para a fila: a procedência declarada e o
+        seu nome ficam gravados como a autorização. Nenhuma mensagem sai enquanto a
+        prospecção estiver desligada.
+      </p>
 
       {erro && (
         <p role="alert" className="mt-2 rounded-xl bg-red-50 px-3 py-2 text-[12.5px] text-red-800">

@@ -8,14 +8,33 @@
  * comercial ser restringido — e o número restringido não afeta só a prospecção,
  * afeta o atendimento de quem já é cliente.
  *
- * Por isso importar NÃO é abordar. São dois atos separados, com duas decisões
- * separadas: carregar (`importarLote`) é conferência; liberar (`liberarLote`) é
- * autorização, e é dela que sai a base legal declarada.
+ * ── ⚠️ O QUE MUDOU EM 10/09/2026, E POR QUE ─────────────────────────────────
+ *
+ * Este cabeçalho dizia, em letras firmes, que *"importar NÃO é abordar; são dois
+ * atos separados"*. A frase era bonita e o efeito dela, medido, era outro: o
+ * frontend fatia o arquivo em partes de 500, então uma lista de 8.000 nascia
+ * como **dezesseis** lotes RASCUNHO e alguém precisava clicar "Liberar"
+ * dezesseis vezes. Não era uma decisão consciente repetida — era a mesma
+ * decisão, tomada uma vez, cobrada dezesseis. Ato que se repete assim não é
+ * conferido: é despachado no automático, que é justamente o oposto do que a
+ * separação existia para conseguir.
+ *
+ * Agora o lote nasce **LIBERADO**, e a autorização não sumiu — ela mudou de
+ * lugar. Quem autoriza é quem importa, e a assinatura fica gravada
+ * (`liberadoPor`, `liberadoPorUserId`) junto com a `proveniencia`, que continua
+ * obrigatória (`ProvenienciaAusente`). A base legal declarada é a mesma de
+ * sempre; o que deixou de existir é o clique que ninguém lia.
+ *
+ * ⚠️ Quem pode importar passou a ser quem podia liberar. A trava vive na rota
+ * (`vePelaOperacaoToda`), e sem ela esta mudança teria aberto uma porta lateral:
+ * o SDR, que nunca pôde autorizar, autorizaria importando.
  *
  * ── O QUE ESTE ARQUIVO NÃO FAZ ──────────────────────────────────────────────
  *
  * Não envia mensagem. Não escolhe quem abordar. Não liga a prospecção. Ele
  * carrega, deduplica e registra — e nada aqui alcança o telefone de ninguém.
+ * Com o interruptor global desligado (o padrão), lote liberado não aborda
+ * ninguém: a liberação diz "esta lista pode", e não "manda agora".
  */
 
 import type { PrismaClient, Prisma } from "@prisma/client";
@@ -39,8 +58,34 @@ export interface PedidoDeImportacao {
   /** Por que temos estes contatos. Obrigatório, e é texto de gente. */
   proveniencia: string;
   linhas: LinhaDaLista[];
+  /** Rótulo de tela de quem subiu, `Nome (userId)`. NÃO é um id. */
   criadoPor?: string | null;
-  /** Teto próprio do lote. O teto global continua valendo por cima. */
+  /**
+   * ⭐ O ID DE VERDADE de quem subiu — e, desde 10/09/2026, de quem AUTORIZOU.
+   *
+   * Vai para `liberadoPorUserId`, que é a coluna que a rodada automática lê para
+   * saber quem responde por cada mensagem. Lote sem ele não é abordado: a
+   * promessa de que "toda mensagem que sai em nome da empresa tem um
+   * responsável" só se cumpre com um id que o banco reconheça.
+   *
+   * ⚠️ Tem que sair da SESSÃO. Aceitar este campo do corpo da requisição deixaria
+   * qualquer um assinar a autorização com o nome de outro.
+   */
+  criadoPorUserId?: string | null;
+  /**
+   * A importação (o ARQUIVO inteiro) a que este lote pertence.
+   *
+   * É o campo que transforma "16 lotes de 500" em UMA lista de 8.000 aos olhos
+   * de quem operou. Opcional porque lote sem importação continua válido — o
+   * histórico anterior a 10/09/2026 não tem nenhuma.
+   */
+  importacaoId?: string | null;
+  /**
+   * ⚠️ COLUNA APOSENTADA. Continua sendo gravada e **não reduz mais a fila**.
+   *
+   * Ver `LoteDeProspeccao.limiteDiario` no schema e o comentário da consulta em
+   * `selecao.ts`: o teto que vale é o global, mais o teto explícito da rodada.
+   */
   limiteDiario?: number;
 }
 
@@ -56,7 +101,38 @@ export interface ResultadoDaImportacao {
   invalidas: number;
   /** Já existe como lead na base — entra marcado, não vira carteira nova. */
   jaEramLead: number;
+  /**
+   * Por motivo, quantas linhas NÃO vão virar abordagem.
+   *
+   * ── POR QUE UM MAPA, E NÃO SÓ OS NÚMEROS ──
+   *
+   * Os contadores acima respondem "quantas". Só o mapa responde "por quê" na
+   * língua de quem operou — e é a segunda pergunta que aparece quando alguém
+   * sobe 8.000 linhas e a fila mostra 5.200. Sem ela, a diferença de 2.800 vira
+   * desconfiança do sistema inteiro.
+   *
+   * A soma dos valores é exatamente `recebidas - aceitas`. Se um dia não for,
+   * é porque uma classe de recusa deixou de ser contada — e o teste da
+   * conferência quebra por isso, de propósito.
+   */
+  motivosDeRecusa: Record<string, number>;
 }
+
+/**
+ * As frases de recusa, em um lugar só.
+ *
+ * Elas são CHAVE de agregação (viram `{motivo: quantas}` no registro da
+ * importação) e texto de tela ao mesmo tempo. Digitá-las solta em cada ponto
+ * faria "Já existe como lead na base." e "Já existe como lead na base" virarem
+ * duas linhas diferentes no mesmo relatório — o tipo de divergência que ninguém
+ * revisa porque parece igual.
+ */
+export const MOTIVO = {
+  jaEraLead: "Já existe como lead na base",
+  pendenteEmOutroLote: "Já estava pendente em outra importação",
+  repetidaNoArquivo: "Repetido dentro do próprio arquivo",
+  telefoneInvalido: "Telefone com formato improvável",
+} as const;
 
 /** Teto de segurança por importação. Lista gigante entra em partes, conferida. */
 export const MAX_LINHAS_POR_IMPORTACAO = 500;
@@ -237,12 +313,30 @@ export async function importarLote(
       ? Math.max(0, Math.floor(pedido.limiteDiario))
       : 20;
 
+  // ── ⭐ O LOTE NASCE LIBERADO — E A ASSINATURA NASCE COM ELE ───────────────
+  //
+  // O que autoriza é a `proveniencia` (recusada acima quando vazia) mais a
+  // assinatura de quem subiu. Nascer RASCUNHO produzia dezesseis cliques de
+  // "Liberar" para UMA lista de 8.000 — e dezesseis cliques iguais em sequência
+  // não são dezesseis conferências, são um reflexo.
+  //
+  // ⚠️ `liberadoPorUserId` é o campo que a rodada automática lê para responder
+  // por cada mensagem. Sem ele o lote entra liberado e **nenhum item é
+  // abordado** (`abordarDaFila` pula lote sem responsável de verdade): a lista
+  // ficaria parada sem explicação. Por isso quem chama tem que trazer o id da
+  // sessão, e a rota é quem garante isso.
+  const agora = new Date();
   const lote = await db.loteDeProspeccao.create({
     data: {
       nome: pedido.nome.trim() || "Lote sem nome",
       proveniencia,
       criadoPor: pedido.criadoPor ?? null,
       limiteDiario,
+      ...(pedido.importacaoId ? { importacaoId: pedido.importacaoId } : {}),
+      situacao: "LIBERADO",
+      liberadoEm: agora,
+      liberadoPor: pedido.criadoPor ?? null,
+      ...(pedido.criadoPorUserId ? { liberadoPorUserId: pedido.criadoPorUserId } : {}),
     },
     select: { id: true },
   });
@@ -270,7 +364,10 @@ export async function importarLote(
           estado: texto(linha.estado),
           tipo: texto(linha.tipo),
           situacao: "RECUSADO",
-          motivo: "Telefone com formato improvável.",
+          // A MESMA frase que vira chave em `motivosDeRecusa`. Duas grafias do
+          // mesmo motivo viram duas linhas no relatório da importação, e ninguém
+          // revisa isso porque as duas parecem certas.
+          motivo: MOTIVO.telefoneInvalido,
           processadoEm: new Date(),
         },
       });
@@ -298,9 +395,9 @@ export async function importarLote(
         leadId: v.leadId,
         motivo:
           v.situacao === "JA_ERA_LEAD"
-            ? "Já existe como lead na base."
+            ? MOTIVO.jaEraLead
             : v.situacao === "PENDENTE_EM_OUTRO_LOTE"
-              ? "Já está pendente em outro lote de prospecção."
+              ? MOTIVO.pendenteEmOutroLote
               : null,
         processadoEm: duplicada ? new Date() : null,
       },
@@ -310,6 +407,14 @@ export async function importarLote(
   const { novas: aceitas, repetidasNoArquivo, repetidasEmOutroLote, invalidas, jaEramLead } =
     conferencia;
 
+  // Só os motivos que ocorreram. Zerar as quatro chaves sempre encheria o
+  // relatório de linhas "0" e escondia a que importa no meio delas.
+  const motivosDeRecusa: Record<string, number> = {};
+  if (jaEramLead > 0) motivosDeRecusa[MOTIVO.jaEraLead] = jaEramLead;
+  if (repetidasEmOutroLote > 0) motivosDeRecusa[MOTIVO.pendenteEmOutroLote] = repetidasEmOutroLote;
+  if (repetidasNoArquivo > 0) motivosDeRecusa[MOTIVO.repetidaNoArquivo] = repetidasNoArquivo;
+  if (invalidas > 0) motivosDeRecusa[MOTIVO.telefoneInvalido] = invalidas;
+
   return {
     loteId: lote.id,
     recebidas: pedido.linhas.length,
@@ -318,15 +423,25 @@ export async function importarLote(
     repetidasEmOutroLote,
     invalidas,
     jaEramLead,
+    motivosDeRecusa,
   };
 }
 
 /**
- * Libera o lote para abordagem — o ato que cria a autorização.
+ * ⚠️ RETOMAR um lote — e é para isso que esta função serve desde 10/09/2026.
  *
- * A base legal declarada é a `proveniencia` do lote, e quem libera fica
- * registrado. Não existe liberar "no automático": se ninguém assinou, ninguém
- * autorizou.
+ * ── POR QUE ELA NÃO FOI APAGADA COM A LIBERAÇÃO AUTOMÁTICA ──────────────────
+ *
+ * Desde que o lote nasce LIBERADO, ninguém precisa "liberar" o que acabou de
+ * entrar. O que continua acontecendo o tempo todo é o inverso: um lote é
+ * PAUSADO — pelo botão de pausa, ou porque a importação inteira foi cancelada —
+ * e depois alguém decide que aquela lista volta. Sem esta função, voltar exigiria
+ * reimportar o arquivo, e reimportar cria fichas novas para telefones que já
+ * têm ficha.
+ *
+ * A autorização não mudou de natureza: a base legal declarada continua sendo a
+ * `proveniencia` do lote, e quem retoma fica registrado. Se ninguém assinou,
+ * ninguém autorizou.
  */
 export async function liberarLote(
   db: Cliente,

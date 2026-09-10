@@ -37,7 +37,12 @@ beforeEach(() => {
   delete process.env.FOOCCI_SALES_PROVIDER;
   vi.stubGlobal("fetch", vi.fn(async () => {
     chamadasDeRede++;
-    return { ok: true, json: async () => ({}) } as unknown as Response;
+    // A resposta que a Meta REALMENTE manda no sucesso: com o wamid. Um 200
+    // sem ele é recusado desde 10/09/2026 — sem id, o status nunca casa.
+    return {
+      ok: true,
+      json: async () => ({ messages: [{ id: "wamid.TESTE" }] }),
+    } as unknown as Response;
   }));
 });
 
@@ -92,8 +97,13 @@ describe("o portão é o primeiro parâmetro — não dá para enviar sem avalia
     ligarCanal();
     process.env.FOOCCI_SDR_SEND_ENABLED = "true";
 
+    // ⚠️ A resposta simulada precisa trazer `messages[0].id`: desde 10/09/2026
+    // um 200 SEM wamid não é sucesso — sem ele o status da Meta nunca casa com
+    // a mensagem, e ela ficaria ENVIADA para sempre. O cenário antigo simulava
+    // um 200 que a Meta real nunca manda.
     const r = await enviarTextoDeVendas(APROVADO, "5511999990000", "oi");
     expect(r.ok).toBe(true);
+    expect(r.providerMessageId).toBeTruthy();
     expect(chamadasDeRede).toBe(1);
   });
 

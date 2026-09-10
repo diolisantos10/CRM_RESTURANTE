@@ -93,6 +93,11 @@ export async function falar(
       // nunca é consultado quando o lead pediu uma pessoa, pediu desconto ou
       // ficou bravo. A trava é a ordem do arquivo, não uma linha do ofício.
       postura,
+      // O que a casa já sabe dele, e como conduzir esta conversa. Os dois vêm
+      // prontos de `memoria.ts`; aqui só se repassa, para o modelo não ter de
+      // reextrair do histórico cru a cada turno.
+      memoria: turno.memoria,
+      conduta: turno.conduta,
     },
     () => ({
       texto: base.texto,

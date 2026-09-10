@@ -52,6 +52,18 @@ export interface Turno {
    * respostas soltas: sem ele, o TA cumprimenta a mesma pessoa três vezes.
    */
   historico?: Array<{ deQuem: "cliente" | "ta"; texto: string }>;
+  /**
+   * O que a casa já sabe sobre ele, pronto para o prompt (`memoria.ts`).
+   *
+   * Ignorado pelo caminho determinístico, como o histórico: quem usa é o modelo,
+   * via `falar()`. Está no `Turno` porque é `falar()` que repassa o mesmo objeto
+   * para os dois caminhos.
+   */
+  memoria?: string;
+  /** Regras de conduta desta conversa: parou de sondar, irritado, pediu gente. */
+  conduta?: string;
+  /** Ele pediu para parar de responder perguntas. O determinístico OBEDECE. */
+  pediuPararSondagem?: boolean;
 }
 
 export interface Resposta {
@@ -220,7 +232,17 @@ export function responder(turno: Turno, ficha: TextoDaVersao = VERSAO_1): Respos
   }
 
   // ── 3. A sondagem, uma pergunta ─────────────────────────────────────────
-  const pergunta = proximaPergunta(turno.jaPerguntou ?? [], ficha);
+  //
+  // ⛔ SALVO QUANDO ELE MANDOU PARAR.
+  //
+  // Em 09/09/2026 o lead escreveu, com todas as letras, que não queria mais
+  // responder perguntas — e o turno seguinte trouxe outra pergunta. A trava é
+  // aqui, no código, e não no ofício: instrução de redação é aviso, e insistir
+  // depois de um pedido explícito é o caminho curto para o bloqueio e a denúncia
+  // que derrubam o número por onde a casa também atende quem já é cliente.
+  const pergunta = turno.pediuPararSondagem
+    ? null
+    : proximaPergunta(turno.jaPerguntou ?? [], ficha);
   if (pergunta) partes.push(pergunta.texto);
 
   return {
@@ -228,8 +250,9 @@ export function responder(turno: Turno, ficha: TextoDaVersao = VERSAO_1): Respos
     apoiadoEm: usados.map((a) => ({ id: a.item.id, fonte: a.item.fonte })),
     perguntouIndice: pergunta?.indice ?? null,
     handoff: { deve: false, motivo: null },
-    porque:
-      usados.length > 0
+    porque: turno.pediuPararSondagem
+      ? "ele pediu para parar de responder perguntas — respondeu e não perguntou nada"
+      : usados.length > 0
         ? `respondeu com ${usados.length} item(ns) da base e seguiu a sondagem`
         : "nada a responder ainda — seguiu a sondagem",
   };

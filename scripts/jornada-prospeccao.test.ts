@@ -77,7 +77,23 @@ describe("Jornada 3 — prospecção, ponta a ponta", () => {
     expect(fila.motivoDaFilaVazia).toContain("desligada");
   });
 
-  it("3. ligada, mas com o lote em RASCUNHO, ninguém entra na fila", async () => {
+  /**
+   * ⛔ ESTE PASSO MUDOU DE LADO EM 10/09/2026, POR ORDEM APROVADA.
+   *
+   * Ele exigia que o lote nascesse `RASCUNHO` e que, mesmo com a prospecção
+   * ligada, ninguém entrasse na fila até alguém clicar "Liberar". A regra era
+   * boa e virou defeito quando a operação cresceu: o arquivo é fatiado de 500
+   * em 500, então uma lista de 8.000 contatos exigia dezesseis liberações
+   * manuais para uma decisão que a pessoa já tinha tomado ao subir o arquivo.
+   *
+   * ── ⚠️ O QUE O PASSO PRECISA CONTINUAR PROVANDO ─────────────────────────
+   *
+   * "Entra sozinho" não pode virar "sai sozinho". O que a base contínua tira é
+   * a liberação por bloco — e **só** ela. Continuam de pé, e este passo mede os
+   * três: o interruptor global (passo 2, acima), o teto diário, e a pausa que
+   * tira uma importação inteira da fila sem apagar nada.
+   */
+  it("3. ⭐ ligada a prospecção, a importação JÁ está na fila — sem liberação por bloco", async () => {
     await prisma.prospeccaoConfig.create({
       data: {
         id: "singleton",
@@ -87,13 +103,51 @@ describe("Jornada 3 — prospecção, ponta a ponta", () => {
       },
     });
 
+    // Ninguém chamou `liberarLote`. Os dois contatos válidos estão na fila
+    // porque a importação foi válida e declarou proveniência.
     const fila = await montarFilaDeProspeccao(prisma, { canalPronto: true, agora: AGORA });
-    expect(fila.liberados).toHaveLength(0);
+    expect(fila.liberados).toHaveLength(2);
   });
 
-  it("4. ⭐ liberado o lote, montar a fila NÃO escreve nada", async () => {
-    expect((await liberarLote(prisma, loteId, "jornada-ci")).ok).toBe(true);
+  it("3b. ⛔ o TETO DIÁRIO continua mandando na base contínua", async () => {
+    // A sonda de controle do passo acima. Sem ela, "entra automaticamente"
+    // poderia significar "entra tudo", e o teto do dia — a única trava que
+    // limita o VOLUME — teria sumido junto com a liberação por bloco.
+    await prisma.prospeccaoConfig.update({
+      where: { id: "singleton" },
+      data: { limiteDiario: 1 },
+    });
 
+    const fila = await montarFilaDeProspeccao(prisma, { canalPronto: true, agora: AGORA });
+    expect(fila.liberados).toHaveLength(1);
+    expect(fila.tetoDoDia).toBe(1);
+
+    await prisma.prospeccaoConfig.update({
+      where: { id: "singleton" },
+      data: { limiteDiario: 10 },
+    });
+  });
+
+  it("3c. ⛔ pausar a importação tira os contatos da fila, e não apaga nada", async () => {
+    // É o cancelamento de uma lista: o lote sai da fila, os contatos ficam no
+    // banco. Se apagasse, não haveria como responder depois de onde veio o
+    // contato de alguém que reclamou.
+    const itensAntes = await prisma.itemDeProspeccao.count();
+    await pausarLote(prisma, loteId, "jornada-ci");
+
+    const fila = await montarFilaDeProspeccao(prisma, { canalPronto: true, agora: AGORA });
+    expect(fila.liberados).toHaveLength(0);
+    expect(await prisma.itemDeProspeccao.count()).toBe(itensAntes);
+
+    // E retomar devolve os dois — é para isto que `liberarLote` continua
+    // existindo depois da base contínua: retomar, não autorizar pela primeira
+    // vez.
+    expect((await liberarLote(prisma, loteId, "jornada-ci")).ok).toBe(true);
+    const voltou = await montarFilaDeProspeccao(prisma, { canalPronto: true, agora: AGORA });
+    expect(voltou.liberados).toHaveLength(2);
+  });
+
+  it("4. ⭐ montar a fila NÃO escreve nada", async () => {
     const leadsAntes = await prisma.siteLead.count();
     const fila = await montarFilaDeProspeccao(prisma, { canalPronto: true, agora: AGORA });
     const leadsDepois = await prisma.siteLead.count();

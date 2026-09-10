@@ -44,6 +44,8 @@ export const ENTRADA = `${COMERCIAL}/entrar`;
 export const ROTAS = {
   filas: COMERCIAL,
   conversas: `${COMERCIAL}/conversas`,
+  /** Todos os leads numa tabela só — inclusive quem sumiria das filas. */
+  carteira: `${COMERCIAL}/carteira`,
   funil: `${COMERCIAL}/funil`,
   agentes: `${COMERCIAL}/agentes`,
   precos: `${COMERCIAL}/precos`,
@@ -67,6 +69,24 @@ export const ROTAS = {
    * faria o vendedor tratar estranho e interessado com o mesmo tom.
    */
   prospeccao: `${COMERCIAL}/prospeccao`,
+  /**
+   * O histórico de ARQUIVOS — um por linha, com quem subiu e o que entrou.
+   *
+   * Separada da Prospecção porque responde outra pergunta. Prospecção é "quem a
+   * casa fala hoje"; Importações é "de onde saiu esta base, e quem respondeu por
+   * ela". No dia em que alguém perguntar por que temos o telefone dele, é esta
+   * tela que abre.
+   */
+  importacoes: `${COMERCIAL}/importacoes`,
+  /**
+   * A base contínua — o estoque unificado de contatos frios.
+   *
+   * ⚠️ Não é a Carteira. Carteira é quem já virou lead, com dono e conversa;
+   * Base fria é quem ainda não sabe que existimos. Misturar as duas na mesma
+   * tela faria o vendedor tratar estranho e interessado com o mesmo tom — o
+   * mesmo motivo pelo qual Filas e Prospecção vivem separadas.
+   */
+  baseFria: `${COMERCIAL}/base-fria`,
   acessos: `${COMERCIAL}/acessos`,
 } as const;
 
@@ -108,6 +128,9 @@ export interface Aba {
 const PARA_TODOS: readonly Aba[] = [
   { href: ROTAS.filas, rotulo: "Filas" },
   { href: ROTAS.conversas, rotulo: "Conversas" },
+  // Logo depois de Conversas, e antes do Funil: quem abre a Sala de manhã
+  // procura primeiro quem ficou sem resposta, não o desenho do funil.
+  { href: ROTAS.carteira, rotulo: "Carteira" },
   { href: ROTAS.funil, rotulo: "Funil" },
   // Os números da própria pessoa. Fica em `PARA_TODOS` porque não há de quem
   // esconder: são os dela. O CEO abre e vê os dele, que é o que faz sentido —
@@ -182,6 +205,13 @@ export function abasDoComercial(papel: InternalRole | null): Aba[] {
     // pela marca (`autorizacao.test.ts` prova as duas metades). A aba mostra o
     // estado; ela não distribui autorização.
     { href: ROTAS.prospeccao, rotulo: "Prospecção" },
+    // As duas telas da base entram ao lado da Prospecção, e pela mesma razão que
+    // ela: quem trabalha a lista precisa poder olhar o estoque inteiro e saber
+    // de que arquivo cada contato veio. Cancelar importação e retomar lote a
+    // rota recusa a quem não responde pela marca — a aba mostra o estado, ela
+    // não distribui autorização.
+    { href: ROTAS.baseFria, rotulo: "Base fria" },
+    { href: ROTAS.importacoes, rotulo: "Importações" },
     ...(tudo || PAPEIS_DOS_ACESSOS.has(papel) ? [{ href: ROTAS.acessos, rotulo: "Criar acesso" }] : []),
   ];
 }

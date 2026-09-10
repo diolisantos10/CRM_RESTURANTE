@@ -45,21 +45,25 @@ export interface ModeloNaMeta {
   status: string;
   /** Quantas variáveis `{{n}}` o corpo espera. Zero = modelo sem variável. */
   variaveis: number;
-  /**
-   * O texto do corpo, com os `{{n}}` no lugar — como a Meta o guarda.
-   *
-   * ⚠️ Entrou em 10/09/2026 porque "espera 3 variáveis" não diz QUAIS: sem o
-   * corpo, mapear variável→campo é chute, e chute manda "Olá São Paulo" para
-   * um restaurante. Corpo de modelo aprovado não é segredo — é o que o
-   * cliente vai ler.
-   */
-  corpo: string;
 }
 
-type Falha = { ok: false; erro: string };
+export type Falha = { ok: false; erro: string };
 
-async function graphDeVendas(caminho: string, token: string): Promise<unknown | Falha> {
-  const res = await fetch(metaGraphUrl(caminho), {
+/**
+ * ⭐ O CLIENTE GRAPH DA SALA — **um só**, com duas portas de entrada.
+ *
+ * `graphDeVendas` recebe um CAMINHO e monta o endereço com `metaGraphUrl`.
+ * `graphAbsoluto` recebe o endereço já pronto — e existe por um motivo só: a
+ * paginação da Meta devolve `paging.next` **absoluto, com o cursor dentro**.
+ * Remontar esse endereço a partir do caminho perderia o cursor, e a varredura
+ * releria a primeira página para sempre sem nunca declarar que travou.
+ *
+ * As duas dividem o MESMO tratamento de erro de propósito. Um segundo cliente
+ * com o seu próprio `catch` é como a recusa da Meta vira `undefined` num
+ * caminho e frase legível no outro — e quem investiga só encontra o mudo.
+ */
+export async function graphAbsoluto(url: string, token: string): Promise<unknown | Falha> {
+  const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   });
   const json: unknown = await res.json().catch(() => ({}));
@@ -70,7 +74,11 @@ async function graphDeVendas(caminho: string, token: string): Promise<unknown | 
   return json;
 }
 
-function ehFalha(x: unknown): x is Falha {
+export function graphDeVendas(caminho: string, token: string): Promise<unknown | Falha> {
+  return graphAbsoluto(metaGraphUrl(caminho), token);
+}
+
+export function ehFalha(x: unknown): x is Falha {
   return typeof x === "object" && x !== null && (x as Falha).ok === false;
 }
 
@@ -100,6 +108,22 @@ export async function contaDoNumeroDeVendas(
    * saída de emergência — quem tem o id em mãos destrava em um minuto — e os
    * caminhos automáticos continuam existindo para quando não houver ninguém.
    */
+  // ── Caminho 0a: o que a casa APRENDEU do webhook ──
+  //
+  // ⭐ 10/09/2026, ordem do Diretor Geral: *"persistir o WABA da Sala a partir
+  // de envelope válido do número comercial... manter a variável como fallback,
+  // não como única fonte."*
+  //
+  // O `entry[].id` do webhook É o WABA, e o #230 já o encontra. Até hoje ele só
+  // ia para o log, pedindo que alguém copiasse para a variável — dependência
+  // humana num dado que chega sozinho, várias vezes por dia.
+  //
+  // ⚠️ Só vale se estiver casado com o número de vendas ATUAL. Trocar o número
+  // sem trocar o WABA faria a casa consultar a conta errada — e a conta errada,
+  // aqui, é a de um restaurante cliente.
+  const aprendido = await wabaAprendido(id);
+  if (aprendido) return { ok: true, wabaId: aprendido };
+
   const daMao = (process.env.FOOCCI_SALES_WABA_ID ?? "").trim();
   if (daMao) return { ok: true, wabaId: daMao };
 
@@ -250,16 +274,6 @@ async function contaPeloToken(token: string): Promise<ContaPeloToken> {
   };
 }
 
-/** O texto do componente BODY, ou vazio quando o modelo não tem corpo. */
-export function corpoDoModelo(components: unknown): string {
-  if (!Array.isArray(components)) return "";
-  const body = components.find(
-    (c) => String((c as { type?: unknown })?.type).toUpperCase() === "BODY",
-  );
-  const text = (body as { text?: unknown })?.text;
-  return typeof text === "string" ? text : "";
-}
-
 /** Todos os modelos da conta do número de vendas, como a Meta os vê agora. */
 export async function listarModelosDeVendas(
   token: string,
@@ -282,7 +296,6 @@ export async function listarModelosDeVendas(
       idioma: String(tpl.language ?? "pt_BR"),
       status: String(tpl.status ?? "UNKNOWN").toUpperCase(),
       variaveis: countBodyVariables(tpl.components),
-      corpo: corpoDoModelo(tpl.components),
     }];
   });
 
@@ -358,15 +371,154 @@ export async function conferirModeloDeAbordagem(token: string): Promise<Conferen
     };
   }
 
-  if (achado.variaveis > 1) {
+  // ⛔ CORRESPONDÊNCIA EXATA, e não "no máximo uma".
+  //
+  // ── O DEFEITO, ATÉ 10/09/2026 ─────────────────────────────────────────────
+  //
+  // Esta conferência aceitava 0 OU 1 variável e declarava que o envio manda 1.
+  // Mas `abordarLead` montava `nome ? [nome] : []` — **um payload que muda com
+  // o contato**. Contra um modelo de `{{1}}`, o contato com nome passava e o
+  // sem nome era recusado pela Meta; contra um modelo de zero variáveis, o
+  // contato COM nome é que era recusado.
+  //
+  // Ou seja: o pré-voo dizia "pronto" e a rodada descobria o contrário, contato
+  // a contato. O template aprovado tem contrato FIXO; o payload também precisa
+  // ter. Quem manda no número é a Meta — este código só confere se bate.
+  //
+  // ── ⭐ O QUE MUDOU EM 10/09/2026, E O QUE NÃO MUDOU ────────────────────────
+  //
+  // NÃO mudou a regra: continua sendo igualdade EXATA, e continua bloqueando
+  // antes de sair. Mudou de onde vem o número do nosso lado — do modelo que a
+  // Meta respondeu e nós persistimos, com o ambiente de reserva.
+  //
+  // ⚠️ Isto **não** vira uma comparação de um valor consigo mesmo. `esperados`
+  // vem da Meta consultada AGORA; `monta` vem do retrato gravado na última
+  // sincronização. Quando alguém edita o modelo na Meta e ninguém sincroniza,
+  // os dois discordam — e é justamente esse o caso em que o envio montaria pelo
+  // retrato velho e a Meta recusaria 100% dos contatos.
+  const esperados = achado.variaveis;
+  const monta = await parametrosDoEnvioAgora();
+  if (esperados !== monta) {
     return {
       pronto: false,
       causa: "variaveisNaoBatem",
-      detalhe: `o modelo espera ${achado.variaveis} variáveis e o envio manda 1`,
+      detalhe:
+        `a Meta respondeu que "${achado.nome}" (${achado.idioma}) espera ${esperados} ` +
+        `variável(is) e o envio monta ${monta}. Sincronize os modelos da Sala — ` +
+        `na falta do banco, ajuste FOOCCI_SDR_MODELO_VARIAVEIS para ${esperados}.`,
     };
   }
 
-  return { pronto: true, modelo: achado, parametrosQueMandamos: 1 };
+  return { pronto: true, modelo: achado, parametrosQueMandamos: esperados };
+}
+
+/**
+ * Quantas variáveis o envio monta — o contrato do NOSSO lado.
+ *
+ * ── ⭐ A FONTE MUDOU EM 10/09/2026: O BANCO VEM PRIMEIRO, O AMBIENTE É RESERVA ─
+ *
+ * Até aqui este número vinha **só** de `FOOCCI_SDR_MODELO_VARIAVEIS`: pedia-se a
+ * uma pessoa que digitasse, num painel, um número que **a própria API da Meta
+ * responde sozinha**. Todo dado que depende de alguém lembrar de atualizar
+ * envelhece no dia em que outra pessoa aprova um modelo novo e não avisa — e o
+ * preço deste envelhecer específico é 100% de recusa na rodada seguinte.
+ *
+ * Agora a primeira fonte é o modelo **persistido** por `sincronizarModelosDeVendas`,
+ * que grava o que a Meta respondeu, contado por `countBodyVariables` sobre o
+ * corpo real. O ambiente continua existindo como **reserva**, e não por
+ * simetria: enquanto ninguém tiver sincronizado — primeira subida, banco fora
+ * do ar, WABA ainda não resolvida — o número precisa vir de algum lugar
+ * declarado, e "não sei" não pode virar zero (ver o bloco do vazio, abaixo).
+ *
+ * ⚠️ ISTO NÃO AFROUXA O CONTRATO P0.2. O pré-voo continua exigindo
+ * correspondência EXATA e continua bloqueando antes de sair. O que mudou é de
+ * onde sai o número do nosso lado — e a comparação segue valendo, porque o
+ * outro lado da conta é a Meta **consultada agora**, ao vivo, contra um valor
+ * persistido na última sincronização. Modelo editado na Meta depois do último
+ * sincronismo faz os dois discordarem, e é exatamente aí que o pré-voo tem de
+ * reprovar: o envio montaria pelo retrato velho.
+ *
+ * ⚠️ Valor inválido cai na fonte seguinte em vez de virar zero: um campo em
+ * branco no painel não pode, sozinho, mudar o formato do que sai para o cliente.
+ */
+export function parametrosQueOEnvioMonta(
+  env: NodeJS.ProcessEnv = process.env,
+  doModeloPersistido: number | null = null,
+): number {
+  // ── Fonte 1: o que a Meta respondeu e nós gravamos ──
+  //
+  // O teto de 10 é o mesmo do ambiente e vale aqui também: um número absurdo
+  // vindo do banco é corrupção de dado, não contrato, e seguir com ele mandaria
+  // o pré-voo comparar lixo com lixo.
+  if (
+    doModeloPersistido !== null &&
+    Number.isInteger(doModeloPersistido) &&
+    doModeloPersistido >= 0 &&
+    doModeloPersistido <= 10
+  ) {
+    return doModeloPersistido;
+  }
+
+  // ── Fonte 2: o ambiente, agora como RESERVA ──
+  const bruto = (env.FOOCCI_SDR_MODELO_VARIAVEIS ?? "").trim();
+
+  // ⚠️ VAZIO NÃO É ZERO, e o teste pegou isto na primeira rodada: `Number("")`
+  // é `0`, e `0` é inteiro — a variável AUSENTE virava "mande zero parâmetros"
+  // silenciosamente, mudando o formato do que sai para o cliente sem ninguém
+  // ter decidido. Ausência cai no padrão; zero só vale escrito.
+  if (bruto === "") return 1;
+
+  const n = Number(bruto);
+  if (!Number.isInteger(n) || n < 0 || n > 10) return 1;
+  return n;
+}
+
+/**
+ * ⭐ O MESMO NÚMERO, JÁ COM O BANCO CONSULTADO — a versão que a produção usa.
+ *
+ * `parametrosQueOEnvioMonta` fica pura e síncrona porque é ela que o teste
+ * mede; esta busca o modelo persistido e entrega o resultado à função pura.
+ *
+ * ⛔ **O PRÉ-VOO E O ENVIO PRECISAM CHAMAR ESTA MESMA FUNÇÃO.** Se o pré-voo
+ * conferir pelo banco e o envio montar pelo ambiente, a conferência aprova um
+ * contrato e o disparo manda outro — e o defeito que a P0.2 existe para matar
+ * volta pela porta dos fundos, agora com um pré-voo verde por cima. Régua verde
+ * sobre o componente errado é pior que régua nenhuma.
+ *
+ * ⚠️ **Nunca lança.** Banco indisponível cai na reserva do ambiente: recusar o
+ * dia inteiro de abordagem porque o Postgres piscou seria trocar um defeito por
+ * outro maior.
+ */
+export async function parametrosDoEnvioAgora(db?: unknown): Promise<number> {
+  const cfg = modeloConfigurado();
+  const doBanco = await variaveisDoModeloPersistido(db, cfg.nome, cfg.idioma);
+  return parametrosQueOEnvioMonta(process.env, doBanco);
+}
+
+/**
+ * Quantas variáveis o modelo APROVADO e persistido tem, ou `null` na dúvida.
+ *
+ * `null` em qualquer incerteza — sem nome configurado, sem linha, banco fora do
+ * ar — porque `null` manda o chamador para a reserva declarada. Um palpite aqui
+ * (zero, por exemplo) mudaria o formato do que sai para o cliente sem ninguém
+ * ter decidido: é o guardrail 1 aplicado a um número.
+ *
+ * ⚠️ O import é dinâmico de propósito: `sincronizarModelos` importa este
+ * arquivo para resolver a conta, e um import estático de volta fecharia o ciclo.
+ */
+async function variaveisDoModeloPersistido(
+  db: unknown,
+  nome: string,
+  idioma: string,
+): Promise<number | null> {
+  if (!nome) return null;
+  try {
+    const { modeloAprovadoDaSala } = await import("./sincronizarModelos");
+    const linha = await modeloAprovadoDaSala(db, nome, idioma);
+    return linha ? linha.variaveis : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -389,18 +541,155 @@ export function preVooDoModelo(): Promise<ConferenciaDoModelo> {
   }));
 }
 
+
+// ─── O número, como a Meta o descreve ────────────────────────────────────────
+
 /**
- * ⭐ TODOS os modelos da conta, com o token do ambiente — para o raio-x.
+ * O cadastro do número de vendas na Meta — inclusive **o teto que ela concede**.
  *
- * O pré-voo responde "o modelo configurado serve?". Esta responde "o que
- * existe?", e é a que faltou em 09/09/2026: sabíamos que o modelo esperava três
- * variáveis e não sabíamos quais — e a única forma de saber era alguém abrir o
- * painel da Meta e colar. Só leitura; sem token devolve falha, nunca lista vazia
- * (guardrail 1).
+ * ── POR QUE O TIER ENTRA AQUI, E NÃO NUMA VARIÁVEL ──────────────────────────
+ *
+ * `messaging_limit_tier` é quantas conversas a Meta deixa a gente INICIAR por
+ * dia (`TIER_250`, `TIER_1K`, `TIER_10K`…). Ele sobe e desce sozinho, conforme
+ * qualidade e volume, e ninguém do nosso lado é avisado. Um teto de operação
+ * escrito à mão acima do que a Meta permite não é teto: é o número que aparece
+ * na tela enquanto a plataforma corta os envios no meio da lista.
+ *
+ * O WABA vem junto porque é a conta de onde os modelos são lidos — mostrar o
+ * número sem a conta deixaria de fora metade do que prova que estamos falando
+ * da caixa certa (e a caixa errada, aqui, é a de um restaurante cliente).
+ *
+ * 🔒 O token entra no cabeçalho e não sai no retorno.
  */
-export function modelosDaSala(): Promise<{ ok: true; modelos: ModeloNaMeta[] } | Falha> {
-  return comOTokenDeVendas<{ ok: true; modelos: ModeloNaMeta[] } | Falha>(
-    listarModelosDeVendas,
-    () => ({ ok: false, erro: "FOOCCI_SALES_ACCESS_TOKEN não está no ambiente" }),
+export interface DetalhesDoNumero {
+  phoneNumberId: string;
+  wabaId: string | null;
+  /** Como a Meta escreve o número. A prova do apontamento. */
+  numero: string | null;
+  nomeVerificado: string | null;
+  qualidade: string | null;
+  /** `TIER_250`, `TIER_1K`, `TIER_10K`, `TIER_UNLIMITED`… como a Meta devolve. */
+  tier: string | null;
+  /** Preenchido quando algum dos dois passos falhou. Nunca silencioso. */
+  erro: string | null;
+}
+
+export async function detalhesDoNumeroDeVendas(token: string): Promise<DetalhesDoNumero> {
+  const phoneNumberId = foocciSalesPhoneNumberId() ?? "";
+
+  // A conta é resolvida primeiro e o erro dela é GUARDADO, não descartado: sem
+  // WABA não há modelo para listar, e "a lista veio vazia" mandaria procurar
+  // modelo perdido em vez de conta não resolvida.
+  const conta = await contaDoNumeroDeVendas(token);
+  const wabaId = conta.ok ? conta.wabaId : null;
+
+  const r = await graphDeVendas(
+    `${phoneNumberId}?fields=display_phone_number,verified_name,quality_rating,messaging_limit_tier`,
+    token,
   );
+
+  if (ehFalha(r)) {
+    return {
+      phoneNumberId,
+      wabaId,
+      numero: null,
+      nomeVerificado: null,
+      qualidade: null,
+      tier: null,
+      erro: conta.ok ? r.erro : `${r.erro} · conta: ${conta.erro}`,
+    };
+  }
+
+  const d = r as {
+    display_phone_number?: unknown;
+    verified_name?: unknown;
+    quality_rating?: unknown;
+    messaging_limit_tier?: unknown;
+  };
+
+  return {
+    phoneNumberId,
+    wabaId,
+    numero: d.display_phone_number != null ? String(d.display_phone_number) : null,
+    nomeVerificado: d.verified_name != null ? String(d.verified_name) : null,
+    qualidade: d.quality_rating != null ? String(d.quality_rating) : null,
+    tier: d.messaging_limit_tier != null ? String(d.messaging_limit_tier) : null,
+    erro: conta.ok ? null : `conta: ${conta.erro}`,
+  };
+}
+
+
+// ─── O WABA aprendido do webhook ─────────────────────────────────────────────
+
+/**
+ * O WABA persistido, **se** ele pertencer ao número de vendas de hoje.
+ *
+ * Devolve `null` em qualquer dúvida — sem registro, registro de outro número,
+ * ou banco indisponível. `null` manda o chamador seguir para os outros
+ * caminhos; um palpite mandaria a casa consultar a conta errada.
+ */
+export async function wabaAprendido(phoneNumberId: string): Promise<string | null> {
+  try {
+    const { prisma } = await import("@/lib/prisma");
+    const cfg = await prisma.prospeccaoConfig.findUnique({
+      where: { id: "singleton" },
+      select: { salaWabaId: true, salaWabaPhoneNumber: true },
+    });
+    if (!cfg?.salaWabaId) return null;
+    // O par tem de bater. WABA sem número casado não prova nada.
+    if (cfg.salaWabaPhoneNumber !== phoneNumberId) return null;
+    return cfg.salaWabaId;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Aprende o WABA a partir de um envelope de webhook do número de vendas.
+ *
+ * ── ⚠️ SÓ ESCREVE QUANDO TEM CERTEZA DOS DOIS LADOS ────────────────────────
+ *
+ * Exige que o `phoneNumberId` do envelope seja EXATAMENTE o número de vendas
+ * configurado. Sem essa conferência, um envelope de restaurante gravaria o WABA
+ * do cliente como se fosse o da Sala — e a partir daí a casa consultaria
+ * modelos, limites e qualidade da conta errada.
+ *
+ * Idempotente e barata: só escreve quando o valor MUDA, então o caminho normal
+ * (o mesmo WABA chegando o dia inteiro) não toca o banco.
+ *
+ * **Nunca lança.** É chamada de dentro do webhook, e um erro aqui não pode
+ * derrubar o recebimento de uma mensagem de cliente.
+ */
+export async function aprenderWabaDaSala(input: {
+  phoneNumberId: string | null | undefined;
+  wabaId: string | null | undefined;
+  agora?: Date;
+}): Promise<void> {
+  const numero = (input.phoneNumberId ?? "").trim();
+  const waba = (input.wabaId ?? "").trim();
+  if (!numero || !waba) return;
+
+  const daSala = foocciSalesPhoneNumberId();
+  if (!daSala || numero !== daSala) return;
+
+  try {
+    const { prisma } = await import("@/lib/prisma");
+    const cfg = await prisma.prospeccaoConfig.findUnique({
+      where: { id: "singleton" },
+      select: { salaWabaId: true, salaWabaPhoneNumber: true },
+    });
+    if (cfg?.salaWabaId === waba && cfg?.salaWabaPhoneNumber === numero) return;
+
+    await prisma.prospeccaoConfig.update({
+      where: { id: "singleton" },
+      data: {
+        salaWabaId: waba,
+        salaWabaPhoneNumber: numero,
+        salaWabaVistoEm: input.agora ?? new Date(),
+      },
+    });
+    console.info("[prospeccao] WABA da Sala aprendido do webhook", { numero, waba });
+  } catch (e) {
+    console.error("[prospeccao] não consegui gravar o WABA da Sala", e);
+  }
 }

@@ -95,7 +95,12 @@ const PERIODOS = [
 // "ainda não acabou" sem ler o rótulo.
 const COR_ETAPA: Record<FoocciLeadStage, string> = {
   NOVO:             "bg-sky-500/15 text-sky-300 border-sky-500/30",
+  // Ardósia, e não um degrau da escala quente: a base fria é o degrau ANTES de
+  // qualquer contato. Pintá-la de brand faria contato frio parecer, na lista,
+  // tão avançado quanto quem já respondeu.
+  DISPONIVEL_PARA_PROSPECCAO: "bg-slate-500/15 text-slate-300 border-slate-500/30",
   PRIMEIRO_CONTATO: "bg-brand-500/15 text-brand-300 border-brand-500/30",
+  RESPONDEU:        "bg-teal-500/15 text-teal-300 border-teal-500/30",
   EM_QUALIFICACAO:  "bg-indigo-500/15 text-indigo-300 border-indigo-500/30",
   QUALIFICADO:      "bg-violet-500/15 text-violet-300 border-violet-500/30",
   DEMO_AGENDADA:    "bg-fuchsia-500/15 text-fuchsia-300 border-fuchsia-500/30",

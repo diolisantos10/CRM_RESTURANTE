@@ -42,18 +42,6 @@ jobs:
           echo "← canal pronto: $(jq -r  '.data.canalPronto      // "-"' /tmp/r.json)"
           echo "← veredito    : $(jq -rc '.data.conferencia      // "-"' /tmp/r.json)"
 
-          # ⭐ O RAIO-X (desde 10/09/2026): os modelos com o corpo, os interruptores
-          # e a fila contada. É o que responde "o que impede envio real hoje?"
-          # sem painel da Meta nem banco — e sem gastar contato.
-          echo "← interruptores: $(jq -rc '.data.interruptores // "-"' /tmp/r.json)"
-          echo "← fila         : $(jq -rc '.data.fila          // "-"' /tmp/r.json)"
-          echo "← modelos da conta:"
-          jq -r '.data.modelos as $m
-                 | if ($m | type) == "array"
-                   then $m[] | "  · \(.nome) · \(.status) · \(.idioma) · \(.variaveis) variável(is) · \(.corpo | gsub("\n"; " ⏎ "))"
-                   else "  (erro: \($m.erro))" end' /tmp/r.json 2>/dev/null \
-            || echo "  (lista indisponível)"
-
           if [[ "$HTTP" -lt 200 || "$HTTP" -ge 300 ]]; then
             echo "::error::o pré-voo não rodou (HTTP $HTTP)"; cat /tmp/r.json; exit 1
           fi

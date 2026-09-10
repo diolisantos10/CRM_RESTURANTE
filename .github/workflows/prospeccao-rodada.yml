@@ -43,14 +43,8 @@ jobs:
           ENDPOINT_URL: ${{ steps.params.outputs.url }}
           CRON_SECRET:  ${{ secrets.CRON_SECRET }}
           TETO:         ${{ github.event.inputs.teto }}
-          # ⭐ Desde 10/09/2026 o disparo AGENDADO reserva o dia no banco, e o
-          # agendador interno (no Railway) faz o mesmo. Se o interno já rodou às
-          # 9h e este acordou atrasado (3h43 em 09/09), a rota responde
-          # `jaRodouHoje` e não manda nada. Disparo à mão não reserva.
-          AUTOMATICA:   ${{ github.event_name == 'schedule' }}
         run: |
-          BODY=$(jq -nc --argjson a "$AUTOMATICA" '{automatica:$a}')
-          if [[ -n "$TETO" ]]; then BODY=$(jq -nc --argjson t "$TETO" --argjson a "$AUTOMATICA" '{teto:$t, automatica:$a}'); fi
+          if [[ -n "$TETO" ]]; then BODY=$(jq -nc --argjson t "$TETO" '{teto:$t}'); else BODY='{}'; fi
 
           curl --connect-timeout 20 --max-time 780 -sS -X POST "$ENDPOINT_URL" \
             -H "Authorization: Bearer $CRON_SECRET" -H "Content-Type: application/json" \
@@ -100,10 +94,6 @@ jobs:
           if [[ "$PAROU" == "preVoo" ]]; then
             echo "::error::o modelo de abordagem reprovou ANTES do primeiro contato — $(jq -rc '.data.falha' /tmp/r.json)"
             exit 1
-          fi
-
-          if [[ "$PAROU" == "jaRodouHoje" ]]; then
-            echo "ℹ️ a rodada automática de hoje já tinha sido feita — $(jq -r '.data.detalhe' /tmp/r.json)"
           fi
 
           echo "✅ rodada concluída"

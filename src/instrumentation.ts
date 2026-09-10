@@ -23,14 +23,6 @@ export async function register() {
     );
     ScheduledCampaignScheduler.start();
 
-    // A rodada das 9h da prospecção, dentro do processo. O cron do GitHub
-    // atrasou 3h43 em 09/09/2026 e não disparou em 10/09; ele continua como
-    // reserva, e a reserva atômica no banco impede os dois de rodar no mesmo dia.
-    const { AgendadorDaProspeccao } = await import(
-      "./services/salaDeVendas/prospeccao/agendador"
-    );
-    AgendadorDaProspeccao.start();
-
     // Antes daqui saía um re-registro do webhook da Evolution a cada deploy. A
     // Evolution foi eliminada em 04/08/2026 e a Meta NÃO precisa disso: o webhook
     // é registrado uma vez no aplicativo e não é marcado como falho por downtime.
