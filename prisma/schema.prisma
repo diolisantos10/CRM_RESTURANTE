@@ -7346,6 +7346,15 @@ model ProspeccaoConfig {
   salaWabaPhoneNumber String?
   salaWabaVistoEm     DateTime?
 
+  /// A última vez que a rodada automática das 9h rodou.
+  ///
+  /// Reserva atômica contra dois agendadores (GitHub cron + agendador interno).
+  /// Quem conseguir escrever aqui primeiro neste dia é quem roda.
+  ultimaRodadaAutomaticaEm DateTime?
+
+  /// Quem disparou a última rodada automática (agendador, cron).
+  ultimaRodadaAutomaticaPor String?
+
   atualizadoEm DateTime @updatedAt
   atualizadoPor String?
 

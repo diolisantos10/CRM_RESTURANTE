@@ -34,44 +34,32 @@
  */
 
 /**
- * ⛔ TETO DURO — LEVANTADO EM 10/09/2026, PELO CAMINHO QUE ESTE ARQUIVO EXIGE
+ * ⛔ TETO DURO — 2.000 CONTATOS POR DIA, DECISÃO DO CEO
  *
- * Era 30/hora e 200/dia. O Diretor Geral fixou a capacidade da operação em
- * **2.000 contatos por dia, configurável**. Os dois números não podiam coexistir:
- * um teto configurável de 2.000 contra um teto duro de 200 não é um teto
- * configurável — é um número de tela que morre calado no nono por cento.
+ * O Diretor Geral fixou a capacidade da operação em **2.000 contatos por dia**.
+ * O teto da hora (200) foi removido em 10/09/2026 — não foi autorizado e não foi
+ * apresentado pela Meta. A fila escoa continuamente na maior velocidade aceita.
  *
- * Este arquivo já dizia como se faz: *"Quem precisar de mais que o teto duro
- * muda o código, em revisão, com o motivo escrito."* É exatamente isto.
- *
- * ⚠️ **O TETO DA HORA SUBIU JUNTO, E ELE NÃO É DETALHE.** A 30/hora, 2.000/dia é
- * inalcançável: 30 × 24 = 720. O teto do dia teria subido para 2.000 e a
- * operação continuaria parando em 720 — um segundo teto silencioso, no lugar
- * exato de onde o primeiro saiu. Com 200/hora, 2.000 cabe na janela autorizada
- * de atendimento (≈11 horas) sem precisar de rajada.
- *
- * ── O QUE NÃO MUDOU, E É O PONTO ────────────────────────────────────────────
+ * Controle técnico de concorrência, retentativa e resposta de rate limit continua
+ * sendo aplicado; não é teto comercial por hora, é tratamento de limite da Meta.
  *
  * O ambiente continua só APERTANDO. E o teto duro continua sendo o menor entre
  * o que a casa decidiu e **o que a Meta permite** — ver `tetosEmVigor`, que
  * aceita o tier medido. Capacidade autorizada pela Meta não é autorização para
- * abordar: opt-out, horário, proveniência e descanso continuam valendo por cima,
- * e nenhum deles mora aqui.
+ * abordar: opt-out, horário, proveniência e descanso continuam valendo por cima.
  */
-export const TETO_DURO_POR_HORA = 200;
 export const TETO_DURO_POR_DIA = 2000;
 
 export interface Tetos {
-  hora: number;
   dia: number;
 }
 
 /**
- * Os tetos em vigor.
+ * O teto em vigor.
  *
- * `FOOCCI_SDR_TETO_HORA` e `FOOCCI_SDR_TETO_DIA` só APERTAM. Valor maior que o
- * teto duro é ignorado — silenciosamente não, o chamador vê o valor aplicado.
- * Valor inválido (letra, negativo, zero) cai no teto duro.
+ * `FOOCCI_SDR_TETO_DIA` só APERTA. Valor maior que o teto duro é ignorado —
+ * silenciosamente não, o chamador vê o valor aplicado. Valor inválido (letra,
+ * negativo, zero) cai no teto duro.
  *
  * ⭐ `tierDaMeta` é o teto de conversas iniciadas pela empresa que a **Meta**
  * concede a este número (250, 1.000, 10.000, ilimitado). Ele aperta o dia como
@@ -92,7 +80,6 @@ export function tetosEmVigor(
       : null;
 
   return {
-    hora: aperta(env.FOOCCI_SDR_TETO_HORA, TETO_DURO_POR_HORA),
     dia: tier === null ? dia : Math.min(dia, tier),
   };
 }
@@ -104,8 +91,6 @@ function aperta(bruto: string | undefined, duro: number): number {
 }
 
 export interface JanelasDoRitmo {
-  /** Abordagens que saíram na última hora. */
-  naUltimaHora: number;
   /** Abordagens que saíram nas últimas 24 horas. */
   nasUltimas24h: number;
 }
@@ -114,7 +99,7 @@ export type VeredictoDoRitmo =
   | ({ pode: true } & JanelasDoRitmo)
   | ({
       pode: false;
-      motivo: "tetoDaHora" | "tetoDoDia";
+      motivo: "tetoDoDia";
       /** Frase de gente, para a tela de quem apertou o botão. */
       detalhe: string;
     } & JanelasDoRitmo);
@@ -122,9 +107,9 @@ export type VeredictoDoRitmo =
 /**
  * A decisão, pura e sem banco.
  *
- * ⚠️ A comparação é `>=`, e não `>`. Com `>`, o teto de 30 deixaria passar a
- * trigésima primeira: o contador diria 30, `30 > 30` seria falso, e a mensagem
- * sairia. Erro de um, na direção de mandar a mais.
+ * ⚠️ A comparação é `>=`, e não `>`. Com `>`, o teto deixaria passar um além:
+ * o contador diria N, `N > N` seria falso, e a mensagem sairia. Erro de um,
+ * na direção de mandar a mais.
  */
 export function decidirPeloRitmo(j: JanelasDoRitmo, tetos: Tetos): VeredictoDoRitmo {
   if (j.nasUltimas24h >= tetos.dia) {
@@ -132,15 +117,6 @@ export function decidirPeloRitmo(j: JanelasDoRitmo, tetos: Tetos): VeredictoDoRi
       pode: false,
       motivo: "tetoDoDia",
       detalhe: `teto de ${tetos.dia} abordagens em 24h já alcançado (${j.nasUltimas24h})`,
-      ...j,
-    };
-  }
-
-  if (j.naUltimaHora >= tetos.hora) {
-    return {
-      pode: false,
-      motivo: "tetoDaHora",
-      detalhe: `teto de ${tetos.hora} abordagens por hora já alcançado (${j.naUltimaHora})`,
       ...j,
     };
   }
@@ -168,7 +144,7 @@ const UM_DIA = 24 * UMA_HORA;
  *
  * ⚠️ Não é transacional, e não precisa ser: dois processos podem passar juntos
  * e mandar uma a mais que o teto. Isso é aceitável — o que este freio existe
- * para impedir é a diferença entre 30 e 3.000, não entre 30 e 31.
+ * para impedir é a diferença entre 1.000 e 10.000, não entre 2.000 e 2.001.
  */
 export async function conferirRitmo(
   db: BancoDoFreio,
@@ -177,24 +153,14 @@ export async function conferirRitmo(
 ): Promise<VeredictoDoRitmo> {
   const saiu = { in: ["ENVIADA", "ENTREGUE", "LIDA"] };
 
-  const [naUltimaHora, nasUltimas24h] = await Promise.all([
-    db.leadMensagem.count({
-      where: {
-        direcao: "SAIDA",
-        tipo: "TEMPLATE",
-        status: saiu,
-        ocorreuEm: { gte: new Date(agora.getTime() - UMA_HORA) },
-      },
-    }),
-    db.leadMensagem.count({
-      where: {
-        direcao: "SAIDA",
-        tipo: "TEMPLATE",
-        status: saiu,
-        ocorreuEm: { gte: new Date(agora.getTime() - UM_DIA) },
-      },
-    }),
-  ]);
+  const nasUltimas24h = await db.leadMensagem.count({
+    where: {
+      direcao: "SAIDA",
+      tipo: "TEMPLATE",
+      status: saiu,
+      ocorreuEm: { gte: new Date(agora.getTime() - UM_DIA) },
+    },
+  });
 
-  return decidirPeloRitmo({ naUltimaHora, nasUltimas24h }, tetos);
+  return decidirPeloRitmo({ nasUltimas24h }, tetos);
 }
