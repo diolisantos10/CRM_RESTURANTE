@@ -1,6 +1,48 @@
 # Pendências — o que está aberto
 
-> Última atualização: 08/09/2026, fim do dia.
+> Última atualização: 10/09/2026, fim da tarde (sala 4).
+
+## ⛔ 10/09/2026 — Envio TRAVADO em código, por ordem do Diretor Geral
+
+`FOOCCI_SDR_SEND_ENABLED=false` em produção desde 16h10 SP. **Só o CEO manda
+religar.** Nada dispara — nem a rodada das 9h, nem a resposta do TA a quem
+escreveu. Religar é decisão dele; o que está abaixo é o que ficou pronto para
+quando ele decidir.
+
+## 🟠 10/09/2026 — O que subiu na sala 4, e o que depende de merge
+
+| Item | Onde | Estado |
+|---|---|---|
+| Agendador interno da rodada das 9h (cron do GitHub atrasou 3h43 em 09/09 e não disparou em 10/09) | PR #235 | CI verde, aguardando merge do Diretor Geral |
+| Mapa por modelo (`{{1}}`/`{{2}}`/`{{3}}` de `abordagem_restaurante_fria`), pré-voo nomeando a variável que falta, bairro no item | PR #236 (empilhada no #235) | CI rodando |
+| TA fora da transação de 5 s (ler → fechar → modelo → gravar curto), links, sem terminar toda resposta com pergunta, curto | branch `claude/sala-mapa-1009` | em execução |
+| Lista única (sem lote/RASCUNHO/Liberar; importado entra abordável; rastreio em coluna; freio único = teto do dia) | branch `claude/sala-mapa-1009` | em execução |
+
+## ⛔ 10/09/2026 — Quem respondeu ao CEO em 09/09 09h42? Ninguém, pelo código
+
+**Medido no log do Railway (deploy `9e1d83f8`, 12:41–12:42 UTC):** o "oi" do
+CEO entrou pelo caminho de **vendas** (`RECONHECIDO_POR_TELEFONE`, sem conflito
+de número), a Meta reentregou **cinco vezes** (12:41:01 → 12:42:07) e as cinco
+morreram antes de gravar resposta:
+
+> `Transaction API error: Transaction already closed … The timeout for this
+> transaction was 5000 ms, however 5198 ms passed`
+
+O `WhatsAppOrderBrain` aparece no mesmo log só num **burst de 20 linhas com o
+mesmo milissegundo** (12:49:31) — simulador ou lote de log, não roteamento do
+número de vendas. **O roteamento está certo; o defeito é o TA chamar o modelo
+dentro da transação de 5 s.** Conserto em curso (item 3 da sala 4). Se o CEO
+recebeu resposta, veio de fora deste caminho (pessoa, ou outro número).
+
+## ⚠️ 10/09/2026 — O CSV de 4.897 com nome NÃO está no repositório
+
+O Diretor Geral pediu para importar o CSV de 4.897 **com nome** (o das 9 partes
+veio "Sem nome"). O arquivo não está em disco nem no repositório; a importação
+é pela tela (`/comercial/prospeccao` → Receber lista). Com a lista única o
+teto de 500 linhas por colagem sobe para 5.000 — o CSV entra inteiro, de uma
+vez, com o cabeçalho `nome`/`restaurante` presente (o "Sem nome" das 9 partes
+é o sintoma de parte colada sem cabeçalho: a inferência por conteúdo perde a
+coluna). **Precisa de alguém com o arquivo em mãos.**
 
 ## ⛔ 08/09/2026 — A prospecção para num dado só: o id da conta (WABA)
 
