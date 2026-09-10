@@ -76,9 +76,16 @@ interface Interruptor {
   motivo: string | null;
 }
 
+interface Paginacao {
+  linhas: Lote[];
+  total: number;
+  pagina: number;
+  porPagina: number;
+}
+
 interface Dados {
   fila: Fila;
-  lotes: Lote[];
+  lotes: Paginacao;
   interruptor: Interruptor;
   canalPronto: boolean;
 }
@@ -354,7 +361,7 @@ export function ProspeccaoClient() {
       <section>
         <h2 className="text-[15px] font-semibold text-ink">Lotes</h2>
         <ul className="mt-3 space-y-2">
-          {lotes.map((l) => (
+          {lotes.linhas.map((l) => (
             <li key={l.id} className="rounded-xl border border-line bg-paper p-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -392,7 +399,7 @@ export function ProspeccaoClient() {
               </div>
             </li>
           ))}
-          {lotes.length === 0 && (
+          {lotes.linhas.length === 0 && (
             <li className="text-[12.5px] text-muted">
               Nenhum lote carregado. A lista entra por importação conferida, em
               partes — lote grande é o que ninguém confere antes de liberar.
