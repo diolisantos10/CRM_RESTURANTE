@@ -45,6 +45,15 @@ export interface ModeloNaMeta {
   status: string;
   /** Quantas variáveis `{{n}}` o corpo espera. Zero = modelo sem variável. */
   variaveis: number;
+  /**
+   * O texto do corpo, com os `{{n}}` no lugar — como a Meta o guarda.
+   *
+   * ⚠️ Entrou em 10/09/2026 porque "espera 3 variáveis" não diz QUAIS: sem o
+   * corpo, mapear variável→campo é chute, e chute manda "Olá São Paulo" para
+   * um restaurante. Corpo de modelo aprovado não é segredo — é o que o
+   * cliente vai ler.
+   */
+  corpo: string;
 }
 
 type Falha = { ok: false; erro: string };
@@ -241,6 +250,16 @@ async function contaPeloToken(token: string): Promise<ContaPeloToken> {
   };
 }
 
+/** O texto do componente BODY, ou vazio quando o modelo não tem corpo. */
+export function corpoDoModelo(components: unknown): string {
+  if (!Array.isArray(components)) return "";
+  const body = components.find(
+    (c) => String((c as { type?: unknown })?.type).toUpperCase() === "BODY",
+  );
+  const text = (body as { text?: unknown })?.text;
+  return typeof text === "string" ? text : "";
+}
+
 /** Todos os modelos da conta do número de vendas, como a Meta os vê agora. */
 export async function listarModelosDeVendas(
   token: string,
@@ -263,6 +282,7 @@ export async function listarModelosDeVendas(
       idioma: String(tpl.language ?? "pt_BR"),
       status: String(tpl.status ?? "UNKNOWN").toUpperCase(),
       variaveis: countBodyVariables(tpl.components),
+      corpo: corpoDoModelo(tpl.components),
     }];
   });
 
@@ -367,4 +387,20 @@ export function preVooDoModelo(): Promise<ConferenciaDoModelo> {
     causa: "semToken",
     detalhe: "FOOCCI_SALES_ACCESS_TOKEN não está no ambiente",
   }));
+}
+
+/**
+ * ⭐ TODOS os modelos da conta, com o token do ambiente — para o raio-x.
+ *
+ * O pré-voo responde "o modelo configurado serve?". Esta responde "o que
+ * existe?", e é a que faltou em 09/09/2026: sabíamos que o modelo esperava três
+ * variáveis e não sabíamos quais — e a única forma de saber era alguém abrir o
+ * painel da Meta e colar. Só leitura; sem token devolve falha, nunca lista vazia
+ * (guardrail 1).
+ */
+export function modelosDaSala(): Promise<{ ok: true; modelos: ModeloNaMeta[] } | Falha> {
+  return comOTokenDeVendas<{ ok: true; modelos: ModeloNaMeta[] } | Falha>(
+    listarModelosDeVendas,
+    () => ({ ok: false, erro: "FOOCCI_SALES_ACCESS_TOKEN não está no ambiente" }),
+  );
 }

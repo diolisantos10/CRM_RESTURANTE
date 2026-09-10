@@ -59,9 +59,9 @@ describe("ler os modelos da conta do número de vendas", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.modelos).toEqual([
-      { nome: "sem_variavel", idioma: "pt_BR", status: "APPROVED", variaveis: 0 },
-      { nome: "uma",          idioma: "pt_BR", status: "APPROVED", variaveis: 1 },
-      { nome: "duas",         idioma: "pt_BR", status: "PENDING",  variaveis: 2 },
+      { nome: "sem_variavel", idioma: "pt_BR", status: "APPROVED", variaveis: 0, corpo: "Olá, tudo bem?" },
+      { nome: "uma",          idioma: "pt_BR", status: "APPROVED", variaveis: 1, corpo: "Olá {{1}}, tudo bem?" },
+      { nome: "duas",         idioma: "pt_BR", status: "PENDING",  variaveis: 2, corpo: "Olá {{1}}, aqui é {{2}}" },
     ]);
   });
 
