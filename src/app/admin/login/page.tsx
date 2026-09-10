@@ -30,6 +30,7 @@
 
 import { useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { ROTAS } from "@/lib/sala/rotas";
 
 type Porta = "pessoa" | "chaveDaCasa";
 
@@ -101,7 +102,9 @@ export default function AdminLoginPage() {
       });
 
       if (res.ok) {
-        router.replace("/admin/departamentos");
+        // A entrada por segredo é a do dono. Mesmo destino que o papel MASTER_CEO
+        // recebe em `destinoDe`: a Sala de Vendas, não o organograma vazio.
+        router.replace(ROTAS.painel);
         return;
       }
 
