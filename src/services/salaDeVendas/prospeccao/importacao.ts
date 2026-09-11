@@ -213,33 +213,59 @@ export async function falharImportacao(
 export interface ResultadoDoCancelamento {
   ok: boolean;
   motivo?: string;
-  /** Quantos lotes daquele arquivo pararam. */
+  /** Quantos lotes daquele arquivo foram marcados PAUSADO — histórico, ver abaixo. */
   lotesPausados: number;
+  /** Quantos itens PENDENTES foram retirados da fila. Este é o número que conta. */
+  itensRetirados: number;
 }
 
 /**
- * ⭐ CANCELA a importação: os lotes param, e NADA é apagado.
+ * ⭐ CANCELA a importação: os itens PENDENTES saem da fila, e NADA é apagado.
  *
- * ── POR QUE PAUSAR OS LOTES, E NÃO APAGAR OS CONTATOS ───────────────────────
+ * ── ⛔ CORRIGIDO EM 11/09/2026 — A VERSÃO ANTERIOR NÃO CANCELAVA NADA ───────
  *
- * Porque apagar é a operação que não tem volta, e o cancelamento quase sempre é
- * conserto de engano: subiu o arquivo errado, subiu com a procedência errada,
- * subiu duas vezes. Apagando, some junto o registro de que aqueles telefones um
- * dia entraram — e é esse registro que responde, meses depois, "por que vocês
- * tinham o meu contato?". O efeito que interessa é o contato parar de ser
- * abordado, e para isso basta o lote sair de LIBERADO.
+ * Até aqui esta função só pausava os LOTES (`situacao: "PAUSADO"`). Isso
+ * funcionava enquanto a seleção lia `lote.situacao` — e parou de funcionar no
+ * instante em que a operação por lotes foi removida (ver `selecao.ts`,
+ * 11/09/2026): `montarFilaDeProspeccao` e `materializarLead` passaram a olhar
+ * só `ItemDeProspeccao.situacao`, e um lote PAUSADO deixou de excluir
+ * qualquer item. Resultado medido: cancelar uma importação não cancelava
+ * mais nada — os contatos continuavam PENDENTES e continuavam sendo
+ * abordados. Achado da auditoria, e a falha era real.
  *
- * ── ⚠️ E POR QUE PAUSADO, E NÃO ENCERRADO ───────────────────────────────────
+ * A correção NÃO reintroduz a leitura de `lote.situacao` na seleção — isso
+ * seria voltar à operação por lotes, que foi removida por ordem explícita, e
+ * traria de volta a mesma fragilidade (lote pausado por engano silenciava
+ * contatos sem ninguém perceber por quê). Em vez disso, o cancelamento age
+ * direto onde a seleção de fato olha: o ITEM.
  *
- * ENCERRADO é porta de mão única: `liberarLote` recusa lote encerrado, de
- * propósito. Um cancelamento por engano ficaria sem conserto e obrigaria a
- * reimportar o arquivo — o que cria ficha nova para telefone que já tem ficha, e
- * o índice `(loteId, whatsappDigits)` não pega nada entre lotes diferentes.
- * PAUSADO tira da fila igual (a seleção só lê lote LIBERADO) e volta com
- * `liberarLote`, que é exatamente o que aquela função passou a servir.
+ * ── O QUE ESTE CANCELAMENTO FAZ, CAMPO A CAMPO ──────────────────────────────
+ *
+ *   1. Todo item ainda **PENDENTE** ligado a esta importação vira **RECUSADO**,
+ *      com `motivo: "Importação cancelada"` — sai da fila na mesma escrita
+ *      que a seleção lê (`situacao`), não por tabela intermediária.
+ *   2. Item que já **VIROU_LEAD** ou já é **DUPLICADO** não é tocado: o lead,
+ *      as mensagens e o histórico dele continuam exatamente como estavam —
+ *      cancelar a importação não desfaz uma conversa que já aconteceu.
+ *   3. Os LOTES continuam sendo marcados PAUSADO — não porque isso module a
+ *      fila (não modula mais), mas porque é o rastro que a aba Importações
+ *      mostra: "este arquivo foi cancelado, aqui estão os lotes dele".
+ *   4. NADA é apagado. `RECUSADO` com motivo é reversível de leitura: dá para
+ *      responder sempre "por que este contato não foi abordado".
+ *   5. As duas escritas que importam — os itens e o registro da importação —
+ *      acontecem na MESMA transação: ou as duas valem, ou nenhuma vale. Uma
+ *      importação que aparecesse CANCELADA com os itens ainda PENDENTES (ou
+ *      vice-versa) seria exatamente a mentira que motivou esta correção.
+ *
+ * ── E O ARQUIVO CORRIGIDO PODE SUBIR DE NOVO ────────────────────────────────
+ *
+ * Os itens cancelados ficam RECUSADO, não PENDENTE — o índice
+ * `(loteId, whatsappDigits)` não impede nada entre lotes diferentes, e uma
+ * nova importação do arquivo corrigido cria itens novos, num lote novo,
+ * normalmente.
  */
 export async function cancelarImportacao(
-  db: Cliente,
+  db: PrismaClient,
   importacaoId: string,
   quemEComQueMotivo: { quem: string; quemUserId?: string | null; motivo?: string | null },
 ): Promise<ResultadoDoCancelamento> {
@@ -248,39 +274,48 @@ export async function cancelarImportacao(
     select: { situacao: true },
   });
 
-  if (!importacao) return { ok: false, motivo: "Importação não encontrada.", lotesPausados: 0 };
+  if (!importacao) {
+    return { ok: false, motivo: "Importação não encontrada.", lotesPausados: 0, itensRetirados: 0 };
+  }
   if (importacao.situacao === "CANCELADA") {
-    return { ok: false, motivo: "Esta importação já estava cancelada.", lotesPausados: 0 };
+    return {
+      ok: false,
+      motivo: "Esta importação já estava cancelada.",
+      lotesPausados: 0,
+      itensRetirados: 0,
+    };
   }
 
   const agora = new Date();
 
-  // Os lotes primeiro, e o registro depois. Na ordem inversa, uma falha entre as
-  // duas escritas deixaria a importação marcada como cancelada com os lotes
-  // ainda abordando — o pior dos dois estados possíveis. Assim, a falha deixa os
-  // lotes parados e a importação ainda aberta: alguém repete o cancelamento e
-  // acabou.
-  //
-  // ⚠️ ENCERRADO fica de fora do `where`: lote encerrado já não aborda, e
-  // reabri-lo como PAUSADO faria um lote com fim declarado voltar a parecer
-  // retomável.
-  const lotes = await db.loteDeProspeccao.updateMany({
-    where: { importacaoId, situacao: { in: ["RASCUNHO", "LIBERADO"] } },
-    data: { situacao: "PAUSADO", pausadoEm: agora, pausadoPor: quemEComQueMotivo.quem },
-  });
+  const [itens, lotes] = await db.$transaction([
+    // ⭐ O QUE DE FATO TIRA DA FILA — só o PENDENTE. Item já processado
+    // (VIROU_LEAD, DUPLICADO) ou já recusado por outro motivo não é tocado.
+    db.itemDeProspeccao.updateMany({
+      where: { lote: { importacaoId }, situacao: "PENDENTE" },
+      data: { situacao: "RECUSADO", motivo: "Importação cancelada", processadoEm: agora },
+    }),
+    // Histórico: os lotes deste arquivo aparecem pausados na aba Importações.
+    // ⚠️ ENCERRADO fica de fora do `where`: lote encerrado já não aborda, e
+    // reabri-lo como PAUSADO faria um lote com fim declarado voltar a
+    // parecer retomável.
+    db.loteDeProspeccao.updateMany({
+      where: { importacaoId, situacao: { in: ["RASCUNHO", "LIBERADO"] } },
+      data: { situacao: "PAUSADO", pausadoEm: agora, pausadoPor: quemEComQueMotivo.quem },
+    }),
+    db.importacaoDeLeads.update({
+      where: { id: importacaoId },
+      data: {
+        situacao: "CANCELADA",
+        canceladaEm: agora,
+        canceladaPor: quemEComQueMotivo.quem,
+        canceladaPorUserId: texto(quemEComQueMotivo.quemUserId),
+        motivoDoCancelamento: texto(quemEComQueMotivo.motivo),
+      },
+    }),
+  ]);
 
-  await db.importacaoDeLeads.update({
-    where: { id: importacaoId },
-    data: {
-      situacao: "CANCELADA",
-      canceladaEm: agora,
-      canceladaPor: quemEComQueMotivo.quem,
-      canceladaPorUserId: texto(quemEComQueMotivo.quemUserId),
-      motivoDoCancelamento: texto(quemEComQueMotivo.motivo),
-    },
-  });
-
-  return { ok: true, lotesPausados: lotes.count };
+  return { ok: true, lotesPausados: lotes.count, itensRetirados: itens.count };
 }
 
 export interface ImportacaoAnterior {

@@ -26,6 +26,11 @@ import {
   montarFilaDeProspeccao,
   materializarLead,
 } from "@/services/salaDeVendas/prospeccao/selecao";
+import {
+  abrirImportacao,
+  concluirImportacao,
+  cancelarImportacao,
+} from "@/services/salaDeVendas/prospeccao/importacao";
 
 const prisma = new PrismaClient();
 
@@ -303,5 +308,106 @@ describe("Jornada 3 — prospecção, ponta a ponta", () => {
     for (const barrado of fila.barrados) {
       expect(barrado.decisao.detail.length).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * ⭐⭐ P0.1, 11/09/2026 — O CANCELAMENTO QUE NÃO CANCELAVA NADA.
+ *
+ * Achado da auditoria: `cancelarImportacao` continuava pausando os LOTES,
+ * mas a seleção (`selecao.ts`) parou de ler `lote.situacao` quando a operação
+ * por lotes foi removida — então uma importação "cancelada" continuava
+ * abordando gente. A correção não volta a ler `lote.situacao`: age direto no
+ * ITEM, que é o que a seleção de fato olha.
+ */
+describe("Jornada — cancelar importação retira os PENDENTES da fila, sem apagar nada", () => {
+  let importacaoId = "";
+
+  it("10. uma importação com duas linhas entra; uma delas materializa ANTES do cancelamento", async () => {
+    importacaoId = await abrirImportacao(prisma, {
+      arquivoNome: "cancelamento-jornada.csv",
+      proveniencia: "Lista sintética da jornada de CI.",
+    });
+
+    const r = await importarLote(prisma, {
+      nome: "Lote a cancelar",
+      proveniencia: "Lista sintética da jornada de CI.",
+      criadoPor: "jornada-ci",
+      importacaoId,
+      linhas: [
+        { whatsapp: "11955570001", nome: "Fica Pendente" },
+        { whatsapp: "11955570002", nome: "Já Vira Lead Antes De Cancelar" },
+      ],
+    });
+    expect(r.aceitas).toBe(2);
+    await concluirImportacao(prisma, importacaoId);
+
+    // Materializa UM dos dois ANTES do cancelamento — prova que quem já virou
+    // lead não é tocado por ele.
+    const item2 = await prisma.itemDeProspeccao.findFirstOrThrow({
+      where: { whatsappDigits: "5511955570002" },
+    });
+    const m = await materializarLead(prisma, item2.id);
+    expect(m.materializado).toBe(true);
+  });
+
+  it("11. ⭐⭐ cancelar retira o PENDENTE da fila (RECUSADO, motivo declarado) e não toca no que já virou lead", async () => {
+    const leadsAntes = await prisma.siteLead.count();
+
+    const r = await cancelarImportacao(prisma, importacaoId, { quem: "jornada-ci" });
+    expect(r.ok).toBe(true);
+    expect(r.itensRetirados).toBe(1); // só o PENDENTE — o outro já não era
+
+    const pendente = await prisma.itemDeProspeccao.findFirstOrThrow({
+      where: { whatsappDigits: "5511955570001" },
+    });
+    expect(pendente.situacao).toBe("RECUSADO");
+    expect(pendente.motivo).toBe("Importação cancelada");
+
+    // O que já virou lead continua EXATAMENTE como estava — nada apagado,
+    // nada desfeito.
+    const jaEraLead = await prisma.itemDeProspeccao.findFirstOrThrow({
+      where: { whatsappDigits: "5511955570002" },
+    });
+    expect(jaEraLead.situacao).toBe("VIROU_LEAD");
+    expect(jaEraLead.leadId).not.toBeNull();
+    expect(await prisma.siteLead.count()).toBe(leadsAntes);
+
+    const importacao = await prisma.importacaoDeLeads.findUniqueOrThrow({
+      where: { id: importacaoId },
+    });
+    expect(importacao.situacao).toBe("CANCELADA");
+  });
+
+  it("12. ⭐ o item cancelado NÃO aparece mais na fila — nem liberado, nem barrado", async () => {
+    const fila = await montarFilaDeProspeccao(prisma, { canalPronto: true, agora: AGORA });
+    const aindaNaFila =
+      fila.liberados.some((c) => c.whatsapp === "11955570001") ||
+      fila.barrados.some((c) => c.whatsapp === "11955570001");
+    expect(aindaNaFila, "o item cancelado ainda aparece na fila").toBe(false);
+  });
+
+  it("13. o arquivo corrigido pode ser reimportado, num lote novo, e fica elegível sem NENHUMA liberação", async () => {
+    // ⚠️ O item cancelado ficou RECUSADO, não PENDENTE: o índice
+    // (loteId, whatsappDigits) só protege dentro do MESMO lote, e a
+    // deduplicação contra "pendente em outro lote" só olha PENDENTE — um
+    // RECUSADO não bloqueia a reentrada.
+    const r = await importarLote(prisma, {
+      nome: "Lote corrigido, reenviado",
+      proveniencia: "Lista sintética da jornada de CI, corrigida.",
+      criadoPor: "jornada-ci",
+      linhas: [{ whatsapp: "11955570001", nome: "Fica Pendente, Corrigido" }],
+    });
+    expect(r.aceitas).toBe(1);
+
+    const fila = await montarFilaDeProspeccao(prisma, { canalPronto: true, agora: AGORA });
+    const reimportado = fila.liberados.find((c) => c.whatsapp === "11955570001");
+    expect(reimportado, "o reimportado não ficou elegível sem nenhuma liberação").toBeTruthy();
+  });
+
+  it("14. cancelar de novo devolve erro claro, sem tocar em nada", async () => {
+    const r = await cancelarImportacao(prisma, importacaoId, { quem: "jornada-ci" });
+    expect(r.ok).toBe(false);
+    expect(r.itensRetirados).toBe(0);
   });
 });

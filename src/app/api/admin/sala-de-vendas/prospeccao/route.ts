@@ -8,7 +8,7 @@
  *   POST { acao: "abrirImportacao" }   → declara o arquivo antes das partes
  *   POST { acao: "importar" }          → carrega uma parte, já elegível
  *   POST { acao: "concluirImportacao" }→ fecha o arquivo
- *   POST { acao: "cancelarImportacao"} → desfaz: marca o arquivo cancelado (histórico), sem apagar
+ *   POST { acao: "cancelarImportacao"} → retira da fila os PENDENTES do arquivo, sem apagar nada
  *   POST { acao: "rodada" }      → dispara a rodada automática do dia
  *   POST { acao: "interruptor" } → liga/desliga/pausa a prospecção inteira
  *
@@ -667,7 +667,7 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // ── Cancelar: pausa os lotes daquele arquivo, e não apaga nada ──
+  // ── Cancelar: retira os itens PENDENTES da fila, e não apaga nada ──
   if (c.acao === "cancelarImportacao") {
     if (!c.importacaoId) {
       return NextResponse.json({ ok: false, error: "importacaoId é obrigatório." }, { status: 400 });
@@ -678,7 +678,9 @@ export async function POST(req: NextRequest) {
       motivo: c.motivo,
     });
     return NextResponse.json(
-      r.ok ? { ok: true, data: { lotesPausados: r.lotesPausados } } : { ok: false, error: r.motivo },
+      r.ok
+        ? { ok: true, data: { lotesPausados: r.lotesPausados, itensRetirados: r.itensRetirados } }
+        : { ok: false, error: r.motivo },
       { status: r.ok ? 200 : 409 },
     );
   }

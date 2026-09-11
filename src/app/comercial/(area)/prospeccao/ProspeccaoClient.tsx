@@ -22,16 +22,21 @@
  * 2. O interruptor geral, com o limite e o saldo disponível ao lado — quem
  *    abre esta tela precisa saber, em um segundo, se a casa está abordando
  *    gente agora, e conseguir parar sem procurar o botão.
- * 3. O resumo da Base fria — quantos contatos existem, quantos elegíveis, e a
- *    ficha de cada um (colunas principais + detalhe expansível).
- * 4. A situação da fila automática — quantos seriam liberados agora, a última
- *    rodada, e o botão para disparar uma rodada manual.
+ * 3. O resumo da Base fria — quantos contatos existem, quantos PENDENTES
+ *    (ainda não passaram pelas travas de opt-out/histórico/canal — ver
+ *    P0.3), e a ficha de cada um (colunas principais + detalhe expansível).
+ * 4. A situação da fila automática — a capacidade REAL da próxima rodada
+ *    (não uma prévia truncada), a última rodada, e "Rodar agora", que exige
+ *    confirmação e fica desabilitado sem saldo, sem canal ou com a
+ *    prospecção desligada.
  *
  * ── ⚠️ NADA AQUI ENVIA MENSAGEM SOZINHO ─────────────────────────────────────
  *
  * Esta tela seleciona e mostra. A entrega continua atrás de
  * `FOOCCI_SDR_SEND_ENABLED`, no ambiente, e é do dono. "Rodar agora" chama a
- * MESMA rodada que o agendador das 9h chama — não é um caminho novo.
+ * MESMA rodada que o agendador das 9h chama — não é um caminho novo — e só
+ * dispara depois de confirmação explícita (ordem do CEO, 11/09/2026: um
+ * clique não pode abordar até 2.000 contatos por acidente).
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -285,11 +290,29 @@ export function ProspeccaoClient() {
     [recarregar],
   );
 
-  const dispararRodada = useCallback(async () => {
-    setResultadoRodada(null);
-    const dados = await agir({ acao: "rodada" });
-    if (dados) setResultadoRodada(dados as ResultadoDaRodada);
-  }, [agir]);
+  /**
+   * ⭐ P0.2 — "Rodar agora" precisa de confirmação DELIBERADA, não um clique
+   * acidental que aborda até 2.000 contatos de uma vez.
+   *
+   * `capacidade` é o mesmo cálculo de `cabeNoTeto` em `selecao.ts`
+   * (`min(pendentes, saldo diário, saldo da janela da Meta)`) — não
+   * `fila.liberados.length`, que é só a prévia dos 50 primeiros (ver P0.3) e
+   * subestimaria a confirmação numa fila maior que 50.
+   */
+  const dispararRodada = useCallback(
+    async (capacidade: number) => {
+      const mensagem =
+        capacidade > 0
+          ? `Esta ação poderá abordar até ${capacidade} contato${capacidade === 1 ? "" : "s"} agora. Confirmar?`
+          : "Esta ação poderá abordar até 0 contatos agora — nada será enviado. Confirmar mesmo assim?";
+      if (!window.confirm(mensagem)) return;
+
+      setResultadoRodada(null);
+      const dados = await agir({ acao: "rodada" });
+      if (dados) setResultadoRodada(dados as ResultadoDaRodada);
+    },
+    [agir],
+  );
 
   if (estado.fase === "carregando") {
     return <div className="p-6 text-[13px] text-muted">Carregando…</div>;
@@ -321,6 +344,15 @@ export function ProspeccaoClient() {
   const { fila, base, interruptor, canalPronto } = estado.dados;
   const pausada = Boolean(interruptor.pausadoEm);
   const ligada = interruptor.outboundLigado && !pausada;
+
+  // ⭐ P0.2/P0.3 — a capacidade REAL da próxima rodada, não a prévia de 50.
+  // O mesmo `min(pendentes, saldo diário, saldo da janela)` que
+  // `montarFilaDeProspeccao` usa como `cabeNoTeto` em `selecao.ts`.
+  const capacidadeDaRodada = Math.max(
+    0,
+    Math.min(base.pendentes, fila.tetoDoDia - fila.usadosHoje, fila.saldoDaJanela),
+  );
+  const rodadaDesabilitada = ocupado || !ligada || !canalPronto || capacidadeDaRodada <= 0;
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
@@ -436,7 +468,15 @@ export function ProspeccaoClient() {
         <h2 className="text-[15px] font-semibold text-ink">Base fria</h2>
         <p className="mt-1 text-[12.5px] text-muted">
           <span className="font-semibold text-ink">{base.total}</span> contatos no total ·{" "}
-          <span className="font-semibold text-ink">{base.pendentes}</span> elegíveis para abordagem
+          <span className="font-semibold text-ink">{base.pendentes}</span> pendentes
+        </p>
+        {/* ⭐ P0.3 — "pendentes" não é "elegíveis": opt-out, histórico e canal
+            ainda podem barrar alguns na hora da rodada. Quem quiser o número
+            depois desses filtros lê "Fila automática", logo abaixo — e mesmo
+            ali só os 50 primeiros são avaliados, como a seção já avisa. */}
+        <p className="mt-0.5 text-[12px] text-muted">
+          &ldquo;Pendentes&rdquo; ainda não passou pelas travas de opt-out, histórico e canal — não é o
+          número de quem será de fato abordado.
         </p>
 
         <ul className="mt-3 space-y-2">
@@ -457,13 +497,21 @@ export function ProspeccaoClient() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-[15px] font-semibold text-ink">Fila automática</h2>
+            {/* ⭐ P0.3 — capacidade REAL da rodada, calculada pelos saldos —
+                não a contagem da prévia de 50, que subestimaria numa fila
+                maior. */}
+            <p className="mt-1 text-[12.5px] text-ink2">
+              Capacidade da próxima rodada:{" "}
+              <span className="font-semibold text-ink">{capacidadeDaRodada}</span> contatos
+            </p>
             {fila.motivoDaFilaVazia ? (
               <p className="mt-1 text-[12.5px] text-muted">{fila.motivoDaFilaVazia}</p>
             ) : (
               <p className="mt-1 text-[12.5px] text-muted">
-                <span className="font-semibold text-ink">{fila.liberados.length}</span> prontos para a
-                próxima rodada ·{" "}
-                <span className="font-semibold text-ink">{fila.barrados.length}</span> barrados agora
+                Prévia dos 50 primeiros da fila:{" "}
+                <span className="font-semibold text-ink">{fila.liberados.length}</span> prontos ·{" "}
+                <span className="font-semibold text-ink">{fila.barrados.length}</span> barrados
+                {/* Não é o total da fila — só o que a consulta olhou. */}
               </p>
             )}
             <p className="mt-1 text-[12px] text-muted">
@@ -473,11 +521,20 @@ export function ProspeccaoClient() {
                   }`
                 : "Nenhuma rodada automática rodou ainda."}
             </p>
+            {!ligada && (
+              <p className="mt-1 text-[12px] text-muted">Desligado: a prospecção precisa estar ligada.</p>
+            )}
+            {ligada && !canalPronto && (
+              <p className="mt-1 text-[12px] text-muted">Desligado: o canal de envio não está pronto.</p>
+            )}
+            {ligada && canalPronto && capacidadeDaRodada <= 0 && (
+              <p className="mt-1 text-[12px] text-muted">Desligado: sem saldo disponível agora.</p>
+            )}
           </div>
 
           <button
-            disabled={ocupado}
-            onClick={dispararRodada}
+            disabled={rodadaDesabilitada}
+            onClick={() => dispararRodada(capacidadeDaRodada)}
             className="rounded-lg bg-brand-500 px-3 py-1.5 text-[13px] font-semibold text-white transition-colors hover:bg-brand-600 disabled:opacity-50"
           >
             Rodar agora
