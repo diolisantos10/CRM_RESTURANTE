@@ -147,7 +147,12 @@ export const LIMITE_DE_RECUSAS = 3;
 /** Os motivos que a fila pode devolver, sem repetir a lista à mão. */
 type MotivoDaFila = Extract<ResultadoDaFila, { abordou: false }>["motivo"];
 
-function reagirA(motivo: MotivoDaFila): Reacao {
+/**
+ * ⚠️ EXPORTADA em 11/09/2026 para `retentativa.ts` reaproveitar a MESMA regra
+ * de reação em vez de reescrevê-la. Continua sendo a única definição de "o
+ * que fazer diante de cada motivo" — ver o cabeçalho grande acima.
+ */
+export function reagirA(motivo: MotivoDaFila): Reacao {
   switch (motivo) {
     // O portão fazendo o trabalho dele. Pular um opt-out e seguir é o certo —
     // parar aqui deixaria um silêncio no topo da lista bloqueando os outros 249.
@@ -542,8 +547,11 @@ export async function abordarARodadaDoDia(
  * ⚠️ **Não derruba a rodada se falhar.** A rodada já está terminando com o
  * motivo na resposta; perder o registro é ruim, perder o retorno é pior. A
  * falha vai para o log e o `parouPor: "falha"` continua subindo.
+ *
+ * ⚠️ EXPORTADA em 11/09/2026: `retentativa.ts` reaproveita esta MESMA função
+ * para não duplicar a regra de auto-pausa numa segunda rodada manual.
  */
-async function pausarPorRecusasDaMeta(
+export async function pausarPorRecusasDaMeta(
   db: Cliente,
   d: { agora: Date; recusasSeguidas: number; itemId: string; detalhe: string; abordadosAntes: number },
 ): Promise<void> {
