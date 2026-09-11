@@ -1,31 +1,38 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+/**
+ * ENRIQUECER DADOS — preencher campos vazios de contatos já importados.
+ *
+ * ── POR QUE A LEITURA ACONTECE AQUI, NO NAVEGADOR, E NÃO NO SERVIDOR ────────
+ *
+ * XLSX é um zip binário. `lerPlanilha` só entende texto. `ReceberLista.tsx` já
+ * resolveu isso para a importação: converte Excel para CSV com a biblioteca
+ * `xlsx` ANTES de qualquer coisa sair do navegador. Este modal repete a mesma
+ * régua — um leitor de planilha só, não dois que podem divergir — e além
+ * disso deixa o operador REMAPEAR as colunas quando o palpite automático
+ * errar, aplicando de verdade a escolha dele antes de mandar ao servidor.
+ */
 
-interface Coluna {
-  nome: string;
-  indice: number;
-}
+import { useCallback, useMemo, useState } from "react";
+import { lerPlanilha, type CampoConhecido, type LinhaLida } from "@/services/salaDeVendas/prospeccao/lerPlanilha";
+import {
+  lerGradeBruta,
+  construirLinhasComMapeamento,
+  type GradeBruta,
+} from "@/services/salaDeVendas/prospeccao/mapeamentoManual";
 
 interface ResultadoEnriquecimento {
-  sucesso: boolean;
-  erro?: string;
-  resultado?: {
-    processados: number;
-    atualizados: number;
-    naoEncontrados: number;
-    erros: Array<{ linha: number; erro: string }>;
-  };
-  colunas?: string[];
-  parametros?: {
-    separador: string;
-    temCabecalho: boolean;
-    descartadasSemTelefone: number;
-  };
+  linhasProcessadas: number;
+  itemsEncontrados: number;
+  itemsEnriquecidos: number;
+  camposAtualizados: number;
+  naoEncontrados: number;
+  naoAlterados: number;
+  erros: Array<{ linha: number; motivo: string }>;
 }
 
-const CAMPOS_DISPONIVEIS = [
-  { id: "telefone", label: "Telefone (WhatsApp)" },
+const CAMPOS_DISPONIVEIS: Array<{ id: CampoConhecido; label: string }> = [
+  { id: "whatsapp", label: "Telefone (WhatsApp)" },
   { id: "nome", label: "Nome" },
   { id: "empresa", label: "Empresa" },
   { id: "cidade", label: "Cidade" },
@@ -33,86 +40,163 @@ const CAMPOS_DISPONIVEIS = [
   { id: "tipo", label: "Tipo de contato" },
 ];
 
-export function EnriquecerModal({ aberto, onFechar }: { aberto: boolean; onFechar: () => void }) {
-  const [arquivo, setArquivo] = useState<File | null>(null);
-  const [colunas, setColunas] = useState<Coluna[]>([]);
-  const [mapeamento, setMapeamento] = useState<Record<string, string>>({});
-  const [fase, setFase] = useState<"upload" | "preview" | "processando" | "resultado">("upload");
-  const [resultado, setResultado] = useState<ResultadoEnriquecimento | null>(null);
-  const [ocupado, setOcupado] = useState(false);
-  const inputFile = useRef<HTMLInputElement>(null);
+type Fase = "upload" | "preview" | "processando" | "resultado";
 
-  const aoSelecionarArquivo = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+interface Erro {
+  mensagem: string;
+}
+
+async function lerTextoDoArquivo(f: File): Promise<string> {
+  const ehExcel = /\.(xlsx|xlsm|xls)$/i.test(f.name);
+  if (!ehExcel) return f.text();
+
+  const XLSX = await import("xlsx");
+  const wb = XLSX.read(await f.arrayBuffer(), { type: "array" });
+  const primeira = wb.SheetNames[0];
+  if (!primeira) throw new Error("planilha sem nenhuma aba");
+  return XLSX.utils.sheet_to_csv(wb.Sheets[primeira]!);
+}
+
+export function EnriquecerModal({ aberto, onFechar }: { aberto: boolean; onFechar: () => void }) {
+  const [fase, setFase] = useState<Fase>("upload");
+  const [arquivo, setArquivo] = useState<File | null>(null);
+  const [grade, setGrade] = useState<GradeBruta | null>(null);
+  const [temCabecalho, setTemCabecalho] = useState(false);
+  const [mapeamento, setMapeamento] = useState<Record<number, CampoConhecido | null>>({});
+  const [descartadasNaLeitura, setDescartadasNaLeitura] = useState(0);
+  const [erroDeLeitura, setErroDeLeitura] = useState<string | null>(null);
+  const [carregandoArquivo, setCarregandoArquivo] = useState(false);
+  const [resultado, setResultado] = useState<ResultadoEnriquecimento | null>(null);
+  const [erroDeExecucao, setErroDeExecucao] = useState<Erro | null>(null);
+  const [ocupado, setOcupado] = useState(false);
+
+  const totalMapeado = useMemo(
+    () => Object.values(mapeamento).some((c) => c === "whatsapp"),
+    [mapeamento],
+  );
+
+  const aoSelecionarArquivo = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      setArquivo(file);
+    e.target.value = "";
+    if (!file) return;
+
+    setCarregandoArquivo(true);
+    setErroDeLeitura(null);
+    setArquivo(file);
+
+    try {
+      const texto = await lerTextoDoArquivo(file);
+
+      // Usa `lerPlanilha` só para o PALPITE inicial (cabeçalho detectado, campo
+      // sugerido por coluna) — quem decide o resultado final é sempre
+      // `construirLinhasComMapeamento`, mesmo quando o operador não muda nada.
+      const sugestao = lerPlanilha(texto);
+      const gradeBruta = lerGradeBruta(texto);
+
+      if (gradeBruta.titulos.length === 0) {
+        setErroDeLeitura("Arquivo vazio — nenhuma linha encontrada.");
+        setCarregandoArquivo(false);
+        return;
+      }
+
+      const mapaSugerido: Record<number, CampoConhecido | null> = {};
+      sugestao.colunas.forEach((c, i) => {
+        mapaSugerido[i] = c.campo;
+      });
+
+      setGrade(gradeBruta);
+      setTemCabecalho(sugestao.temCabecalho);
+      setMapeamento(mapaSugerido);
+      setDescartadasNaLeitura(sugestao.descartadas);
       setFase("preview");
-      setColunas([]);
-      setMapeamento({});
+    } catch (err) {
+      setErroDeLeitura(err instanceof Error ? err.message : "não consegui ler este arquivo");
+    } finally {
+      setCarregandoArquivo(false);
     }
   }, []);
 
-  const aoAlterarMapeamento = useCallback((coluna: string, campo: string) => {
-    setMapeamento((prev) => {
-      if (!campo) {
-        const { [coluna]: _, ...resto } = prev;
-        return resto;
-      }
-      return { ...prev, [coluna]: campo };
-    });
+  const aoAlterarMapeamento = useCallback((indice: number, valor: string) => {
+    setMapeamento((prev) => ({
+      ...prev,
+      [indice]: (valor || null) as CampoConhecido | null,
+    }));
   }, []);
 
   const aoExecutar = useCallback(async () => {
-    if (!arquivo) return;
+    if (!grade || !arquivo) return;
+
+    const { linhas, descartadas } = construirLinhasComMapeamento(grade, mapeamento, temCabecalho);
+
+    if (linhas.length === 0) {
+      setErroDeExecucao({
+        mensagem:
+          descartadas > 0
+            ? `Nenhuma linha com telefone válido depois do mapeamento (${descartadas} descartadas). Confira a coluna marcada como "Telefone (WhatsApp)".`
+            : "Nenhuma linha para processar com este mapeamento.",
+      });
+      return;
+    }
 
     setOcupado(true);
     setFase("processando");
-
-    const formData = new FormData();
-    formData.append("arquivo", arquivo);
+    setErroDeExecucao(null);
 
     try {
       const res = await fetch("/api/admin/sala-de-vendas/prospeccao/enriquecer", {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          linhas: linhas satisfies LinhaLida[],
+          nomeArquivo: arquivo.name,
+        }),
       });
 
-      const dados = (await res.json()) as ResultadoEnriquecimento;
+      const json = (await res.json().catch(() => null)) as
+        | { ok: true; data: ResultadoEnriquecimento }
+        | { ok: false; error: string }
+        | null;
 
-      if (!res.ok) {
+      if (!res.ok || !json?.ok) {
         setFase("resultado");
-        setResultado({
-          sucesso: false,
-          erro: dados.erro || "Erro ao processar arquivo",
-        });
-      } else {
-        setFase("resultado");
-        setResultado(dados);
-        // Atualizar colunas detectadas na tela de preview
-        if (dados.colunas) {
-          const novasColunas = dados.colunas.map((nome, i) => ({ nome, indice: i }));
-          setColunas(novasColunas);
-        }
+        setErroDeExecucao({ mensagem: json?.ok === false ? json.error : `O servidor recusou (${res.status}).` });
+        return;
       }
+
+      setResultado(json.data);
+      setFase("resultado");
     } catch (e) {
       setFase("resultado");
-      setResultado({
-        sucesso: false,
-        erro: e instanceof Error ? e.message : "Erro ao enviar arquivo",
-      });
+      setErroDeExecucao({ mensagem: e instanceof Error ? e.message : "não consegui falar com o servidor" });
     } finally {
       setOcupado(false);
     }
-  }, [arquivo]);
+  }, [grade, mapeamento, temCabecalho, arquivo]);
 
   const aoFecharInternal = useCallback(() => {
     setFase("upload");
     setArquivo(null);
-    setColunas([]);
+    setGrade(null);
     setMapeamento({});
+    setTemCabecalho(false);
+    setDescartadasNaLeitura(0);
+    setErroDeLeitura(null);
     setResultado(null);
+    setErroDeExecucao(null);
     onFechar();
   }, [onFechar]);
+
+  const aoReiniciar = useCallback(() => {
+    setFase("upload");
+    setArquivo(null);
+    setGrade(null);
+    setMapeamento({});
+    setTemCabecalho(false);
+    setDescartadasNaLeitura(0);
+    setErroDeLeitura(null);
+    setResultado(null);
+    setErroDeExecucao(null);
+  }, []);
 
   if (!aberto) return null;
 
@@ -133,12 +217,7 @@ export function EnriquecerModal({ aberto, onFechar }: { aberto: boolean; onFecha
           {fase === "upload" && (
             <div className="space-y-3">
               <label className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed border-line bg-canvas p-6 transition-colors hover:border-brand-500">
-                <svg
-                  className="h-8 w-8 text-muted"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
+                <svg className="h-8 w-8 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
                     strokeLinecap="round"
                     strokeLinejoin="round"
@@ -148,18 +227,26 @@ export function EnriquecerModal({ aberto, onFechar }: { aberto: boolean; onFecha
                 </svg>
                 <div className="text-center">
                   <p className="text-[13px] font-semibold text-ink">
-                    {arquivo ? arquivo.name : "Clique ou arraste um arquivo"}
+                    {carregandoArquivo
+                      ? "Lendo arquivo..."
+                      : (arquivo?.name ?? "Clique ou arraste um arquivo")}
                   </p>
                   <p className="mt-0.5 text-[12px] text-muted">CSV, TSV ou XLSX</p>
                 </div>
                 <input
-                  ref={inputFile}
                   type="file"
-                  accept=".csv,.tsv,.xlsx,.xls"
+                  accept=".csv,.tsv,.xlsx,.xlsm,.xls"
                   onChange={aoSelecionarArquivo}
+                  disabled={carregandoArquivo}
                   className="hidden"
                 />
               </label>
+
+              {erroDeLeitura && (
+                <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[12.5px] text-red-800">
+                  {erroDeLeitura}
+                </p>
+              )}
 
               <div className="flex gap-2">
                 <button
@@ -173,25 +260,34 @@ export function EnriquecerModal({ aberto, onFechar }: { aberto: boolean; onFecha
           )}
 
           {/* ── FASE 2: PREVIEW E MAPEAMENTO ── */}
-          {fase === "preview" && colunas.length > 0 && (
+          {fase === "preview" && grade && (
             <div className="space-y-3">
               <div>
                 <p className="text-[12px] font-semibold text-ink">
                   Mapeie as colunas do seu arquivo
                 </p>
                 <p className="mt-0.5 text-[12px] text-muted">
-                  Selecione qual coluna corresponde a cada campo
+                  {temCabecalho
+                    ? "Cabeçalho detectado — confira e corrija se algo saiu errado."
+                    : "Sem cabeçalho reconhecível — a casa tentou adivinhar pelo conteúdo."}
+                  {descartadasNaLeitura > 0 &&
+                    ` ${descartadasNaLeitura} linha(s) sem telefone reconhecível no palpite inicial.`}
                 </p>
+                {!totalMapeado && (
+                  <p className="mt-1 text-[12px] font-semibold text-amber-700">
+                    Nenhuma coluna está marcada como Telefone — escolha uma antes de processar.
+                  </p>
+                )}
               </div>
 
               <div className="space-y-2">
-                {colunas.map((col) => (
-                  <div key={col.indice} className="flex gap-2">
+                {grade.titulos.map((titulo, indice) => (
+                  <div key={indice} className="flex gap-2">
                     <label className="flex-1 text-[12.5px]">
-                      <span className="block text-[12px] font-semibold text-ink">{col.nome}</span>
+                      <span className="block text-[12px] font-semibold text-ink">{titulo}</span>
                       <select
-                        value={mapeamento[col.nome] || ""}
-                        onChange={(e) => aoAlterarMapeamento(col.nome, e.target.value)}
+                        value={mapeamento[indice] ?? ""}
+                        onChange={(e) => aoAlterarMapeamento(indice, e.target.value)}
                         className="mt-1 w-full rounded-lg border border-line bg-canvas px-2 py-1.5 text-[12.5px] text-ink"
                       >
                         <option value="">Não usar</option>
@@ -206,16 +302,22 @@ export function EnriquecerModal({ aberto, onFechar }: { aberto: boolean; onFecha
                 ))}
               </div>
 
+              {erroDeExecucao && (
+                <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[12.5px] text-red-800">
+                  {erroDeExecucao.mensagem}
+                </p>
+              )}
+
               <div className="flex gap-2">
                 <button
-                  onClick={() => setFase("upload")}
+                  onClick={aoReiniciar}
                   className="flex-1 rounded-lg border border-line px-4 py-2 text-[13px] font-semibold text-ink"
                 >
                   Voltar
                 </button>
                 <button
                   onClick={aoExecutar}
-                  disabled={ocupado}
+                  disabled={ocupado || !totalMapeado}
                   className="flex-1 rounded-lg bg-brand-500 px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-50"
                 >
                   Processar
@@ -233,44 +335,43 @@ export function EnriquecerModal({ aberto, onFechar }: { aberto: boolean; onFecha
           )}
 
           {/* ── FASE 4: RESULTADO ── */}
-          {fase === "resultado" && resultado && (
+          {fase === "resultado" && (
             <div className="space-y-3">
-              {resultado.sucesso ? (
-                <>
-                  <div className="rounded-lg border border-green-200 bg-green-50 p-3">
-                    <p className="text-[13px] font-semibold text-green-900">✓ Enriquecimento concluído</p>
-                    <ul className="mt-2 space-y-1 text-[12.5px] text-green-800">
-                      <li>Processados: {resultado.resultado?.processados}</li>
-                      <li>Atualizados: {resultado.resultado?.atualizados}</li>
-                      <li>Não encontrados: {resultado.resultado?.naoEncontrados}</li>
-                    </ul>
-                    {resultado.resultado?.erros.length ? (
-                      <div className="mt-2 text-[12px] text-red-700">
-                        <p className="font-semibold">Erros encontrados:</p>
-                        <ul className="mt-1 space-y-0.5">
-                          {resultado.resultado.erros.slice(0, 5).map((e, i) => (
-                            <li key={i}>
-                              Linha {e.linha}: {e.erro}
-                            </li>
-                          ))}
-                          {resultado.resultado.erros.length > 5 && (
-                            <li>... e mais {resultado.resultado.erros.length - 5}</li>
-                          )}
-                        </ul>
-                      </div>
-                    ) : null}
-                  </div>
-                </>
+              {resultado ? (
+                <div className="rounded-lg border border-green-200 bg-green-50 p-3">
+                  <p className="text-[13px] font-semibold text-green-900">✓ Enriquecimento concluído</p>
+                  <ul className="mt-2 space-y-1 text-[12.5px] text-green-800">
+                    <li>Linhas processadas: {resultado.linhasProcessadas}</li>
+                    <li>Contatos encontrados: {resultado.itemsEncontrados}</li>
+                    <li>Contatos enriquecidos: {resultado.itemsEnriquecidos}</li>
+                    <li>Campos preenchidos: {resultado.camposAtualizados}</li>
+                    <li>Não encontrados: {resultado.naoEncontrados}</li>
+                    <li>Já preenchidos (sem alteração): {resultado.naoAlterados}</li>
+                  </ul>
+                  {resultado.erros.length > 0 && (
+                    <div className="mt-2 text-[12px] text-red-700">
+                      <p className="font-semibold">Linhas com problema:</p>
+                      <ul className="mt-1 space-y-0.5">
+                        {resultado.erros.slice(0, 5).map((e, i) => (
+                          <li key={i}>
+                            Linha {e.linha}: {e.motivo}
+                          </li>
+                        ))}
+                        {resultado.erros.length > 5 && <li>... e mais {resultado.erros.length - 5}</li>}
+                      </ul>
+                    </div>
+                  )}
+                </div>
               ) : (
                 <div className="rounded-lg border border-red-200 bg-red-50 p-3">
                   <p className="text-[13px] font-semibold text-red-900">✕ Erro ao processar</p>
-                  <p className="mt-1 text-[12.5px] text-red-800">{resultado.erro}</p>
+                  <p className="mt-1 text-[12.5px] text-red-800">{erroDeExecucao?.mensagem}</p>
                 </div>
               )}
 
               <div className="flex gap-2">
                 <button
-                  onClick={() => setFase("upload")}
+                  onClick={aoReiniciar}
                   className="flex-1 rounded-lg border border-line px-4 py-2 text-[13px] font-semibold text-ink"
                 >
                   Carregar outro arquivo
