@@ -40,24 +40,67 @@
  * Prospecção, que é outro botão, mais abaixo, e continua desligado por padrão.
  */
 
-import { useCallback, useRef, useState } from "react";
-import { lerPlanilha, type LinhaLida, type ColunaLida } from "@/services/salaDeVendas/prospeccao/lerPlanilha";
+import { useCallback, useMemo, useRef, useState } from "react";
+import {
+  lerPlanilha,
+  ROTULO_DO_CAMPO,
+  type CampoConhecido,
+  type LinhaLida,
+} from "@/services/salaDeVendas/prospeccao/lerPlanilha";
+import {
+  lerGradeBruta,
+  construirLinhasComMapeamento,
+  type GradeBruta,
+} from "@/services/salaDeVendas/prospeccao/mapeamentoManual";
 
 const ROTA = "/api/admin/sala-de-vendas/prospeccao";
 
 /** O servidor recusa acima disto. A tela quebra em partes em vez de falhar. */
 const POR_LOTE = 500;
 
+/**
+ * ⭐ CORREÇÃO, 11/09/2026 — "impedir nova importação incompleta".
+ *
+ * Até aqui `lerArquivo` já saía com `LinhaLida[]` prontas: o palpite de
+ * `lerPlanilha` era definitivo, e uma coluna que ele não reconhecesse
+ * simplesmente sumia — sem jeito de o operador dizer "isto aqui é a cidade".
+ *
+ * Agora cada arquivo guarda a GRADE BRUTA (título + linhas cruas,
+ * `mapeamentoManual.ts`) e um MAPEAMENTO editável — o palpite automático como
+ * ponto de partida, exatamente como `EnriquecerModal.tsx` já faz para o
+ * enriquecimento. `linhas`/`colunas`/`descartadas` deixam de ser dados fixos e
+ * viram o RESULTADO de aplicar o mapeamento atual (`linhasDoArquivo`, abaixo)
+ * — muda o mapeamento, muda a prévia, na hora, antes de qualquer coisa subir.
+ */
 interface ArquivoLido {
   nome: string;
   tipo: string | null;
   bytes: number | null;
   /** SHA-256 do conteúdo. `null` quando o navegador não oferece `crypto.subtle`. */
   hash: string | null;
-  linhas: LinhaLida[];
-  colunas: ColunaLida[];
-  descartadas: number;
+  grade: GradeBruta;
+  temCabecalho: boolean;
+  /** Índice da coluna → campo. `null` = "não usar". Começa no palpite automático. */
+  mapeamento: Record<number, CampoConhecido | null>;
+  /** O palpite ORIGINAL de `lerPlanilha`, congelado — para distinguir "a casa
+   *  reconheceu sozinha" de "o operador escolheu na mão", mesmo depois de
+   *  `mapeamento` mudar. */
+  sugestaoAutomatica: Record<number, CampoConhecido | null>;
   erro: string | null;
+}
+
+/** Aplica o mapeamento atual do arquivo — a ÚNICA fonte de `linhas`/`descartadas` daqui em diante. */
+function linhasDoArquivo(a: ArquivoLido): { linhas: LinhaLida[]; descartadas: number } {
+  if (a.erro) return { linhas: [], descartadas: 0 };
+  return construirLinhasComMapeamento(a.grade, a.mapeamento, a.temCabecalho);
+}
+
+/** A coluna mapeada para "não usar" (`null`) é uma coluna reconhecida ou não? */
+function colunaFoiReconhecidaAutomaticamente(
+  sugestaoAutomatica: Record<number, CampoConhecido | null>,
+  indice: number,
+): boolean {
+  return sugestaoAutomatica[indice] != null;
 }
 
 /** O que o servidor responde a "quantos destes já temos?". */
@@ -79,15 +122,6 @@ interface ImportacaoAnterior {
   linhasAceitas: number;
   criadoPorNome: string | null;
 }
-
-const ROTULO_CAMPO: Record<string, string> = {
-  nome: "Nome da pessoa",
-  whatsapp: "WhatsApp",
-  empresa: "Restaurante",
-  cidade: "Cidade",
-  estado: "Estado",
-  tipo: "Tipo",
-};
 
 /**
  * A impressão digital do arquivo, calculada no navegador.
@@ -131,13 +165,29 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
   const [repetida, setRepetida] = useState<ImportacaoAnterior | null>(null);
   const entrada = useRef<HTMLInputElement>(null);
 
-  const total = arquivos.reduce((n, a) => n + a.linhas.length, 0);
-  const descartadas = arquivos.reduce((n, a) => n + a.descartadas, 0);
+  // Recalcula sempre que a lista de arquivos OU algum mapeamento muda — é
+  // `mapeamento` (não `grade`) que decide o resultado, e ele muda a cada
+  // clique no seletor de coluna.
+  const resultadosPorArquivo = useMemo(() => arquivos.map(linhasDoArquivo), [arquivos]);
+  const total = resultadosPorArquivo.reduce((n, r) => n + r.linhas.length, 0);
+  const descartadas = resultadosPorArquivo.reduce((n, r) => n + r.descartadas, 0);
+  /** Nenhum arquivo com conteúdo tem uma coluna mapeada para WhatsApp. */
+  const faltaMapearWhatsapp =
+    arquivos.length > 0 &&
+    arquivos.some(
+      (a) => !a.erro && !Object.values(a.mapeamento).some((c) => c === "whatsapp"),
+    );
 
   /**
    * Lê um arquivo. Excel vira CSV pela biblioteca que a casa já tem, e daí em
    * diante segue o mesmo caminho do texto colado — um leitor só, testado uma
    * vez, em vez de dois que divergem.
+   *
+   * ⭐ CORREÇÃO, 11/09/2026: `lerPlanilha` continua dando o PALPITE inicial
+   * (cabeçalho detectado, campo sugerido por coluna) — mas quem decide o
+   * resultado agora é sempre `construirLinhasComMapeamento` (`linhasDoArquivo`),
+   * mesmo quando o operador não muda nada. Column não reconhecida deixa de
+   * significar "perdida": vira uma coluna com mapeamento `null`, editável.
    */
   const lerArquivo = useCallback(async (f: File): Promise<ArquivoLido> => {
     const base = {
@@ -145,9 +195,10 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
       tipo: f.type || null,
       bytes: f.size,
       hash: await hashDoArquivo(f),
-      linhas: [] as LinhaLida[],
-      colunas: [] as ColunaLida[],
-      descartadas: 0,
+      grade: { titulos: [], linhas: [], separador: "," } as GradeBruta,
+      temCabecalho: false,
+      mapeamento: {} as Record<number, CampoConhecido | null>,
+      sugestaoAutomatica: {} as Record<number, CampoConhecido | null>,
     };
     try {
       const ehExcel = /\.(xlsx|xlsm|xls)$/i.test(f.name);
@@ -163,17 +214,37 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
         texto = await f.text();
       }
 
-      const r = lerPlanilha(texto);
+      const sugestao = lerPlanilha(texto);
+      const grade = lerGradeBruta(texto);
+      if (grade.titulos.length === 0) return { ...base, erro: "não achei nenhuma linha" };
+
+      const mapaSugerido: Record<number, CampoConhecido | null> = {};
+      sugestao.colunas.forEach((c, i) => {
+        mapaSugerido[i] = c.campo;
+      });
+
       return {
         ...base,
-        linhas: r.linhas,
-        colunas: r.colunas,
-        descartadas: r.descartadas,
-        erro: r.linhas.length === 0 ? "não achei nenhuma linha com telefone" : null,
+        grade,
+        temCabecalho: sugestao.temCabecalho,
+        mapeamento: mapaSugerido,
+        sugestaoAutomatica: mapaSugerido,
+        erro: sugestao.linhas.length === 0 ? "não achei nenhuma linha com telefone" : null,
       };
     } catch (e) {
       return { ...base, erro: e instanceof Error ? e.message : "não consegui ler este arquivo" };
     }
+  }, []);
+
+  /** O operador reatribui manualmente uma coluna — item 3 da correção de 11/09/2026. */
+  const alterarMapeamento = useCallback((indiceArquivo: number, indiceColuna: number, valor: string) => {
+    setArquivos((atuais) =>
+      atuais.map((a, i) =>
+        i !== indiceArquivo
+          ? a
+          : { ...a, mapeamento: { ...a.mapeamento, [indiceColuna]: (valor || null) as CampoConhecido | null } },
+      ),
+    );
   }, []);
 
   const receber = useCallback(
@@ -196,7 +267,12 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
     if (!texto.trim()) return;
     setConferencia(null);
     setRepetida(null);
-    const r = lerPlanilha(texto);
+    const sugestao = lerPlanilha(texto);
+    const grade = lerGradeBruta(texto);
+    const mapaSugerido: Record<number, CampoConhecido | null> = {};
+    sugestao.colunas.forEach((c, i) => {
+      mapaSugerido[i] = c.campo;
+    });
     setArquivos((a) => [
       ...a,
       {
@@ -208,10 +284,11 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
         // mesmo conteúdo virarem "a mesma planilha" — que é verdade, e é
         // justamente o caso em que a pessoa quer mesmo colar de novo.
         hash: null,
-        linhas: r.linhas,
-        colunas: r.colunas,
-        descartadas: r.descartadas,
-        erro: r.linhas.length === 0 ? "não achei nenhuma linha com telefone" : null,
+        grade,
+        temCabecalho: sugestao.temCabecalho,
+        mapeamento: mapaSugerido,
+        sugestaoAutomatica: mapaSugerido,
+        erro: sugestao.linhas.length === 0 ? "não achei nenhuma linha com telefone" : null,
       },
     ]);
   }, []);
@@ -230,7 +307,7 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
     setConferindo(true);
     setErro(null);
     try {
-      const amostra = arquivos.flatMap((a) => a.linhas).slice(0, POR_LOTE);
+      const amostra = resultadosPorArquivo.flatMap((r) => r.linhas).slice(0, POR_LOTE);
       const res = await fetch(ROTA, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -265,8 +342,15 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
       setErro("Escreva de onde veio esta lista. Sem isso o servidor recusa, e com razão.");
       return;
     }
+    if (faltaMapearWhatsapp) {
+      setErro(
+        "Nenhuma coluna está mapeada como WhatsApp em pelo menos um arquivo. " +
+          "Escolha a coluna certa antes de subir — sem isso não há para quem abordar.",
+      );
+      return;
+    }
     if (total === 0) {
-      setErro("Nenhuma linha com telefone para importar.");
+      setErro("Nenhuma linha com telefone para importar, mesmo com o mapeamento atual.");
       return;
     }
 
@@ -275,7 +359,7 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
     setResultado(null);
     if (!confirmandoRepetida) setRepetida(null);
 
-    const todas = arquivos.flatMap((a) => a.linhas);
+    const todas = resultadosPorArquivo.flatMap((r) => r.linhas);
     const partes: LinhaLida[][] = [];
     for (let i = 0; i < todas.length; i += POR_LOTE) partes.push(todas.slice(i, i + POR_LOTE));
 
@@ -471,74 +555,123 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
         />
       </div>
 
-      {/* ── O que a tela entendeu ── */}
+      {/* ── O que a tela entendeu — e onde o operador pode corrigir ──────────
+          ⭐ CORREÇÃO, 11/09/2026: cada coluna agora é um `<select>`, não só um
+          rótulo. "coluna original → campo Foocci" continua explícito (é o
+          próprio seletor, com o título do arquivo ao lado); o que mudou é que
+          uma coluna não reconhecida deixa de ser um beco sem saída. */}
       {arquivos.length > 0 && (
         <div className="mt-3 flex flex-col gap-2">
-          {arquivos.map((a, i) => (
-            <div key={`${a.nome}-${i}`} className="rounded-xl border border-line bg-canvas p-3">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <span className="text-[13px] font-semibold text-ink">{a.nome}</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setConferencia(null);
-                    setRepetida(null);
-                    setArquivos((x) => x.filter((_, j) => j !== i));
-                  }}
-                  className="text-[11.5px] font-semibold text-muted underline underline-offset-2"
-                >
-                  tirar
-                </button>
-              </div>
+          {arquivos.map((a, i) => {
+            const { linhas, descartadas: descartadasDoArquivo } = resultadosPorArquivo[i]!;
+            const primeira = linhas[0];
+            const semWhatsappMapeado = !a.erro && !Object.values(a.mapeamento).some((c) => c === "whatsapp");
 
-              {a.erro ? (
-                <p className="mt-1 text-[12.5px] text-red-700">{a.erro}</p>
-              ) : (
-                <>
-                  <p className="mt-0.5 text-[12.5px] text-ink2">
-                    {a.linhas.length} contatos
-                    {a.descartadas > 0 && (
-                      <span className="text-amber-700">
-                        {" "}· {a.descartadas} linhas sem telefone ficaram de fora
-                      </span>
+            return (
+              <div key={`${a.nome}-${i}`} className="rounded-xl border border-line bg-canvas p-3">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="text-[13px] font-semibold text-ink">{a.nome}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConferencia(null);
+                      setRepetida(null);
+                      setArquivos((x) => x.filter((_, j) => j !== i));
+                    }}
+                    className="text-[11.5px] font-semibold text-muted underline underline-offset-2"
+                  >
+                    tirar
+                  </button>
+                </div>
+
+                {a.erro ? (
+                  <p className="mt-1 text-[12.5px] text-red-700">{a.erro}</p>
+                ) : (
+                  <>
+                    <p className="mt-0.5 text-[12.5px] text-ink2">
+                      {linhas.length} contatos
+                      {descartadasDoArquivo > 0 && (
+                        <span className="text-amber-700">
+                          {" "}· {descartadasDoArquivo} linhas sem telefone ficaram de fora
+                        </span>
+                      )}
+                    </p>
+
+                    {semWhatsappMapeado && (
+                      <p className="mt-1 text-[11.5px] font-semibold text-amber-700">
+                        Nenhuma coluna está marcada como WhatsApp — escolha uma abaixo antes de
+                        subir.
+                      </p>
                     )}
-                  </p>
 
-                  {/* O mapa de colunas. É a parte que impede o erro silencioso. */}
-                  <ul className="mt-1.5 flex flex-wrap gap-1.5">
-                    {a.colunas.map((c, j) => (
-                      <li
-                        key={j}
-                        className={`rounded-full border px-2 py-0.5 text-[11px] ${
-                          c.campo
-                            ? "border-line2 bg-paper text-ink2"
-                            : "border-line2 bg-chip text-muted line-through"
-                        }`}
-                      >
-                        {c.titulo}
-                        {c.campo && ` → ${ROTULO_CAMPO[c.campo] ?? c.campo}`}
-                        {c.porque === "conteudo" && " (palpite)"}
-                      </li>
-                    ))}
-                  </ul>
+                    {/* coluna original → campo Foocci, editável coluna a coluna. */}
+                    <div className="mt-1.5 flex flex-col gap-1">
+                      {a.grade.titulos.map((titulo, j) => {
+                        const reconhecidaAutomaticamente = colunaFoiReconhecidaAutomaticamente(
+                          a.sugestaoAutomatica,
+                          j,
+                        );
+                        return (
+                          <label key={j} className="flex items-center gap-2 text-[11.5px]">
+                            <span
+                              className={`w-32 shrink-0 truncate ${
+                                reconhecidaAutomaticamente ? "text-ink2" : "text-muted"
+                              }`}
+                              title={titulo}
+                            >
+                              {titulo}
+                            </span>
+                            <span className="shrink-0 text-muted">→</span>
+                            <select
+                              value={a.mapeamento[j] ?? ""}
+                              onChange={(e) => alterarMapeamento(i, j, e.target.value)}
+                              className={`flex-1 rounded-lg border px-2 py-1 text-[11.5px] text-ink ${
+                                reconhecidaAutomaticamente
+                                  ? "border-line2 bg-paper"
+                                  : "border-amber-300 bg-amber-50"
+                              }`}
+                            >
+                              <option value="">Ignorar esta coluna</option>
+                              {(Object.entries(ROTULO_DO_CAMPO) as [CampoConhecido, string][]).map(
+                                ([campo, rotulo]) => (
+                                  <option key={campo} value={campo}>
+                                    {rotulo}
+                                  </option>
+                                ),
+                              )}
+                            </select>
+                            {!reconhecidaAutomaticamente && (
+                              <span className="shrink-0 text-[10.5px] text-amber-700">
+                                não reconhecida
+                              </span>
+                            )}
+                          </label>
+                        );
+                      })}
+                    </div>
 
-                  {a.colunas.some((c) => c.porque === "conteudo") && (
-                    <p className="mt-1.5 text-[11.5px] leading-relaxed text-amber-800">
-                      Este arquivo não tem cabeçalho, então eu adivinhei as colunas pelo
-                      conteúdo. Confira a primeira linha antes de subir.
-                    </p>
-                  )}
+                    {!a.temCabecalho && (
+                      <p className="mt-1.5 text-[11.5px] leading-relaxed text-amber-800">
+                        Este arquivo não tem cabeçalho, então eu adivinhei as colunas pelo
+                        conteúdo. Confira cada linha acima antes de subir.
+                      </p>
+                    )}
 
-                  {a.linhas[0] && (
-                    <p className="mt-1 truncate text-[11.5px] text-muted">
-                      1º: {a.linhas[0].nome ?? "(sem nome)"} · {a.linhas[0].whatsapp}
-                      {a.linhas[0].empresa ? ` · ${a.linhas[0].empresa}` : ""}
-                    </p>
-                  )}
-                </>
-              )}
-            </div>
-          ))}
+                    {/* A prévia REAL do primeiro contato — os cinco campos que a
+                        auditoria pediu para ver antes de qualquer coisa subir. */}
+                    {primeira && (
+                      <p className="mt-1.5 rounded-lg border border-line2 bg-paper px-2 py-1.5 text-[11.5px] leading-relaxed text-ink2">
+                        <span className="font-semibold text-ink">1º contato: </span>
+                        estabelecimento {primeira.empresa ?? "—"} · telefone {primeira.whatsapp} ·
+                        cidade {primeira.cidade ?? "—"} · tipo {primeira.tipo ?? "—"} · endereço{" "}
+                        {primeira.endereco ?? "—"}
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -682,18 +815,27 @@ export function ReceberLista({ aoImportar }: { aoImportar: () => void }) {
         </p>
       )}
 
+      {faltaMapearWhatsapp && (
+        <p className="mt-2 text-[12px] font-semibold text-amber-700">
+          Falta mapear a coluna de WhatsApp em pelo menos um arquivo — a importação fica
+          desligada até isso ser corrigido acima.
+        </p>
+      )}
+
       <button
         onClick={() => void importar()}
-        disabled={ocupado || total === 0}
+        disabled={ocupado || total === 0 || faltaMapearWhatsapp}
         className="mt-3 w-full rounded-xl bg-brand-500 px-4 py-2.5 text-[13.5px] font-semibold text-white transition-colors hover:bg-brand-600 disabled:opacity-40"
       >
         {ocupado
           ? progresso
             ? `Subindo parte ${progresso.parte} de ${progresso.de}…`
             : "Subindo…"
-          : total > 0
-            ? `Subir ${total} contatos`
-            : "Escolha um arquivo"}
+          : faltaMapearWhatsapp
+            ? "Mapeie o WhatsApp para subir"
+            : total > 0
+              ? `Subir ${total} contatos`
+              : "Escolha um arquivo"}
       </button>
 
       <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted">

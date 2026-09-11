@@ -69,6 +69,34 @@ export type CampoConhecido =
   | "observacoes"
   | "tags";
 
+/**
+ * O rótulo que a tela mostra para cada campo — fonte única, para
+ * `ReceberLista.tsx` (importação) e a prévia da conferência nunca dizerem
+ * coisas diferentes para o mesmo campo.
+ */
+export const ROTULO_DO_CAMPO: Record<CampoConhecido, string> = {
+  nome: "Nome do responsável",
+  whatsapp: "WhatsApp principal",
+  empresa: "Restaurante / Empresa",
+  cidade: "Cidade",
+  estado: "Estado (UF)",
+  tipo: "Tipo de restaurante",
+  email: "E-mail",
+  cargo: "Cargo / função",
+  telefoneSecundario: "Telefone secundário",
+  bairro: "Bairro",
+  endereco: "Endereço",
+  cep: "CEP",
+  cnpj: "CNPJ",
+  instagram: "Instagram",
+  site: "Site",
+  googleMapsUrl: "URL do Google Maps",
+  numeroDeUnidades: "Número de unidades",
+  canaisAtuais: "Canais atuais / marketplaces",
+  observacoes: "Observações",
+  tags: "Tags",
+};
+
 export interface ColunaLida {
   /** Como veio escrito no arquivo (ou "coluna 3" quando não há cabeçalho). */
   titulo: string;
@@ -87,7 +115,19 @@ export interface LeituraDaPlanilha {
   temCabecalho: boolean;
 }
 
-/** Cabeçalhos que a casa reconhece, já sem acento e em minúscula. */
+/**
+ * Cabeçalhos que a casa reconhece, já sem acento e em minúscula.
+ *
+ * ── ⭐ AMPLIAÇÃO PARA EXPORTADORES DO GOOGLE MAPS, 11/09/2026 ────────────────
+ *
+ * Achado do CEO: 751 contatos entraram só com nome e telefone — cidade,
+ * endereço e tipo ficaram de fora porque os exportadores de Google Maps
+ * (Outscraper, Apify e afins) escrevem em inglês, e o dicionário só
+ * reconhecia português. `name` é o NOME DO ESTABELECIMENTO nesses arquivos —
+ * não de uma pessoa —, e por isso cai em `empresa`, no mesmo grupo de
+ * `title`/`business name`/`company`, exatamente como o telefone secundário já
+ * caía em `telefoneSecundario` e não em `whatsapp`.
+ */
 const CABECALHOS: Readonly<Record<string, CampoConhecido>> = {
   nome: "nome",
   contato: "nome",
@@ -100,6 +140,10 @@ const CABECALHOS: Readonly<Record<string, CampoConhecido>> = {
   fone: "whatsapp",
   zap: "whatsapp",
   numero: "whatsapp",
+  // ── Google Maps / exportadores em inglês ──
+  phone: "whatsapp",
+  phonenumber: "whatsapp",
+  mobile: "whatsapp",
 
   empresa: "empresa",
   restaurante: "empresa",
@@ -107,16 +151,29 @@ const CABECALHOS: Readonly<Record<string, CampoConhecido>> = {
   negocio: "empresa",
   razaosocial: "empresa",
   nomefantasia: "empresa",
+  // ── Google Maps / exportadores em inglês — "name" é o nome DO LOCAL ──
+  name: "empresa",
+  title: "empresa",
+  businessname: "empresa",
+  company: "empresa",
 
   cidade: "cidade",
   municipio: "cidade",
+  city: "cidade",
+  locality: "cidade",
 
   estado: "estado",
   uf: "estado",
+  state: "estado",
+  region: "estado",
 
   tipo: "tipo",
   categoria: "tipo",
   segmento: "tipo",
+  category: "tipo",
+  categoryname: "tipo",
+  primarycategory: "tipo",
+  restauranttype: "tipo",
 
   // ── ⭐ AMPLIAÇÃO DA BASE FRIA, 11/09/2026 ────────────────────────────────
   email: "email",
@@ -133,10 +190,16 @@ const CABECALHOS: Readonly<Record<string, CampoConhecido>> = {
   fixo: "telefoneSecundario",
 
   bairro: "bairro",
+  distrito: "bairro",
+  neighborhood: "bairro",
+  district: "bairro",
 
   endereco: "endereco",
   logradouro: "endereco",
   rua: "endereco",
+  address: "endereco",
+  fulladdress: "endereco",
+  formattedaddress: "endereco",
 
   cep: "cep",
 

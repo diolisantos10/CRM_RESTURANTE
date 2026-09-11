@@ -19,12 +19,12 @@
  * inteiro está pausado. Três causas com três consertos diferentes.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 const ROTA = "/api/admin/sala-de-vendas/prospeccao";
 
-interface Contato {
+export interface Contato {
   id: string;
   nome: string | null;
   whatsapp: string;
@@ -44,6 +44,125 @@ interface Contato {
   tentativas: number;
   ultimaTentativa: string | null;
   motivoDeBloqueio: string | null;
+
+  // ── ⭐ CORREÇÃO, 11/09/2026 — a API já devolvia estes 14 campos
+  // (`listarBaseFria`, route.ts) desde a ampliação de 11/09; esta interface e a
+  // tela nunca os leram. Achado do CEO: "cidade, endereço e tipo não
+  // aparecem" — cidade e tipo já vinham (colunas próprias, acima); os catorze
+  // abaixo simplesmente não tinham para onde ir.
+  cargo: string | null;
+  telefoneSecundario: string | null;
+  email: string | null;
+  bairro: string | null;
+  endereco: string | null;
+  cep: string | null;
+  cnpj: string | null;
+  instagram: string | null;
+  site: string | null;
+  googleMapsUrl: string | null;
+  numeroDeUnidades: number | null;
+  canaisAtuais: string[];
+  observacoes: string | null;
+  tags: string[];
+}
+
+/** "—" para o campo ausente, nunca a linha sumindo — ordem do CEO, 11/09/2026. */
+function valorOuTraco(v: string | number | null | undefined): string {
+  if (v === null || v === undefined) return "—";
+  const s = String(v).trim();
+  return s ? s : "—";
+}
+
+function CampoDaFicha({ rotulo, valor }: { rotulo: string; valor: string | number | null }) {
+  return (
+    <div>
+      <dt className="text-[11px] font-semibold uppercase tracking-[.03em] text-muted">{rotulo}</dt>
+      <dd className="mt-0.5 text-[12.5px] text-ink">{valorOuTraco(valor)}</dd>
+    </div>
+  );
+}
+
+/**
+ * ⭐⭐ A CÉLULA DO CONTATO — sempre um `<button>`, nunca um `<span>`.
+ *
+ * ── O DEFEITO QUE ESTE COMPONENTE EXISTE PARA NÃO DEIXAR VOLTAR ─────────────
+ *
+ * Achado do CEO, 11/09/2026: "contatos sem leadId não são clicáveis". A causa
+ * era literal — quem não tinha `leadId` virava um `<span>` sem `onClick`
+ * nenhum, porque o único jeito de abrir alguma coisa era "Abrir conversa", e
+ * quem não é lead não tem conversa. Isolado num componente próprio e
+ * exportado, este defeito específico vira testável sem depender de banco, de
+ * sessão ou de servidor: `BaseFriaClient.test.tsx` renderiza esta célula com
+ * e sem `leadId` e prova, no markup, que o `<button>` está lá dos dois jeitos.
+ *
+ * "Abrir conversa" continua existindo — só que como um SEGUNDO elemento,
+ * condicionado a `leadId`, nunca no lugar do botão que abre a ficha.
+ */
+export function CelulaDoContato({
+  c,
+  aberto,
+  aoAlternar,
+}: {
+  c: Contato;
+  aberto: boolean;
+  aoAlternar: () => void;
+}) {
+  return (
+    <>
+      <button
+        type="button"
+        onClick={aoAlternar}
+        className="flex items-start gap-1 text-left font-semibold text-ink hover:text-brand-700"
+        aria-expanded={aberto}
+      >
+        <span>{c.nome || c.empresa || c.whatsapp}</span>
+        <span className="mt-0.5 shrink-0 text-[10px] text-muted">{aberto ? "▲" : "▼"}</span>
+      </button>
+      <div className="text-[11.5px] text-muted">{c.whatsapp}</div>
+      {c.leadId && (
+        <a
+          href={`/comercial/conversas?leadId=${c.leadId}`}
+          className="mt-0.5 block text-[11.5px] font-semibold text-brand-700 hover:underline"
+        >
+          Abrir conversa →
+        </a>
+      )}
+    </>
+  );
+}
+
+/**
+ * A FICHA EXPANDIDA — os 20 campos da Base fria, sempre os mesmos, sempre na
+ * mesma ordem, campo ausente como "—". "Abrir conversa" fica FORA daqui,
+ * porque é outro ato (falar com quem já é lead) e só existe quando há
+ * `leadId` — a ficha em si é sempre a mesma, tenha ou não conversa aberta.
+ */
+export function FichaExpandidaDoContato({ c }: { c: Contato }) {
+  return (
+    <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5 sm:grid-cols-3 lg:grid-cols-4">
+      <CampoDaFicha rotulo="Responsável" valor={c.nome} />
+      <CampoDaFicha rotulo="Estabelecimento" valor={c.empresa} />
+      <CampoDaFicha rotulo="WhatsApp" valor={c.whatsapp} />
+      <CampoDaFicha rotulo="Telefone secundário" valor={c.telefoneSecundario} />
+      <CampoDaFicha rotulo="Cidade/UF" valor={[c.cidade, c.estado].filter(Boolean).join("/") || null} />
+      <CampoDaFicha rotulo="Bairro" valor={c.bairro} />
+      <CampoDaFicha rotulo="Endereço" valor={c.endereco} />
+      <CampoDaFicha rotulo="CEP" valor={c.cep} />
+      <CampoDaFicha rotulo="Tipo" valor={c.tipo} />
+      <CampoDaFicha rotulo="E-mail" valor={c.email} />
+      <CampoDaFicha rotulo="Cargo" valor={c.cargo} />
+      <CampoDaFicha rotulo="CNPJ" valor={c.cnpj} />
+      <CampoDaFicha rotulo="Instagram" valor={c.instagram} />
+      <CampoDaFicha rotulo="Site" valor={c.site} />
+      <CampoDaFicha rotulo="Google Maps" valor={c.googleMapsUrl} />
+      <CampoDaFicha rotulo="Unidades" valor={c.numeroDeUnidades} />
+      <CampoDaFicha rotulo="Canais" valor={c.canaisAtuais.length ? c.canaisAtuais.join(", ") : null} />
+      <CampoDaFicha rotulo="Tags" valor={c.tags.length ? c.tags.join(", ") : null} />
+      <CampoDaFicha rotulo="Observações" valor={c.observacoes} />
+      <CampoDaFicha rotulo="Procedência" valor={c.proveniencia} />
+      <CampoDaFicha rotulo="Arquivo" valor={c.arquivo} />
+    </dl>
+  );
 }
 
 const SITUACOES = [
@@ -87,6 +206,17 @@ export function BaseFriaClient() {
   const [porPagina, setPorPagina] = useState(25);
   const [fase, setFase] = useState<"carregando" | "pronto" | "semAcesso" | "erro">("carregando");
   const [detalhe, setDetalhe] = useState<string | null>(null);
+  /** Quais fichas estão abertas agora. Todo contato entra aqui — com ou sem `leadId`. */
+  const [expandidos, setExpandidos] = useState<Set<string>>(new Set());
+
+  const alternar = useCallback((id: string) => {
+    setExpandidos((atual) => {
+      const novo = new Set(atual);
+      if (novo.has(id)) novo.delete(id);
+      else novo.add(id);
+      return novo;
+    });
+  }, []);
 
   const carregar = useCallback(
     async (p: number) => {
@@ -238,48 +368,55 @@ export function BaseFriaClient() {
                   </tr>
                 </thead>
                 <tbody>
-                  {linhas.map((c) => (
-                    <tr key={c.id} className="border-t border-line2 align-top">
-                      <td className="px-3 py-2">
-                        {c.leadId ? (
-                          <a
-                            href={`/comercial/conversas?leadId=${c.leadId}`}
-                            className="font-semibold text-brand-700 hover:underline"
-                          >
-                            {c.nome || c.empresa || c.whatsapp}
-                          </a>
-                        ) : (
-                          <span className="font-semibold text-ink">
-                            {c.nome || c.empresa || c.whatsapp}
-                          </span>
+                  {linhas.map((c) => {
+                    const aberto = expandidos.has(c.id);
+                    return (
+                      <Fragment key={c.id}>
+                        {/* ⭐ CORREÇÃO, 11/09/2026 — TODO contato é clicável, tenha ou
+                            não `leadId`. Antes, quem não tinha `leadId` virava um
+                            `<span>` sem `onClick` nenhum: achado do CEO, "contatos
+                            sem leadId não são clicáveis". "Abrir conversa" continua
+                            existindo, mas como ato SEPARADO — só aparece quando há
+                            conversa de verdade, e nunca troca de lugar com o clique
+                            que abre a ficha. */}
+                        <tr className="border-t border-line2 align-top">
+                          <td className="px-3 py-2">
+                            <CelulaDoContato c={c} aberto={aberto} aoAlternar={() => alternar(c.id)} />
+                          </td>
+                          <td className="px-3 py-2 text-muted">
+                            {[c.cidade, c.estado].filter(Boolean).join("/") || "—"}
+                          </td>
+                          <td className="px-3 py-2 text-muted">{c.tipo || "—"}</td>
+                          <td className="px-3 py-2">
+                            <div className="max-w-[24ch] truncate" title={c.proveniencia}>
+                              {c.arquivo}
+                            </div>
+                            <div className="text-[11.5px] text-muted">
+                              {c.responsavel ?? "sem responsável"}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-muted">{quando(c.entrouEm)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{c.tentativas}</td>
+                          <td className="px-3 py-2 text-muted">{quando(c.ultimaTentativa)}</td>
+                          <td className="px-3 py-2">{ROTULO_SITUACAO[c.situacao] ?? c.situacao}</td>
+                          <td className="px-3 py-2">
+                            {c.motivoDeBloqueio ? (
+                              <span className="text-rose-700">{c.motivoDeBloqueio}</span>
+                            ) : (
+                              <span className="text-muted">—</span>
+                            )}
+                          </td>
+                        </tr>
+                        {aberto && (
+                          <tr className="border-t border-line2 bg-canvas">
+                            <td colSpan={9} className="px-4 py-3">
+                              <FichaExpandidaDoContato c={c} />
+                            </td>
+                          </tr>
                         )}
-                        <div className="text-[11.5px] text-muted">{c.whatsapp}</div>
-                      </td>
-                      <td className="px-3 py-2 text-muted">
-                        {[c.cidade, c.estado].filter(Boolean).join("/") || "—"}
-                      </td>
-                      <td className="px-3 py-2 text-muted">{c.tipo || "—"}</td>
-                      <td className="px-3 py-2">
-                        <div className="max-w-[24ch] truncate" title={c.proveniencia}>
-                          {c.arquivo}
-                        </div>
-                        <div className="text-[11.5px] text-muted">
-                          {c.responsavel ?? "sem responsável"}
-                        </div>
-                      </td>
-                      <td className="px-3 py-2 text-muted">{quando(c.entrouEm)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{c.tentativas}</td>
-                      <td className="px-3 py-2 text-muted">{quando(c.ultimaTentativa)}</td>
-                      <td className="px-3 py-2">{ROTULO_SITUACAO[c.situacao] ?? c.situacao}</td>
-                      <td className="px-3 py-2">
-                        {c.motivoDeBloqueio ? (
-                          <span className="text-rose-700">{c.motivoDeBloqueio}</span>
-                        ) : (
-                          <span className="text-muted">—</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

@@ -354,6 +354,48 @@ describe("Jornada — enriquecimento por planilha (achados #5–#10 da auditoria
     expect(typeof detalhe.dataEnriquecimento).toBe("string");
   });
 
+  it("⭐⭐⭐ SEM DUPLICAÇÃO — rodar o MESMO arquivo de novo não cria item nem muda o que já foi preenchido", async () => {
+    // Prova pedida pelo CEO, 11/09/2026: o mesmo arquivo que acabou de
+    // enriquecer os 751 contatos precisa poder rodar de novo — por engano, ou
+    // porque a lista voltou — sem duplicar e sem reescrever o que já é bom.
+    autorizarInterno.mockReturnValue({ ok: true, sessao: OPERADOR });
+    const { POST } = await import("@/app/api/admin/sala-de-vendas/prospeccao/enriquecer/route");
+
+    const totalAntes = await prisma.itemDeProspeccao.count({ where: { loteId: LOTE_ID } });
+
+    const csv =
+      "nome,empresa,cidade,telefone\n" +
+      "Fulano da Jornada,Restaurante Sintético,Curitiba,11955550001\n" +
+      "Nome Que Não Deveria Entrar,Empresa Que Não Deveria Entrar,Cidade Que Não Deveria Entrar,11955550002\n";
+    const leitura = lerPlanilha(csv);
+
+    const res = await POST(
+      pedidoDeEnriquecimento({ linhas: leitura.linhas, nomeArquivo: "jornada.csv" }),
+    );
+    const json = (await res.json()) as {
+      ok: boolean;
+      data: { itemsEncontrados: number; itemsEnriquecidos: number; naoAlterados: number };
+    };
+
+    expect(res.status).toBe(200);
+    // Os dois já estão preenchidos (o passo anterior cuidou do "vazio") — a
+    // segunda passada não muda NADA, mas encontra os dois.
+    expect(json.data.itemsEncontrados).toBe(2);
+    expect(json.data.itemsEnriquecidos).toBe(0);
+    expect(json.data.naoAlterados).toBe(2);
+
+    // O item antes vazio continua com o MESMO valor — não foi "reenriquecido"
+    // com o mesmo dado, nem trocado por outro.
+    const vazio = await prisma.itemDeProspeccao.findUnique({ where: { id: "jrn_enr_item_vazio" } });
+    expect(vazio?.nome).toBe("Fulano da Jornada");
+    expect(vazio?.empresa).toBe("Restaurante Sintético");
+
+    // Zero item novo — a contagem do lote é EXATAMENTE a mesma de antes.
+    const totalDepois = await prisma.itemDeProspeccao.count({ where: { loteId: LOTE_ID } });
+    expect(totalDepois).toBe(totalAntes);
+    expect(totalDepois).toBe(2);
+  });
+
   it("XLSX (fluxo real, o MESMO código que o navegador usa): a mesma planilha, agora como arquivo Excel", async () => {
     // Reabre os dois items com os mesmos vazios, para o XLSX ter o que
     // enriquecer de novo, isolado da rodada de CSV acima.

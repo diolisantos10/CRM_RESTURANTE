@@ -51,6 +51,101 @@ describe("com cabeçalho", () => {
   });
 });
 
+/**
+ * ⭐⭐ EXPORTADORES DO GOOGLE MAPS — achado do CEO, 11/09/2026.
+ *
+ * 751 contatos entraram só com nome e telefone: os exportadores de Google
+ * Maps (Outscraper, Apify e afins) escrevem cabeçalho em inglês, e o
+ * dicionário só reconhecia português. `name` é o nome DO LOCAL nesses
+ * arquivos — nunca de uma pessoa — e por isso cai em `empresa`.
+ */
+describe("⭐⭐ cabeçalhos reais de exportador do Google Maps", () => {
+  it("name/phone/city/state/category/address — o conjunto mais comum", () => {
+    const texto = [
+      "name,phone,city,state,category,address",
+      "Bar do Zé,11988887777,Curitiba,PR,Bar,Rua das Flores 123",
+    ].join("\n");
+    const r = lerPlanilha(texto);
+
+    expect(r.temCabecalho).toBe(true);
+    expect(r.linhas[0]).toMatchObject({
+      empresa: "Bar do Zé", // "name" é o ESTABELECIMENTO, não uma pessoa
+      whatsapp: "11988887777",
+      cidade: "Curitiba",
+      estado: "PR",
+      tipo: "Bar",
+      endereco: "Rua das Flores 123",
+    });
+  });
+
+  it("title/business name/company — o grupo alternativo de identidade do local", () => {
+    for (const cabecalho of ["title", "business name", "company"]) {
+      const texto = [`${cabecalho},phone`, "Pizzaria Dona Ana,11977776666"].join("\n");
+      const r = lerPlanilha(texto);
+      expect(r.linhas[0], cabecalho).toMatchObject({ empresa: "Pizzaria Dona Ana" });
+    }
+  });
+
+  it("phone number/mobile — variantes de telefone", () => {
+    for (const cabecalho of ["phone number", "mobile"]) {
+      const texto = [`name,${cabecalho}`, "Padaria Central,11966665555"].join("\n");
+      const r = lerPlanilha(texto);
+      expect(r.linhas[0], cabecalho).toMatchObject({ whatsapp: "11966665555" });
+    }
+  });
+
+  it("region/locality — variantes de estado e cidade", () => {
+    const texto = ["name,phone,locality,region", "Mercado São João,11955554444,Santos,SP"].join("\n");
+    const r = lerPlanilha(texto);
+    expect(r.linhas[0]).toMatchObject({ cidade: "Santos", estado: "SP" });
+  });
+
+  it("category name/primary category/restaurant type — variantes de tipo", () => {
+    for (const cabecalho of ["category name", "primary category", "restaurant type"]) {
+      const texto = [`name,phone,${cabecalho}`, "Cantina Italiana,11944443333,Italiana"].join("\n");
+      const r = lerPlanilha(texto);
+      expect(r.linhas[0], cabecalho).toMatchObject({ tipo: "Italiana" });
+    }
+  });
+
+  it("full address/formatted address — variantes de endereço", () => {
+    for (const cabecalho of ["full address", "formatted address"]) {
+      const texto = [`name,phone,${cabecalho}`, "Empório do Bairro,11933332222,Av. Brasil 500"].join("\n");
+      const r = lerPlanilha(texto);
+      expect(r.linhas[0], cabecalho).toMatchObject({ endereco: "Av. Brasil 500" });
+    }
+  });
+
+  it("neighborhood/district — variantes de bairro", () => {
+    for (const cabecalho of ["neighborhood", "district"]) {
+      const texto = [`name,phone,${cabecalho}`, "Sorveteria Gelato,11922221111,Moema"].join("\n");
+      const r = lerPlanilha(texto);
+      expect(r.linhas[0], cabecalho).toMatchObject({ bairro: "Moema" });
+    }
+  });
+
+  it("⭐ o conjunto completo de um exportador real: nada fica de fora", () => {
+    const texto = [
+      "name,phone,city,state,category name,formatted address,neighborhood",
+      "Restaurante da Praça,11911110000,São Paulo,SP,Restaurante,Praça da Sé 10,Sé",
+    ].join("\n");
+    const r = lerPlanilha(texto);
+
+    expect(r.linhas).toHaveLength(1);
+    expect(r.linhas[0]).toMatchObject({
+      empresa: "Restaurante da Praça",
+      whatsapp: "11911110000",
+      cidade: "São Paulo",
+      estado: "SP",
+      tipo: "Restaurante",
+      endereco: "Praça da Sé 10",
+      bairro: "Sé",
+    });
+    // Nenhuma coluna do cabeçalho ficou sem destino.
+    expect(r.colunas.every((c) => c.campo !== null)).toBe(true);
+  });
+});
+
 describe("sem cabeçalho", () => {
   it("acha o telefone pelo conteúdo e diz que foi palpite", () => {
     const r = lerPlanilha(["Marina,11988887777", "Omar,11977776666"].join("\n"));
