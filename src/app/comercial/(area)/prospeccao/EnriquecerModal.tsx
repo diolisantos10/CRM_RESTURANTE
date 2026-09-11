@@ -31,13 +31,34 @@ interface ResultadoEnriquecimento {
   erros: Array<{ linha: number; motivo: string }>;
 }
 
+/**
+ * Os 20 campos da Base fria. Rótulos explícitos por ordem do CEO, 11/09/2026:
+ * "Nome" é sempre o RESPONSÁVEL, "Empresa" é sempre o RESTAURANTE, e "Tipo de
+ * restaurante" mapeia para o campo técnico `tipo` — nunca para Empresa. Um
+ * operador que só olha a lista de rótulos, sem ler código nenhum, não pode
+ * ter dúvida de qual é qual.
+ */
 const CAMPOS_DISPONIVEIS: Array<{ id: CampoConhecido; label: string }> = [
-  { id: "whatsapp", label: "Telefone (WhatsApp)" },
-  { id: "nome", label: "Nome" },
-  { id: "empresa", label: "Empresa" },
+  { id: "whatsapp", label: "WhatsApp principal" },
+  { id: "nome", label: "Nome do responsável" },
+  { id: "cargo", label: "Cargo / função" },
+  { id: "empresa", label: "Restaurante / Empresa" },
+  { id: "tipo", label: "Tipo de restaurante" },
+  { id: "telefoneSecundario", label: "Telefone secundário" },
+  { id: "email", label: "E-mail" },
   { id: "cidade", label: "Cidade" },
   { id: "estado", label: "Estado (UF)" },
-  { id: "tipo", label: "Tipo de contato" },
+  { id: "bairro", label: "Bairro" },
+  { id: "endereco", label: "Endereço" },
+  { id: "cep", label: "CEP" },
+  { id: "cnpj", label: "CNPJ" },
+  { id: "instagram", label: "Instagram" },
+  { id: "site", label: "Site" },
+  { id: "googleMapsUrl", label: "URL do Google Maps" },
+  { id: "numeroDeUnidades", label: "Número de unidades" },
+  { id: "canaisAtuais", label: "Canais atuais / marketplaces" },
+  { id: "observacoes", label: "Observações" },
+  { id: "tags", label: "Tags" },
 ];
 
 type Fase = "upload" | "preview" | "processando" | "resultado";

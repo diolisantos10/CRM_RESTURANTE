@@ -51,6 +51,22 @@ export interface LinhaDaLista {
   cidade?: string | null;
   estado?: string | null;
   tipo?: string | null;
+
+  // ── ⭐ AMPLIAÇÃO DA BASE FRIA, 11/09/2026 — todos opcionais, todos aditivos ──
+  email?: string | null;
+  cargo?: string | null;
+  telefoneSecundario?: string | null;
+  bairro?: string | null;
+  endereco?: string | null;
+  cep?: string | null;
+  cnpj?: string | null;
+  instagram?: string | null;
+  site?: string | null;
+  googleMapsUrl?: string | null;
+  numeroDeUnidades?: number | null;
+  canaisAtuais?: string[];
+  observacoes?: string | null;
+  tags?: string[];
 }
 
 export interface PedidoDeImportacao {
@@ -158,7 +174,8 @@ export class ProvenienciaAusente extends Error {
 }
 
 /**
- * Carrega a lista num lote RASCUNHO.
+ * Carrega a lista num lote — que nasce LIBERADO, elegível na hora (ver o
+ * comentário grande logo abaixo, na criação do lote).
  *
  * ── AS TRÊS DEDUPLICAÇÕES, E POR QUE SÃO TRÊS ───────────────────────────────
  *
@@ -363,6 +380,7 @@ export async function importarLote(
           cidade: texto(linha.cidade),
           estado: texto(linha.estado),
           tipo: texto(linha.tipo),
+          ...camposAmpliados(linha),
           situacao: "RECUSADO",
           // A MESMA frase que vira chave em `motivosDeRecusa`. Duas grafias do
           // mesmo motivo viram duas linhas no relatório da importação, e ninguém
@@ -391,6 +409,7 @@ export async function importarLote(
         cidade: texto(linha.cidade),
         estado: texto(linha.estado),
         tipo: texto(linha.tipo),
+        ...camposAmpliados(linha),
         situacao: duplicada ? "DUPLICADO" : "PENDENTE",
         leadId: v.leadId,
         motivo:
@@ -427,96 +446,51 @@ export async function importarLote(
   };
 }
 
-/**
- * ⚠️ RETOMAR um lote — e é para isso que esta função serve desde 10/09/2026.
- *
- * ── POR QUE ELA NÃO FOI APAGADA COM A LIBERAÇÃO AUTOMÁTICA ──────────────────
- *
- * Desde que o lote nasce LIBERADO, ninguém precisa "liberar" o que acabou de
- * entrar. O que continua acontecendo o tempo todo é o inverso: um lote é
- * PAUSADO — pelo botão de pausa, ou porque a importação inteira foi cancelada —
- * e depois alguém decide que aquela lista volta. Sem esta função, voltar exigiria
- * reimportar o arquivo, e reimportar cria fichas novas para telefones que já
- * têm ficha.
- *
- * A autorização não mudou de natureza: a base legal declarada continua sendo a
- * `proveniencia` do lote, e quem retoma fica registrado. Se ninguém assinou,
- * ninguém autorizou.
- */
-export async function liberarLote(
-  db: Cliente,
-  loteId: string,
-  /** Rótulo de tela, `Nome (userId)`. É o que aparece em "Liberado por …". */
-  quem: string,
-  /**
-   * ⭐ O ID DE VERDADE de quem assinou.
-   *
-   * ⚠️ Separado de `quem` porque confundir os dois derrubou a primeira rodada
-   * real, em 08/09/2026: o rótulo foi entregue a `LeadMensagem.autorUserId`,
-   * que tem chave estrangeira para `users`, e o Postgres recusou — HTTP 500,
-   * levando junto os outros nove contatos da rodada.
-   *
-   * Opcional só para não quebrar chamador antigo; sem ele, o lote fica sem
-   * responsável de verdade e **não é abordado pela rodada automática**. É a
-   * regra que já existia, agora apoiada num dado que o banco reconhece.
-   */
-  quemUserId?: string | null,
-): Promise<{ ok: boolean; motivo?: string }> {
-  const lote = await db.loteDeProspeccao.findUnique({
-    where: { id: loteId },
-    select: { situacao: true, proveniencia: true },
-  });
-  if (!lote) return { ok: false, motivo: "Lote não encontrado." };
-  if ((lote.proveniencia ?? "").trim() === "") {
-    return { ok: false, motivo: "Lote sem proveniência declarada." };
-  }
-  if (lote.situacao === "ENCERRADO") {
-    return { ok: false, motivo: "Lote encerrado não volta a abordar." };
-  }
-
-  await db.loteDeProspeccao.update({
-    where: { id: loteId },
-    data: {
-      situacao: "LIBERADO",
-      liberadoEm: new Date(),
-      liberadoPor: quem,
-      ...(quemUserId ? { liberadoPorUserId: quemUserId } : {}),
-      // Retomar um lote pausado limpa a pausa, mas não apaga quem pausou:
-      // essa história vive na trilha, não nesta linha.
-      pausadoEm: null,
-    },
-  });
-
-  return { ok: true };
-}
-
-/**
- * Pausa imediata de um lote. Efeito na próxima seleção, sem deploy.
- *
- * Devolve `{ok:false}` para lote inexistente em vez de deixar o P2025 do Prisma
- * subir: um freio que responde 500 é um freio que a pessoa não sabe se pegou.
- */
-export async function pausarLote(
-  db: Cliente,
-  loteId: string,
-  quem: string,
-): Promise<{ ok: boolean; motivo?: string }> {
-  const existe = await db.loteDeProspeccao.findUnique({
-    where: { id: loteId },
-    select: { id: true },
-  });
-  if (!existe) return { ok: false, motivo: "Lote não encontrado." };
-
-  await db.loteDeProspeccao.update({
-    where: { id: loteId },
-    data: { situacao: "PAUSADO", pausadoEm: new Date(), pausadoPor: quem },
-  });
-  return { ok: true };
-}
+// ── ⛔ `liberarLote` E `pausarLote` FORAM REMOVIDAS EM 11/09/2026 ────────────
+//
+// Ordem explícita: "lote pode continuar existindo internamente só para
+// rastrear arquivo, procedência, responsável e data — não pode aparecer como
+// etapa operacional nem impedir envio." `montarFilaDeProspeccao` e
+// `materializarLead` pararam de ler `LoteDeProspeccao.situacao` (ver
+// `selecao.ts`), então uma função que só girava esse campo ficaria mentindo:
+// o botão pareceria pausar a lista e não pausaria mais nada. Função que não
+// tem mais efeito nenhum e ainda promete um é pior que função nenhuma.
+//
+// `cancelarImportacao` (`importacao.ts`) continua marcando os lotes como
+// PAUSADO — mas isso hoje é só HISTÓRICO na aba Importações, não trava mais
+// a seleção. Se um dia for preciso parar de verdade um arquivo específico em
+// andamento, o mecanismo é outro (ex.: mover os itens para uma situação
+// própria) — decisão separada, fora desta entrega.
 
 function texto(v: string | null | undefined): string | null {
   const t = typeof v === "string" ? v.trim() : "";
   return t === "" ? null : t;
+}
+
+/**
+ * Os catorze campos da ampliação da Base fria, normalizados de uma vez —
+ * evita repetir a mesma lista nos dois `create()` acima (recusado e aceito).
+ */
+function camposAmpliados(linha: LinhaDaLista) {
+  return {
+    email: texto(linha.email),
+    cargo: texto(linha.cargo),
+    telefoneSecundario: texto(linha.telefoneSecundario),
+    bairro: texto(linha.bairro),
+    endereco: texto(linha.endereco),
+    cep: texto(linha.cep),
+    cnpj: texto(linha.cnpj),
+    instagram: texto(linha.instagram),
+    site: texto(linha.site),
+    googleMapsUrl: texto(linha.googleMapsUrl),
+    numeroDeUnidades:
+      typeof linha.numeroDeUnidades === "number" && Number.isFinite(linha.numeroDeUnidades)
+        ? Math.max(0, Math.floor(linha.numeroDeUnidades))
+        : null,
+    canaisAtuais: linha.canaisAtuais ?? [],
+    observacoes: texto(linha.observacoes),
+    tags: linha.tags ?? [],
+  };
 }
 
 /**

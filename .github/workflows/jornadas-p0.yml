@@ -22,6 +22,8 @@ on:
       - "prisma/schema.prisma"
       - "scripts/jornada-prospeccao.test.ts"
       - "scripts/jornada-entradas.test.ts"
+      - "scripts/jornada-enriquecimento.test.ts"
+      - "scripts/jornada-base-fria-ampliada.test.ts"
       - "src/services/site/SiteLeadService.ts"
       - "src/services/foocci-sdr/FoocciSalesInbound.ts"
       - "vitest.jornada.config.ts"
@@ -124,20 +126,22 @@ jobs:
           # banco que não os tinha mais.
           #
           # A ordem importa e é a mesma que produção vai aplicar: a WABA (120000),
-          # a reserva da rodada automática (153000), a base contínua (180000) e o
-          # backfill de importações legadas (210000).
+          # a reserva da rodada automática (153000), a base contínua (180000), o
+          # backfill de importações legadas (210000, 10/09) e a ampliação da
+          # Base fria com os catorze campos novos (120000 de 11/09).
           #
-          # ⭐ 11/09/2026 — faltavam as duas últimas, e o job reprovou exatamente
-          # como o aviso acima previu: o DROP levou `prospeccao_config` embora, e
-          # sem a linha 153000 o cliente do Prisma pediu `ultimaRodadaAutomaticaEm`
-          # a um banco que não a tinha mais. Migration nova que não entra nesta
-          # lista é migration que ninguém provou — esta mesma frase, ignorada uma
-          # vez, é o que este comentário existe para não deixar acontecer de novo.
+          # ⭐ 11/09/2026 — faltavam duas linhas, e o job reprovou exatamente como
+          # o aviso acima previu: o DROP levou `prospeccao_config` embora, e sem a
+          # linha 153000 o cliente do Prisma pediu `ultimaRodadaAutomaticaEm` a um
+          # banco que não a tinha mais. Migration nova que não entra nesta lista é
+          # migration que ninguém provou — esta mesma frase, ignorada uma vez, é o
+          # que este comentário existe para não deixar acontecer de novo.
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260910120000_waba_da_sala_persistido/migration.sql
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260910153000_reserva_da_rodada_automatica/migration.sql
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260910180000_base_continua_memoria_e_trava/migration.sql
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260910210000_backfill_importacoes_legadas/migration.sql
-          echo "✅ As oito migrations da prospecção aplicaram sobre banco realista."
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260911120000_base_fria_campos_completos/migration.sql
+          echo "✅ As nove migrations da prospecção aplicaram sobre banco realista."
 
       - name: Percorrer as Jornadas 1, 2 e 3
         run: npm run test:jornada

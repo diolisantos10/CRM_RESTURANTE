@@ -21,7 +21,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { PrismaClient } from "@prisma/client";
-import { importarLote, liberarLote, pausarLote } from "@/services/salaDeVendas/prospeccao/lote";
+import { importarLote } from "@/services/salaDeVendas/prospeccao/lote";
 import {
   montarFilaDeProspeccao,
   materializarLead,
@@ -78,20 +78,21 @@ describe("Jornada 3 — prospecção, ponta a ponta", () => {
   });
 
   /**
-   * ⛔ ESTE PASSO MUDOU DE LADO EM 10/09/2026, POR ORDEM APROVADA.
+   * ⛔ ESTE PASSO MUDOU DE LADO DUAS VEZES: 10/09/2026 E 11/09/2026.
    *
-   * Ele exigia que o lote nascesse `RASCUNHO` e que, mesmo com a prospecção
-   * ligada, ninguém entrasse na fila até alguém clicar "Liberar". A regra era
-   * boa e virou defeito quando a operação cresceu: o arquivo é fatiado de 500
-   * em 500, então uma lista de 8.000 contatos exigia dezesseis liberações
-   * manuais para uma decisão que a pessoa já tinha tomado ao subir o arquivo.
+   * Primeiro deixou de exigir que o lote nascesse `RASCUNHO` (uma lista de
+   * 8.000 em partes de 500 exigia dezesseis liberações manuais para uma
+   * decisão já tomada ao subir o arquivo). Depois, em 11/09/2026, a operação
+   * por lotes foi removida por completo: nem pausar um lote tira mais alguém
+   * da fila (ver passos 3c e 7). O único jeito de excluir um contato da fila
+   * hoje é ele deixar de estar `PENDENTE`.
    *
    * ── ⚠️ O QUE O PASSO PRECISA CONTINUAR PROVANDO ─────────────────────────
    *
-   * "Entra sozinho" não pode virar "sai sozinho". O que a base contínua tira é
-   * a liberação por bloco — e **só** ela. Continuam de pé, e este passo mede os
-   * três: o interruptor global (passo 2, acima), o teto diário, e a pausa que
-   * tira uma importação inteira da fila sem apagar nada.
+   * "Entra sozinho" não pode virar "sai sozinho" por nenhum motivo que não
+   * esteja na lista de travas comerciais. Este passo mede o interruptor
+   * global (passo 2, acima) e o teto diário (passo 3b) — os dois que
+   * continuam de pé.
    */
   it("3. ⭐ ligada a prospecção, a importação JÁ está na fila — sem liberação por bloco", async () => {
     await prisma.prospeccaoConfig.create({
@@ -128,23 +129,35 @@ describe("Jornada 3 — prospecção, ponta a ponta", () => {
     });
   });
 
-  it("3c. ⛔ pausar a importação tira os contatos da fila, e não apaga nada", async () => {
-    // É o cancelamento de uma lista: o lote sai da fila, os contatos ficam no
-    // banco. Se apagasse, não haveria como responder depois de onde veio o
-    // contato de alguém que reclamou.
+  it("3c. ⛔ PAUSAR O LOTE NÃO TIRA MAIS OS CONTATOS DA FILA — ordem do CEO, 11/09/2026", async () => {
+    // ── O QUE ESTE PASSO PROVAVA ATÉ 10/09/2026, E POR QUE MUDOU ────────────
+    //
+    // Ele chamava `pausarLote` (serviço que só existia para girar
+    // `LoteDeProspeccao.situacao`) e conferia que a fila esvaziava. A
+    // operação por lotes foi removida por ordem explícita: *"lote não pode
+    // aparecer como etapa operacional nem impedir envio."* `pausarLote` e
+    // `liberarLote` foram apagados de `lote.ts` — não só escondidos — e
+    // `montarFilaDeProspeccao` não lê mais `lote.situacao`.
+    //
+    // O update abaixo é feito DIRETO no Prisma, sem passar por nenhum
+    // serviço, porque não existe mais serviço para isso — e é exatamente
+    // essa ausência que este passo prova: mesmo alguém mexendo na situação do
+    // lote na mão, os itens continuam elegíveis.
     const itensAntes = await prisma.itemDeProspeccao.count();
-    await pausarLote(prisma, loteId, "jornada-ci");
+    await prisma.loteDeProspeccao.update({
+      where: { id: loteId },
+      data: { situacao: "PAUSADO", pausadoEm: new Date(), pausadoPor: "jornada-ci" },
+    });
 
     const fila = await montarFilaDeProspeccao(prisma, { canalPronto: true, agora: AGORA });
-    expect(fila.liberados).toHaveLength(0);
+    expect(fila.liberados, "lote PAUSADO voltou a barrar — a remoção regrediu").toHaveLength(2);
     expect(await prisma.itemDeProspeccao.count()).toBe(itensAntes);
 
-    // E retomar devolve os dois — é para isto que `liberarLote` continua
-    // existindo depois da base contínua: retomar, não autorizar pela primeira
-    // vez.
-    expect((await liberarLote(prisma, loteId, "jornada-ci")).ok).toBe(true);
-    const voltou = await montarFilaDeProspeccao(prisma, { canalPronto: true, agora: AGORA });
-    expect(voltou.liberados).toHaveLength(2);
+    // Devolve ao estado original para não vazar para os passos seguintes.
+    await prisma.loteDeProspeccao.update({
+      where: { id: loteId },
+      data: { situacao: "LIBERADO", pausadoEm: null, pausadoPor: null },
+    });
   });
 
   it("4. ⭐ montar a fila NÃO escreve nada", async () => {
@@ -234,8 +247,7 @@ describe("Jornada 3 — prospecção, ponta a ponta", () => {
     expect(lote.jaEramLead).toBe(1);
     expect(lote.aceitas).toBe(0);
 
-    await liberarLote(prisma, lote.loteId, "jornada-ci");
-
+    // Nenhuma liberação a mais: `importarLote` já entrega o lote elegível.
     const fila = await montarFilaDeProspeccao(prisma, { canalPronto: true, agora: AGORA });
 
     // Ninguém deste lote pode sair liberado.
@@ -248,14 +260,24 @@ describe("Jornada 3 — prospecção, ponta a ponta", () => {
     expect(item?.leadId).toBe(legado.id);
   });
 
-  it("7. o freio do lote esvazia a fila", async () => {
-    await pausarLote(prisma, loteId, "jornada-ci");
+  it("7. ⛔ o lote não é mais freio nenhum — pausá-lo de novo continua sem efeito", async () => {
+    // Repete a prova do passo 3c num ponto diferente da jornada (depois de uma
+    // materialização e de um segundo lote), para não sobreviver como um caso
+    // isolado que só valia ali.
+    await prisma.loteDeProspeccao.update({
+      where: { id: loteId },
+      data: { situacao: "PAUSADO", pausadoEm: new Date(), pausadoPor: "jornada-ci" },
+    });
     const fila = await montarFilaDeProspeccao(prisma, { canalPronto: true, agora: AGORA });
-    expect(fila.liberados).toHaveLength(0);
+    expect(fila.liberados.length, "lote PAUSADO voltou a barrar").toBeGreaterThan(0);
+
+    await prisma.loteDeProspeccao.update({
+      where: { id: loteId },
+      data: { situacao: "LIBERADO", pausadoEm: null, pausadoPor: null },
+    });
   });
 
   it("8. o freio geral esvazia a fila, e diz o motivo", async () => {
-    await liberarLote(prisma, loteId, "jornada-ci");
     await prisma.prospeccaoConfig.update({
       where: { id: "singleton" },
       data: { pausadoEm: new Date(), pausadoPor: "jornada-ci", motivo: "teste do freio" },

@@ -290,8 +290,11 @@ describe("Jornada — enriquecimento por planilha (achados #5–#10 da auditoria
     const { linhas, descartadas } = construirLinhasComMapeamento(grade, mapeamentoManual, true);
 
     expect(descartadas).toBe(0);
-    expect(linhas).toEqual([
-      { nome: "Fulano da Jornada", whatsapp: "11955550001", empresa: null, cidade: null, estado: null, tipo: null },
+    // `toMatchObject`, não `toEqual`: este caso prova a precedência do
+    // mapeamento manual sobre o cabeçalho, não o formato completo de
+    // `LinhaLida` (que `mapeamentoManual.test.ts` já cobre campo a campo).
+    expect(linhas).toMatchObject([
+      { nome: "Fulano da Jornada", whatsapp: "11955550001", empresa: null },
     ]);
   });
 

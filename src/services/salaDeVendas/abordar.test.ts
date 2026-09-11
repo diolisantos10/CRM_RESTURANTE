@@ -364,7 +364,13 @@ describe("qual portão o lead atravessa", () => {
     expect(r.abordou === false && r.detalhe).toContain("não há lote que o autorize");
   });
 
-  it("lote que não está LIBERADO barra o envio — pausar tem efeito aqui também", async () => {
+  it("⭐ lote PAUSADO NÃO barra mais o envio — ordem do CEO, 11/09/2026: lote não impede envio", async () => {
+    // Até 10/09/2026 esta trava barrava, e o teste esperava exatamente isso —
+    // ver o commit anterior. A operação por lotes foi removida: a base legal
+    // (`proveniencia`) continua vindo do lote, mas a situação dele deixou de
+    // ser lida. As únicas travas comerciais que restam são o interruptor
+    // geral, o teto do dia/janela, opt-out, telefone inválido e falha
+    // sistêmica — nenhuma delas é "o lote está pausado".
     const { db } = banco({
       lead: DE_LISTA,
       item: { lote: { situacao: "PAUSADO", proveniencia: "Lista pública" } },
@@ -372,8 +378,7 @@ describe("qual portão o lead atravessa", () => {
 
     const r = await abordarLead(db, { leadId: "L1", autor: "SISTEMA", autorUserId: "u1", agora: AGORA });
 
-    expect(r.abordou).toBe(false);
-    expect(r.abordou === false && r.detalhe).toContain("PAUSADO");
+    expect(r.abordou, JSON.stringify(r)).toBe(true);
   });
 
   it("prospecção pausada na configuração barra, mesmo com lote liberado", async () => {

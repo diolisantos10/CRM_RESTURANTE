@@ -265,15 +265,10 @@ async function escolherPortaoDoLead(
       ),
     };
   }
-  if (item.lote.situacao !== "LIBERADO") {
-    return {
-      portao: "recusado",
-      decisao: recusaDeProspeccao(
-        "PROSPECCAO_DESLIGADA",
-        `O lote deste contato está em ${item.lote.situacao}, não LIBERADO.`,
-      ),
-    };
-  }
+  // ⚠️ NÃO checa mais `item.lote.situacao` — ordem de 11/09/2026: a operação
+  // por lotes foi removida, e lote pausado deixou de impedir envio. A ÚNICA
+  // coisa que o lote continua fornecendo aqui é a `proveniencia`, que é a base
+  // legal declarada (checada logo acima: sem lote não há o que declarar).
 
   const config = await db.prospeccaoConfig.findUnique({ where: { id: "singleton" } });
 

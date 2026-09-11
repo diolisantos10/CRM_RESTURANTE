@@ -1,4 +1,4 @@
-/** Comercial → Prospecção: os lotes, o interruptor e a fila do dia. */
+/** Comercial → Prospecção: receber/enriquecer, o interruptor, a Base fria e a fila automática. */
 
 import { Suspense } from "react";
 import { ProspeccaoClient } from "./ProspeccaoClient";
