@@ -118,11 +118,29 @@ falsa; obriga a mostrar o percurso.
   `dioli-brain-kit`. É ele que decide o que sobe de um projeto para virar regra de
   todos os produtos Dioli. Aprendeu algo que serve a mais de um projeto?
   **Proponha ao Diretor Geral** — não escreva no kit por conta própria.
-- **Conversas não se falam.** Você não alcança o Diretor Geral nem outro Diretor por
-  mensagem — cada sessão é uma ilha. Dúvida de doutrina que os documentos não
-  respondem vai escrita em **`docs/perguntas-ao-diretor-geral.md`**, e você **segue
-  trabalhando no que não depende dela**. Nunca prometa "vou perguntar e te aviso":
-  isso é encenar capacidade que você não tem.
+- **⭐ AS CONVERSAS SE FALAM — corrigido em 08/09/2026, e a linha antiga estava
+  errada.** Este manual dizia *"você não alcança o Diretor Geral nem outro Diretor
+  por mensagem — cada sessão é uma ilha"*. **Alcança.** O CEO mandou chamá-lo, eu
+  chamei, e a mensagem foi entregue na sessão dele.
+
+  **Como se faz, medido:** toda sessão da casa tem o mesmo pai — o Diretor Geral,
+  `session_01SjTkudpPwV18NjVnp1g6sg`, que aparece como `parent_session_id` em
+  `list_sessions`. Para falar com ele: `create_trigger` com
+  `persistent_session_id` apontando para essa sessão, e depois `fire_trigger`
+  para entregar na hora. Vale para qualquer sessão da conta.
+
+  **O que isso muda, e o que NÃO muda.** Continua valendo escrever dúvida de
+  doutrina em **`docs/perguntas-ao-diretor-geral.md`** e **seguir trabalhando no
+  que não depende dela** — chamar alguém não é desculpa para parar. O que muda é
+  que *"vou perguntar e te aviso"* **deixou de ser encenação**: agora é uma
+  capacidade real, e por isso passa a ser cobrável.
+
+  ⚠️ **E a lição de método é maior que a correção.** A linha antiga me fez passar
+  dias respondendo o Diretor Geral em comentário de PR que ele não lia — ele
+  mandava e não via resposta, eu respondia e parecia mudo. **Eu nunca tinha
+  testado se era verdade**, porque estava escrita no manual. Documento que se lê
+  como lei precisa ser medido como código: **incapacidade declarada e nunca
+  testada é a mais cara de todas**, porque ninguém tenta.
 
 > **Exceção nomeada:** *exploração* pode ser direta (o CEO pensando junto com um
 > especialista, sem entregável). *Execução* passa sempre pelo Diretor.
