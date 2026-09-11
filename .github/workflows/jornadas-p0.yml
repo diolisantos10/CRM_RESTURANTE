@@ -17,6 +17,10 @@ on:
   pull_request:
     paths:
       - "src/services/salaDeVendas/prospeccao/**"
+      # ⭐ 11/09/2026 — `abordar.ts` é o único caminho de envio e não mora sob
+      # `prospeccao/`; sem esta linha, um PR que só toca `escolherPortaoDoLead`,
+      # `diagnosticarAbordagem` ou a retentativa não disparava esta jornada.
+      - "src/services/salaDeVendas/abordar.ts"
       - "src/services/foocci-sdr/LeadContactSafety.ts"
       - "prisma/migrations/**"
       - "prisma/schema.prisma"
@@ -24,6 +28,7 @@ on:
       - "scripts/jornada-entradas.test.ts"
       - "scripts/jornada-enriquecimento.test.ts"
       - "scripts/jornada-base-fria-ampliada.test.ts"
+      - "scripts/jornada-retentativa-prospeccao.test.ts"
       - "src/services/site/SiteLeadService.ts"
       - "src/services/foocci-sdr/FoocciSalesInbound.ts"
       - "vitest.jornada.config.ts"

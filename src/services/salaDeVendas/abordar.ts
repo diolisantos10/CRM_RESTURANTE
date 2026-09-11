@@ -42,6 +42,7 @@ import {
   pediuSilencio,
   REGRA,
   type LeadSafetyDecision,
+  type LeadBlockReason,
 } from "@/services/foocci-sdr/LeadContactSafety";
 import { contarAbordagensDeHoje } from "./prospeccao/selecao";
 import { parametrosDoEnvioAgora } from "@/services/foocci-sdr/modelosDaMeta";
@@ -174,6 +175,30 @@ interface LeadParaAbordar {
 }
 
 /**
+ * O `select` de `LeadParaAbordar` — UM SÓ, para quem grava e para quem só
+ * confere.
+ *
+ * ⛔ Nasceu do defeito de 11/09/2026: `cidade` faltava neste `select` dentro de
+ * `abordarLead`, e nenhum teste percebeu porque o duplo de banco ignorava o
+ * argumento. Uma segunda cópia deste objeto em `diagnosticarAbordagem` seria a
+ * MESMA classe de defeito com um nome novo — o diagnóstico aprovaria um
+ * contato que o envio real recusaria, ou vice-versa, por um campo que os dois
+ * `select`s pararam de concordar sobre. Por isso é uma constante, uma vez.
+ */
+const SELECT_LEAD_PARA_ABORDAR = {
+  id: true,
+  nome: true,
+  whatsapp: true,
+  optOutAt: true,
+  consentAt: true,
+  createdAt: true,
+  lastContactedAt: true,
+  restaurante: true,
+  fonte: true,
+  cidade: true,
+} as const;
+
+/**
  * A fonte que diz que este lead veio de uma lista fria. Uma constante porque a
  * string aparece em três arquivos e um erro de digitação aqui manda o lead para
  * o portão errado — em silêncio, e para o lado permissivo se fosse ao contrário.
@@ -218,7 +243,7 @@ type PortaoDoLead =
   | { portao: "frio"; baseLegal: string; prospeccaoLiberada: boolean; descansoHoras: number }
   | { portao: "recusado"; decisao: LeadSafetyDecision };
 
-async function escolherPortaoDoLead(
+export async function escolherPortaoDoLead(
   db: Cliente,
   lead: { id: string; fonte: string | null; optOutAt: Date | null },
   agora: Date,
@@ -306,6 +331,77 @@ async function escolherPortaoDoLead(
 }
 
 /**
+ * ⭐ A DECISÃO DO PORTÃO, JÁ COM A AVALIAÇÃO — reaproveitada por quem ENVIA
+ * (`abordarLead`) e por quem só DIAGNOSTICA (`diagnosticarAbordagem`).
+ *
+ * Escolhe o portão (`escolherPortaoDoLead`) e chama a função de avaliação
+ * correta para ele — a MESMA escolha, os MESMOS parâmetros, nos dois
+ * caminhos. Extraída em 11/09/2026 porque copiar este bloco para o
+ * diagnóstico seria a segunda definição de "o portão aprova este lead?" —
+ * exatamente o anti-padrão que este arquivo nomeia noutros lugares: duas
+ * cópias da mesma decisão divergem, e a que diverge é sempre a que ninguém
+ * lembra de atualizar.
+ */
+async function avaliarPortaoDoLead(
+  db: Cliente,
+  lead: LeadParaAbordar,
+  agora: Date,
+): Promise<LeadSafetyDecision> {
+  // Quantas vezes a Foocci já falou com esta pessoa. Contado de verdade — e por
+  // isso `historicoConhecido: true` logo abaixo pode ser afirmado. Chutar zero
+  // aqui e declarar o histórico como conhecido seria mentir para o portão.
+  const tentativas = await db.leadMensagem.count({
+    where: { leadId: lead.id, direcao: "SAIDA" },
+  });
+
+  const escolha = await escolherPortaoDoLead(db, lead, agora);
+
+  return escolha.portao === "recusado"
+    ? escolha.decisao
+    : escolha.portao === "frio"
+      ? avaliarAbordagemDeProspeccao({
+          telefone: lead.whatsapp,
+          optOutAt: lead.optOutAt,
+          tentativas,
+          ultimoContatoEm: lead.lastContactedAt,
+          historicoConhecido: true,
+          canalPronto: canalDeVendasPronto(),
+          prospeccaoLiberada: escolha.prospeccaoLiberada,
+          baseLegalDeclarada: escolha.baseLegal,
+          descansoHoras: escolha.descansoHoras,
+          agora,
+        })
+      : avaliarContatoDeLead({
+          telefone: lead.whatsapp,
+          optOutAt: lead.optOutAt,
+          /**
+           * ⚠️ SEM `?? lead.createdAt`, e a remoção é o coração desta mudança.
+           *
+           * Esta linha era `lead.consentAt ?? lead.createdAt`, com um
+           * comentário dizendo que `createdAt` "é o instante do formulário".
+           * **Para um lead que veio de formulário, é.** Para um lead que a
+           * própria casa acabou de materializar de uma lista fria, `createdAt`
+           * é o instante em que **NÓS** criamos a ficha — e o portão o lia
+           * como consentimento fresquíssimo, liberando por zero dias de idade.
+           *
+           * Era exatamente a mentira que o portão frio foi construído para
+           * não contar: *"registraria como consentimento da pessoa um ato da
+           * empresa"*. Ela entrava aqui, calada, pela porta dos fundos.
+           *
+           * Agora `consentAt` nulo é `CONSENTIMENTO_DESCONHECIDO` — bloqueio,
+           * não presunção. É mais restritivo de propósito: lead sem registro
+           * de quando entregou os dados **não** é abordado por este portão.
+           */
+          consentimentoEm: lead.consentAt,
+          tentativas,
+          ultimoContatoEm: lead.lastContactedAt,
+          historicoConhecido: true,
+          canalPronto: canalDeVendasPronto(),
+          agora,
+        });
+}
+
+/**
  * Aborda UM lead com o modelo aprovado.
  *
  * `autorUserId` é obrigatório e não tem padrão: toda mensagem que sai em nome
@@ -340,71 +436,15 @@ export async function abordarLead(
   // tinha cidade cadastrada — a coluna existia no banco e nunca chegava aqui.
   const lead = (await db.siteLead.findUnique({
     where: { id: params.leadId },
-    select: {
-      id: true, nome: true, whatsapp: true, optOutAt: true,
-      consentAt: true, createdAt: true, lastContactedAt: true,
-      restaurante: true, fonte: true, cidade: true,
-    },
+    select: SELECT_LEAD_PARA_ABORDAR,
   })) as LeadParaAbordar | null;
 
   if (!lead) {
     return { abordou: false, motivo: "leadNaoExiste", detalhe: params.leadId };
   }
 
-  // Quantas vezes a Foocci já falou com esta pessoa. Contado de verdade — e por
-  // isso `historicoConhecido: true` logo abaixo pode ser afirmado. Chutar zero
-  // aqui e declarar o histórico como conhecido seria mentir para o portão.
-  const tentativas = await db.leadMensagem.count({
-    where: { leadId: lead.id, direcao: "SAIDA" },
-  });
-
   // ── Trava 1: o portão do lead, ESCOLHIDO PELA ORIGEM ───────────────────
-  const escolha = await escolherPortaoDoLead(db, lead, agora);
-
-  const decisao =
-    escolha.portao === "recusado"
-      ? escolha.decisao
-      : escolha.portao === "frio"
-        ? avaliarAbordagemDeProspeccao({
-            telefone: lead.whatsapp,
-            optOutAt: lead.optOutAt,
-            tentativas,
-            ultimoContatoEm: lead.lastContactedAt,
-            historicoConhecido: true,
-            canalPronto: canalDeVendasPronto(),
-            prospeccaoLiberada: escolha.prospeccaoLiberada,
-            baseLegalDeclarada: escolha.baseLegal,
-            descansoHoras: escolha.descansoHoras,
-            agora,
-          })
-        : avaliarContatoDeLead({
-            telefone: lead.whatsapp,
-            optOutAt: lead.optOutAt,
-            /**
-             * ⚠️ SEM `?? lead.createdAt`, e a remoção é o coração desta mudança.
-             *
-             * Esta linha era `lead.consentAt ?? lead.createdAt`, com um
-             * comentário dizendo que `createdAt` "é o instante do formulário".
-             * **Para um lead que veio de formulário, é.** Para um lead que a
-             * própria casa acabou de materializar de uma lista fria, `createdAt`
-             * é o instante em que **NÓS** criamos a ficha — e o portão o lia
-             * como consentimento fresquíssimo, liberando por zero dias de idade.
-             *
-             * Era exatamente a mentira que o portão frio foi construído para
-             * não contar: *"registraria como consentimento da pessoa um ato da
-             * empresa"*. Ela entrava aqui, calada, pela porta dos fundos.
-             *
-             * Agora `consentAt` nulo é `CONSENTIMENTO_DESCONHECIDO` — bloqueio,
-             * não presunção. É mais restritivo de propósito: lead sem registro
-             * de quando entregou os dados **não** é abordado por este portão.
-             */
-            consentimentoEm: lead.consentAt,
-            tentativas,
-            ultimoContatoEm: lead.lastContactedAt,
-            historicoConhecido: true,
-            canalPronto: canalDeVendasPronto(),
-            agora,
-          });
+  const decisao = await avaliarPortaoDoLead(db, lead, agora);
 
   if (!decisao.sendable) {
     return {
@@ -517,13 +557,27 @@ export async function abordarLead(
  * vez de preencher com espaço, traço ou "cliente" — texto inventado no meio de
  * uma abordagem é pior que abordagem nenhuma.
  */
-export function montarParametros(
-  quantas: number,
-  lead: { nome: string | null; restaurante: string | null; fonte: string | null; cidade?: string | null },
-): { ok: true; parametros: string[] } | { ok: false; falta: string } {
-  if (quantas <= 0) return { ok: true, parametros: [] };
+/** O lead como `montarParametros` (e `camposDoModelo`) o enxergam. */
+type LeadParaOsParametros = {
+  nome: string | null;
+  restaurante: string | null;
+  fonte: string | null;
+  cidade?: string | null;
+};
 
-  const disponiveis: Array<{ rotulo: string; valor: string | null }> = [
+/**
+ * A lista ORDENADA de variáveis que a casa sabe preencher, com o valor de
+ * CADA UMA — e não só da primeira que faltar.
+ *
+ * ⚠️ Extraída de `montarParametros` em 11/09/2026 para o diagnóstico
+ * (`diagnosticarAbordagem`) poder dizer QUAIS campos faltam, não só o
+ * primeiro. `montarParametros` continua parando no primeiro — é a regra de
+ * envio, e não muda —, mas construir esta lista OUTRA VEZ ali seria a segunda
+ * definição de "quais variáveis existem e em que ordem", exatamente o defeito
+ * que este arquivo já nomeia para o portão. Uma função, dois usos.
+ */
+function camposDoModelo(lead: LeadParaOsParametros): Array<{ rotulo: string; valor: string | null }> {
+  return [
     // ⚠️ O restaurante é a queda de propósito: `saudacaoDoLead` recusa nome que
     // é telefone (e faz bem — "Olá 5511988887777" é pior que não chamar pelo
     // nome), mas uma lista de prospecção quase sempre traz o NOME DA CASA. Sem
@@ -534,6 +588,15 @@ export function montarParametros(
     },
     { rotulo: "cidade", valor: (lead.cidade ?? "").trim() || null },
   ];
+}
+
+export function montarParametros(
+  quantas: number,
+  lead: LeadParaOsParametros,
+): { ok: true; parametros: string[] } | { ok: false; falta: string } {
+  if (quantas <= 0) return { ok: true, parametros: [] };
+
+  const disponiveis = camposDoModelo(lead);
 
   if (quantas > disponiveis.length) {
     return {
@@ -552,4 +615,108 @@ export function montarParametros(
   }
 
   return { ok: true, parametros };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// O DIAGNÓSTICO — o mesmo caminho de `abordarLead`, sem gravar nada.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * ⭐⭐ POR QUE ESTE ARQUIVO TAMBÉM TEM UM DIAGNÓSTICO, E NÃO SÓ UM ENVIO.
+ *
+ * ── O INCIDENTE, 11/09/2026 ─────────────────────────────────────────────────
+ *
+ * Uma rodada real materializou 20 `SiteLead` e não criou UMA `LeadMensagem`,
+ * nenhum `wamid` — e devolveu HTTP 200. `abordarDaFila.ts` explica o formato
+ * do silêncio: `portaoRecusou` e `semDadoParaOModelo` são `"pula"`, sem teto,
+ * e a rodada termina normal. O sintoma bate; a causa LITERAL, contra os 20
+ * leads reais, só quem tiver `DATABASE_URL` de produção pode medir — ver
+ * `scripts/diagnosticar-leads-travados.ts`.
+ *
+ * ── POR QUE ISTO NÃO CHAMA `abordarLead` COM UM INTERRUPTOR "SÓ SIMULA" ────
+ *
+ * Um parâmetro `simular: true` dentro de `abordarLead` faria o caminho real
+ * de envio carregar um `if` que só existe para o diagnóstico — o oposto do
+ * que este arquivo promete no cabeçalho: *"este arquivo é o único caminho por
+ * onde uma abordagem sai"*. `diagnosticarAbordagem` fica FORA desse caminho,
+ * de propósito, e chega ao mesmo veredito reusando `escolherPortaoDoLead`,
+ * `avaliarPortaoDoLead` e `montarParametros` — nunca reimplementando a
+ * pergunta que eles já respondem.
+ *
+ * `registrarSaida` e `enviarModeloDeVendas` nunca são chamados aqui. Nenhuma
+ * linha é escrita, nenhuma rede é aberta.
+ */
+export type ResultadoDoDiagnostico =
+  | { leadId: string; pronto: false; motivo: "leadNaoExiste"; detalhe: string }
+  | {
+      leadId: string;
+      pronto: false;
+      motivo: "portaoRecusou";
+      /** O motivo exato que o portão declarou — `null` só quando ele mesmo não declarou nenhum. */
+      razao: LeadBlockReason | null;
+      detalhe: string;
+    }
+  | {
+      leadId: string;
+      pronto: false;
+      motivo: "semDadoParaOModelo";
+      /** Quantas variáveis o modelo aprovado exige agora — a mesma fonte que o envio usaria. */
+      quantas: number;
+      /** Os rótulos dos campos que faltam, dentre os `quantas` primeiros — pode ser mais de um. */
+      camposFaltando: string[];
+      detalhe: string;
+    }
+  | { leadId: string; pronto: true; quantas: number; parametros: string[] };
+
+export async function diagnosticarAbordagem(
+  db: Cliente,
+  params: { leadId: string; agora?: Date },
+): Promise<ResultadoDoDiagnostico> {
+  const agora = params.agora ?? new Date();
+
+  const lead = (await db.siteLead.findUnique({
+    where: { id: params.leadId },
+    select: SELECT_LEAD_PARA_ABORDAR,
+  })) as LeadParaAbordar | null;
+
+  if (!lead) {
+    return { leadId: params.leadId, pronto: false, motivo: "leadNaoExiste", detalhe: params.leadId };
+  }
+
+  const decisao = await avaliarPortaoDoLead(db, lead, agora);
+
+  if (!decisao.sendable) {
+    return {
+      leadId: lead.id,
+      pronto: false,
+      motivo: "portaoRecusou",
+      razao: decisao.reason,
+      detalhe: `${decisao.reason ?? "sem motivo"}: ${decisao.detail ?? ""}`.trim(),
+    };
+  }
+
+  // ⚠️ A MESMA FONTE que `abordarLead` usaria — nunca o ambiente sozinho, pela
+  // mesma razão que o comentário de `parametrosDoEnvioAgora` já dá: pré-voo e
+  // envio (e agora o diagnóstico) têm de concordar sobre quantas variáveis o
+  // modelo aprovado pede, ou o veredito daqui mente sobre o que o envio faria.
+  const quantas = await parametrosDoEnvioAgora(db);
+  const montagem = montarParametros(quantas, lead);
+
+  if (!montagem.ok) {
+    const camposFaltando = camposDoModelo(lead)
+      .slice(0, quantas)
+      .filter((c) => !c.valor)
+      .map((c) => c.rotulo);
+
+    return {
+      leadId: lead.id,
+      pronto: false,
+      motivo: "semDadoParaOModelo",
+      quantas,
+      camposFaltando,
+      detalhe: montagem.falta,
+    };
+  }
+
+  return { leadId: lead.id, pronto: true, quantas, parametros: montagem.parametros };
 }
