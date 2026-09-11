@@ -56,7 +56,7 @@ export function MarketingHeader() {
         scrolled ? "border-b border-line" : "border-b border-transparent"
       }`}
     >
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5 lg:px-8">
+      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5 lg:px-6 xl:px-8">
         {/*
           No celular a logo fica CENTRALIZADA (pedido do CEO, 2026-08-04). O espaçador
           tem a mesma largura do botão de menu à direita — é ele que faz o centro ser o
@@ -79,7 +79,7 @@ export function MarketingHeader() {
           />
         </Link>
 
-        <nav className="hidden items-center gap-6 lg:flex" aria-label="Navegação principal">
+        <nav className="hidden items-center gap-4 lg:flex xl:gap-6" aria-label="Navegação principal">
           {NAV_LINKS.map((l) => (
             <Link
               key={l.href}
@@ -91,7 +91,7 @@ export function MarketingHeader() {
           ))}
         </nav>
 
-        <div className="hidden items-center gap-3 lg:flex">
+        <div className="hidden items-center gap-2 lg:flex xl:gap-3">
           {/* Primeiro na ordem de leitura, e o mais discreto dos três: é a porta
               de quem ainda não sabe se quer — não pode competir com Assinar. */}
           {/* ⚠️ É BOTÃO, não item de menu — correção do CEO em 05/09, depois de
@@ -102,19 +102,19 @@ export function MarketingHeader() {
               quebra de novo assim que a janela aperta. */}
           <Link
             href={DEMO_URL}
-            className={`inline-flex items-center whitespace-nowrap rounded-xl border border-line2 bg-paper px-4 py-2 text-sm font-semibold text-ink2 shadow-[0_1px_2px_rgba(11,11,11,.03)] transition-colors hover:bg-[#FAFAF8] hover:text-ink ${FOCUS}`}
+            className={`inline-flex items-center whitespace-nowrap rounded-xl border border-line2 bg-paper px-3 py-2 text-sm font-semibold text-ink2 xl:px-4 shadow-[0_1px_2px_rgba(11,11,11,.03)] transition-colors hover:bg-[#FAFAF8] hover:text-ink ${FOCUS}`}
           >
             Falar com consultor
           </Link>
           <Link
             href={LOGIN_URL}
-            className={`inline-flex items-center rounded-xl border border-line2 bg-paper px-5 py-2 text-sm font-semibold text-ink shadow-[0_1px_2px_rgba(11,11,11,.03)] transition-colors hover:bg-[#FAFAF8] ${FOCUS}`}
+            className={`inline-flex items-center rounded-xl border border-line2 bg-paper px-3.5 py-2 text-sm font-semibold text-ink shadow-[0_1px_2px_rgba(11,11,11,.03)] transition-colors hover:bg-[#FAFAF8] xl:px-5 ${FOCUS}`}
           >
             Entrar
           </Link>
           <Link
             href={ASSINAR_URL}
-            className={`inline-flex items-center rounded-xl bg-brand-500 px-5 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-brand-600 ${FOCUS}`}
+            className={`inline-flex items-center rounded-xl bg-brand-500 px-3.5 py-2 text-sm font-semibold text-white shadow-sm xl:px-5 transition-colors hover:bg-brand-600 ${FOCUS}`}
           >
             {ASSINAR_CTA_LABEL}
           </Link>

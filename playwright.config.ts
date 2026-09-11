@@ -24,11 +24,30 @@ export default defineConfig({
     extraHTTPHeaders: {
       ...(process.env.E2E_SECRET ? { "x-e2e-token": process.env.E2E_SECRET } : {}),
     },
-    // Use the pre-installed Chromium to avoid needing network download
+    /**
+     * O caminho do navegador vem do AMBIENTE, e só dele.
+     *
+     * Aqui existia um caminho fixo com a versão embutida —
+     * `/root/.cache/ms-playwright/chromium-1194/chrome-linux/chrome` — como
+     * reserva. Ele reprovou o job `topo` no runner do GitHub em 06/09/2026, nas
+     * três larguras, com `Failed to launch chromium because executable doesn't
+     * exist`: no runner o navegador é instalado em `/home/runner/.cache`, e o
+     * caminho fixo apontava para um lugar que não existe naquela máquina.
+     *
+     * O defeito tinha duas metades: o caminho errado, e a VERSÃO chumbada num
+     * arquivo de configuração — quando o Playwright instala outra, a reserva
+     * deriva sozinha, sem ninguém mexer em nada. Sem `executablePath`, o próprio
+     * Playwright acha o navegador que ele instalou, em qualquer máquina, e as
+     * duas metades somem juntas.
+     *
+     * Quem precisa apontar um binário específico (este contêiner, por exemplo)
+     * exporta `PLAYWRIGHT_CHROMIUM_PATH` — ou `PLAYWRIGHT_BROWSERS_PATH`, que o
+     * Playwright já lê sozinho.
+     */
     launchOptions: {
-      executablePath:
-        process.env.PLAYWRIGHT_CHROMIUM_PATH ??
-        "/root/.cache/ms-playwright/chromium-1194/chrome-linux/chrome",
+      ...(process.env.PLAYWRIGHT_CHROMIUM_PATH
+        ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH }
+        : {}),
     },
     headless: true,
     trace: "retain-on-failure",

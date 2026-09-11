@@ -59,3 +59,77 @@ jobs:
 
       - name: Unit tests (inclui o teste arquitetural da Regra de Ouro)
         run: npm run test:unit
+
+  topo:
+    name: O topo do site nao encosta (largura medida)
+    runs-on: ubuntu-latest
+    # ─────────────────────────────────────────────────────────────────────────
+    # POR QUE ESTE JOB EXISTE, e ele custa ~3 minutos de CI de proposito.
+    #
+    # O convite "Fale com nossos consultores" quebrou o cabecalho em producao e
+    # chegou TRES VEZES na mesa do CEO no mesmo dia (05/09/2026). As travas que
+    # nasceram com aquele conserto leem TEXTO DE ARQUIVO — "tem borda", "tem
+    # whitespace-nowrap". Texto de arquivo NAO MEDE LARGURA: com as duas verdes,
+    # a fileira ainda encostava, com ZERO pixel de folga em 1024.
+    #
+    # Este job sobe o site de verdade e mede o HTML renderizado em 1024, 1280 e
+    # 1440. E a unica coisa no repositorio que reprova um topo apertado.
+    #
+    # Ele roda SOZINHO, e nao dentro do job de cima, porque precisa de build +
+    # navegador: juntar os dois faria toda proposta pagar 3 minutos a mais,
+    # inclusive as que nao tocam em tela nenhuma.
+    # ─────────────────────────────────────────────────────────────────────────
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Build
+        run: npm run build
+        env:
+          DATABASE_URL: postgresql://build:build@127.0.0.1:5432/build
+          NEXTAUTH_SECRET: build-only-secret
+          ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef
+
+      # BASE_URL preenchido desliga o `webServer` do playwright.config, que
+      # subiria `npm run dev`. A medicao tem de acontecer contra o MESMO build de
+      # producao que vai para o ar — foi contra ele que os numeros do PR foram
+      # medidos, e dev e producao nao sao a mesma pagina.
+      - name: Subir o site (build de producao)
+        run: |
+          npm run start &
+          for i in $(seq 1 60); do
+            curl -sf -o /dev/null http://127.0.0.1:3000/site && exit 0
+            sleep 2
+          done
+          echo "::error::o site nao subiu em 120s"; exit 1
+        env:
+          PORT: 3000
+          DATABASE_URL: postgresql://build:build@127.0.0.1:5432/build
+          NEXTAUTH_SECRET: build-only-secret
+          ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef
+
+      - name: Medir o topo em 1024 / 1280 / 1440
+        run: npx playwright test tests/qa/specs/topo-nao-encosta.spec.ts --project=chromium --reporter=line
+        env:
+          BASE_URL: http://127.0.0.1:3000
+
+      - name: Guardar a prova quando reprova
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: topo-reprovado
+          path: test-results/
+          retention-days: 7
