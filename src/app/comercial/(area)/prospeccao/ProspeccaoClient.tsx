@@ -26,6 +26,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ReceberLista } from "./ReceberLista";
+import { EnriquecerModal } from "./EnriquecerModal";
 
 const ROTA = "/api/admin/sala-de-vendas/prospeccao";
 
@@ -76,9 +77,16 @@ interface Interruptor {
   motivo: string | null;
 }
 
+interface Paginacao {
+  linhas: Lote[];
+  total: number;
+  pagina: number;
+  porPagina: number;
+}
+
 interface Dados {
   fila: Fila;
-  lotes: Lote[];
+  lotes: Paginacao;
   interruptor: Interruptor;
   canalPronto: boolean;
 }
@@ -91,6 +99,7 @@ type Estado =
 
 export function ProspeccaoClient() {
   const [estado, setEstado] = useState<Estado>({ fase: "carregando" });
+  const [modalEnriquecerAberto, setModalEnriquecerAberto] = useState(false);
   const [tentativa, setTentativa] = useState(0);
   const [ocupado, setOcupado] = useState(false);
   const [aviso, setAviso] = useState<string | null>(null);
@@ -352,9 +361,17 @@ export function ProspeccaoClient() {
 
       {/* ── OS LOTES ── */}
       <section>
-        <h2 className="text-[15px] font-semibold text-ink">Lotes</h2>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-[15px] font-semibold text-ink">Lotes</h2>
+          <button
+            onClick={() => setModalEnriquecerAberto(true)}
+            className="rounded-lg border border-line px-3 py-1.5 text-[12.5px] font-semibold text-ink transition-colors hover:bg-canvas"
+          >
+            Enriquecer dados
+          </button>
+        </div>
         <ul className="mt-3 space-y-2">
-          {lotes.map((l) => (
+          {lotes.linhas.map((l) => (
             <li key={l.id} className="rounded-xl border border-line bg-paper p-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -392,7 +409,7 @@ export function ProspeccaoClient() {
               </div>
             </li>
           ))}
-          {lotes.length === 0 && (
+          {lotes.linhas.length === 0 && (
             <li className="text-[12.5px] text-muted">
               Nenhum lote carregado. A lista entra por importação conferida, em
               partes — lote grande é o que ninguém confere antes de liberar.
@@ -400,6 +417,11 @@ export function ProspeccaoClient() {
           )}
         </ul>
       </section>
+
+      <EnriquecerModal
+        aberto={modalEnriquecerAberto}
+        onFechar={() => setModalEnriquecerAberto(false)}
+      />
     </div>
   );
 }

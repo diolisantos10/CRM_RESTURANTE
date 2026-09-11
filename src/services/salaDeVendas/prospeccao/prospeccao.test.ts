@@ -761,14 +761,19 @@ describe("⭐⭐ o saldo é o da janela de 24h, não o do dia civil", () => {
     expect(fila.liberados.length).toBeGreaterThan(0);
   });
 
-  it("⛔ e o teto da HORA continua valendo por cima da janela", async () => {
-    // A janela de 24h com saldo de sobra não autoriza rajada: 2.000 numa hora
-    // queima o número tão rápido quanto 2.500 num dia.
-    const { db } = dbDeFila(LIGADA, [ITEM], 0, null, { nas24h: 10, naHora: 200 });
+  it("⛔ NÃO existe mais teto por hora — decisão do CEO, 10/09/2026", async () => {
+    // O teto de 200/hora foi removido: não foi autorizado e não foi
+    // apresentado pela Meta (ver `freioDeRitmo.ts`, TETO_DURO_POR_DIA). O
+    // contrato vigente é só a janela móvel de 24h da Meta (2.000) e o limite
+    // diário configurado — mais as travas de segurança contra falha sistêmica
+    // (concorrência, retentativa, resposta a rate limit), que são de OUTRA
+    // natureza e não um teto comercial por hora. Uma rajada alta na última
+    // hora, sozinha, não pode mais barrar a fila.
+    const { db } = dbDeFila(LIGADA, [ITEM], 0, null, { nas24h: 10, naHora: 500 });
 
     const fila = await montarFilaDeProspeccao(db, { canalPronto: true, agora: AGORA });
 
-    expect(fila.liberados).toHaveLength(0);
-    expect(fila.motivoDaFilaVazia?.toLowerCase()).toContain("hora");
+    expect(fila.saldoDaJanela).toBe(1990); // 2000 - 10 da janela de 24h; a hora não conta
+    expect(fila.liberados.length).toBeGreaterThan(0);
   });
 });
