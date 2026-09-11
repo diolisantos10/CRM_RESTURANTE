@@ -170,6 +170,7 @@ interface LeadParaAbordar {
   lastContactedAt: Date | null;
   restaurante: string | null;
   fonte: string | null;
+  cidade: string | null;
 }
 
 /**
@@ -333,12 +334,16 @@ export async function abordarLead(
 ): Promise<ResultadoDaAbordagem> {
   const agora = params.agora ?? new Date();
 
+  // ⛔ CORREÇÃO, 11/09/2026 — `cidade` faltava neste `select`. `montarParametros`
+  // sempre recebia `lead.cidade === undefined`, e todo modelo cuja {{2}} pede
+  // cidade recusava TODO contato como `semDadoParaOModelo`, mesmo para quem
+  // tinha cidade cadastrada — a coluna existia no banco e nunca chegava aqui.
   const lead = (await db.siteLead.findUnique({
     where: { id: params.leadId },
     select: {
       id: true, nome: true, whatsapp: true, optOutAt: true,
       consentAt: true, createdAt: true, lastContactedAt: true,
-      restaurante: true, fonte: true,
+      restaurante: true, fonte: true, cidade: true,
     },
   })) as LeadParaAbordar | null;
 
