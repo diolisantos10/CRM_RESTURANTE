@@ -28,8 +28,11 @@
  *
  * Toda a família de SiteLead (mensagens, conversas, qualificações,
  * tarefas/compromissos/propostas, handoffs, fatores de score, avaliações de
- * QA e critérios, inscrições em cadência) e toda a Base fria (itens, lotes,
- * importações). Nada mais.
+ * QA e critérios, inscrições em cadência), toda a Base fria (itens, lotes,
+ * importações) e as pendências do Dioli Connect vinculadas a esses leads
+ * (`connect_pendencias`, filtradas por `produto = 'foocci'` — ajuste do CEO,
+ * 11/09/2026: incluir o que está vinculado, nunca tocar em pendência de outro
+ * produto). Nada mais.
  *
  * ── O QUE FICA, PORQUE NUNCA É TOCADO ───────────────────────────────────────
  *
@@ -77,6 +80,7 @@ const ORDEM_DE_RESET = [
   "lead_tarefas",
   "lead_score_fatores",
   "lead_mensagens",
+  "connect_pendencias",
   '"SiteLeadInteraction"',
   '"SiteLead"',
   "itens_de_prospeccao",
@@ -84,13 +88,55 @@ const ORDEM_DE_RESET = [
   "importacoes_de_leads",
 ] as const;
 
+/**
+ * ⭐ `connect_pendencias` É COMPARTILHADA ENTRE PRODUTOS — ajuste do CEO,
+ * 11/09/2026: "incluir as pendências vinculadas aos SiteLead removidos" e "não
+ * apagar pendências de outros produtos ou conversas não relacionadas".
+ *
+ * A tabela não tem `leadId` nem chave estrangeira — `conversa` é uma STRING de
+ * correlação (`docs`/schema: "a conversa DENTRO do produto; no Foocci, o
+ * SiteLead.id"), e o mesmo livro serve o CityJobs e qualquer outro produto que
+ * implemente o conector do Dioli Connect (`PRODUTO_ID` em cada um).
+ *
+ * `produto = 'foocci'` (a constante `PRODUTO_ID` de
+ * `src/services/connect/cadastro.ts`) é o filtro exato: só o Foocci escreve
+ * `produto: 'foocci'`, e só o Foocci usa `SiteLead.id` como `conversa` — não
+ * há outra origem de linha com esse valor de `produto`. Filtrar por ele é
+ * filtrar por "vinculada a um SiteLead nosso", sem tocar em nenhum outro
+ * produto nem em conversa não relacionada.
+ */
+const PRODUTO_FOOCCI = "foocci";
+
+/** A cláusula WHERE de cada tabela — vazia (tudo sai) salvo as listadas aqui. */
+const ONDE: Partial<Record<(typeof ORDEM_DE_RESET)[number], string>> = {
+  connect_pendencias: `WHERE "produto" = '${PRODUTO_FOOCCI}'`,
+};
+
+function ondeDaTabela(tabela: (typeof ORDEM_DE_RESET)[number]): string {
+  return ONDE[tabela] ?? "";
+}
+
 /** O nome de exibição, sem aspas — para relatório, não para SQL. */
 function rotulo(tabela: string): string {
   return tabela.replace(/"/g, "");
 }
 
 /** Tabelas que PROVAM a preservação — contadas antes e depois, e têm de bater. */
-const TABELAS_PRESERVADAS = ["internal_users", "modelos_de_vendas", "cadencias", "motivos_de_perda"];
+/**
+ * Tabelas/recortes que PROVAM a preservação — contados antes e depois, e têm
+ * de bater. `connect_pendencias (outros produtos)` prova especificamente que
+ * o filtro por `produto` não vazou para fora do Foocci.
+ */
+const TABELAS_PRESERVADAS: { label: string; sql: string }[] = [
+  { label: "internal_users", sql: "internal_users" },
+  { label: "modelos_de_vendas", sql: "modelos_de_vendas" },
+  { label: "cadencias", sql: "cadencias" },
+  { label: "motivos_de_perda", sql: "motivos_de_perda" },
+  {
+    label: "connect_pendencias (outros produtos)",
+    sql: `connect_pendencias WHERE "produto" != '${PRODUTO_FOOCCI}'`,
+  },
+];
 
 // ═══════════════════════════════════════════════════════════════════════════
 // OS PORTÕES
@@ -131,8 +177,10 @@ const FRASE_DE_CONFIRMACAO = "APAGAR TODOS OS LEADS COMERCIAIS";
 // CONTAGEM — dry-run, somente leitura
 // ═══════════════════════════════════════════════════════════════════════════
 
-async function contar(tabela: string): Promise<number> {
-  const r = await prisma.$queryRawUnsafe<{ n: bigint }[]>(`SELECT COUNT(*)::bigint AS n FROM ${tabela}`);
+async function contar(tabela: string, onde = ""): Promise<number> {
+  const r = await prisma.$queryRawUnsafe<{ n: bigint }[]>(
+    `SELECT COUNT(*)::bigint AS n FROM ${tabela} ${onde}`,
+  );
   return Number(r[0]?.n ?? 0);
 }
 
@@ -147,11 +195,15 @@ async function simular(): Promise<Simulacao> {
   const passos: Simulacao["passos"] = [];
   let ordem = 0;
   for (const tabela of ORDEM_DE_RESET) {
-    passos.push({ ordem: ++ordem, tabela: rotulo(tabela), linhas: await contar(tabela) });
+    passos.push({
+      ordem: ++ordem,
+      tabela: rotulo(tabela),
+      linhas: await contar(tabela, ondeDaTabela(tabela)),
+    });
   }
 
   const preservadas: Record<string, number> = {};
-  for (const t of TABELAS_PRESERVADAS) preservadas[t] = await contar(t);
+  for (const t of TABELAS_PRESERVADAS) preservadas[t.label] = await contar(t.sql);
 
   const { pausada, detalhe: detalheProspeccao } = await prospeccaoEstaPausada();
   const envioDesligado = envioEstaDesligado();
@@ -214,7 +266,9 @@ interface Exportacao {
 async function exportar(): Promise<Exportacao> {
   const dados: Record<string, unknown[]> = {};
   for (const tabela of ORDEM_DE_RESET) {
-    const linhas = await prisma.$queryRawUnsafe<unknown[]>(`SELECT * FROM ${tabela}`);
+    const linhas = await prisma.$queryRawUnsafe<unknown[]>(
+      `SELECT * FROM ${tabela} ${ondeDaTabela(tabela)}`,
+    );
     dados[rotulo(tabela)] = ordenarLinhas(linhas).map(canonicalizar);
   }
 
@@ -291,14 +345,14 @@ async function executar(pedido: { confirmar: string; sha256DoBackup: string }): 
   }
 
   const preservadasAntes: Record<string, number> = {};
-  for (const t of TABELAS_PRESERVADAS) preservadasAntes[t] = await contar(t);
+  for (const t of TABELAS_PRESERVADAS) preservadasAntes[t.label] = await contar(t.sql);
 
   const linhasPorTabela: Record<string, number> = {};
 
   await prisma.$transaction(
     async (tx) => {
       for (const tabela of ORDEM_DE_RESET) {
-        const apagadas = await tx.$executeRawUnsafe(`DELETE FROM ${tabela}`);
+        const apagadas = await tx.$executeRawUnsafe(`DELETE FROM ${tabela} ${ondeDaTabela(tabela)}`);
         linhasPorTabela[rotulo(tabela)] = apagadas;
       }
 
@@ -323,7 +377,7 @@ async function executar(pedido: { confirmar: string; sha256DoBackup: string }): 
   );
 
   const preservadasDepois: Record<string, number> = {};
-  for (const t of TABELAS_PRESERVADAS) preservadasDepois[t] = await contar(t);
+  for (const t of TABELAS_PRESERVADAS) preservadasDepois[t.label] = await contar(t.sql);
 
   return {
     apagadoEm: new Date().toISOString(),
@@ -405,11 +459,11 @@ async function main() {
       p(`\n   ── PRESERVADAS, ANTES → DEPOIS (têm de bater) ──`);
       let todasBateram = true;
       for (const t of TABELAS_PRESERVADAS) {
-        const antes = r.preservadasAntes[t];
-        const depois = r.preservadasDepois[t];
+        const antes = r.preservadasAntes[t.label];
+        const depois = r.preservadasDepois[t.label];
         const bateu = antes === depois;
         if (!bateu) todasBateram = false;
-        p(`        ${bateu ? "✅" : "⛔"} ${t.padEnd(28)} ${antes} → ${depois}`);
+        p(`        ${bateu ? "✅" : "⛔"} ${t.label.padEnd(32)} ${antes} → ${depois}`);
       }
       p(todasBateram ? "\n✅ RESET CONCLUÍDO — preservação confirmada." : "\n⛔ ALERTA — algo preservado mudou.");
     } catch (err) {
