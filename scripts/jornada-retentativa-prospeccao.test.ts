@@ -48,6 +48,9 @@ const prisma = new PrismaClient();
 const AGORA = new Date("2026-09-09T17:00:00Z");
 
 const EMAIL_DO_TESTE = "jornada-retentativa@teste.foocci";
+const PHONE_NUMBER_ID_DO_TESTE = "000000000009999";
+const NOME_DO_MODELO_DO_TESTE = "foocci_abordagem_inicial";
+const CORPO_DO_MODELO_DO_TESTE = "Olá, {{1}}! Esta é uma abordagem sintética da jornada.";
 const ambiente = { ...process.env };
 
 let usuarioId = "";
@@ -58,12 +61,34 @@ let leadOutraFonteId = "";
 let wamidDoEnvioReal = "";
 
 beforeAll(async () => {
+  process.env.FOOCCI_SALES_PHONE_NUMBER_ID = PHONE_NUMBER_ID_DO_TESTE;
+  process.env.FOOCCI_SDR_MODELO_ABORDAGEM = NOME_DO_MODELO_DO_TESTE;
+  process.env.FOOCCI_SDR_MODELO_IDIOMA = "pt_BR";
+  process.env.FOOCCI_SDR_MODELO_VARIAVEIS = "1";
+
   await prisma.itemDeProspeccao.deleteMany({});
   await prisma.loteDeProspeccao.deleteMany({});
   await prisma.prospeccaoConfig.deleteMany({});
   await prisma.leadMensagem.deleteMany({});
   await prisma.siteLead.deleteMany({});
   await prisma.internalUser.deleteMany({ where: { email: EMAIL_DO_TESTE } });
+  await prisma.modeloDeVendas.deleteMany({ where: { phoneNumberId: PHONE_NUMBER_ID_DO_TESTE } });
+
+  // `abordarLead` falha fechado se o corpo aprovado não estiver persistido.
+  // A jornada cadastra o mesmo contrato que a produção consulta para provar
+  // também o texto humano integral gravado na conversa.
+  await prisma.modeloDeVendas.create({
+    data: {
+      phoneNumberId: PHONE_NUMBER_ID_DO_TESTE,
+      wabaId: "waba-jornada-retentativa",
+      nome: NOME_DO_MODELO_DO_TESTE,
+      idioma: "pt_BR",
+      categoria: "MARKETING",
+      situacao: "APPROVED",
+      variaveis: 1,
+      corpo: CORPO_DO_MODELO_DO_TESTE,
+    },
+  });
 
   const usuario = await prisma.internalUser.create({
     data: { email: EMAIL_DO_TESTE, nome: "Jornada CI — retentativa", role: "GERENTE_DEPARTAMENTO" },
@@ -113,6 +138,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await prisma.modeloDeVendas.deleteMany({ where: { phoneNumberId: PHONE_NUMBER_ID_DO_TESTE } });
   await prisma.internalUser.deleteMany({ where: { email: EMAIL_DO_TESTE } });
   await prisma.$disconnect();
 });
@@ -134,6 +160,7 @@ beforeEach(() => {
   process.env.FOOCCI_SDR_MODELO_ABORDAGEM = "foocci_abordagem_inicial";
   process.env.FOOCCI_SDR_MODELO_IDIOMA = "pt_BR";
   process.env.FOOCCI_SDR_MODELO_VARIAVEIS = "1";
+  process.env.FOOCCI_SALES_PHONE_NUMBER_ID = PHONE_NUMBER_ID_DO_TESTE;
 });
 
 afterEach(() => {
@@ -171,6 +198,10 @@ describe("Jornada — recuperar leads materializados sem mensagem", () => {
     expect(mensagens).toHaveLength(1);
     expect(mensagens[0]!.status).toBe("ENVIADA");
     expect(mensagens[0]!.waMessageId).toEqual(expect.stringContaining("wamid.JORNADA.RETENTATIVA"));
+    expect(mensagens[0]!.texto).toBe(
+      "Olá, Cantina Sintética Um! Esta é uma abordagem sintética da jornada.",
+    );
+    expect(mensagens[0]!.texto).not.toContain("[modelo:");
     wamidDoEnvioReal = mensagens[0]!.waMessageId!;
     expect(mensagens[0]!.autorUserId).toBe(usuarioId);
   });

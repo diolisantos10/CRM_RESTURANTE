@@ -46,6 +46,7 @@ import {
 } from "@/services/foocci-sdr/LeadContactSafety";
 import { contarAbordagensDeHoje } from "./prospeccao/selecao";
 import { parametrosDoEnvioAgora } from "@/services/foocci-sdr/modelosDaMeta";
+import { modeloAprovadoDaSala } from "@/services/foocci-sdr/sincronizarModelos";
 import {
   canalDeVendasPronto,
   enviarModeloDeVendas,
@@ -159,6 +160,25 @@ export function saudacaoDoLead(lead: {
 export function resumoDoModelo(modelo: ModeloDeAbordagem): string {
   const vars = modelo.parametros.length ? ` (${modelo.parametros.join(" · ")})` : "";
   return `[modelo: ${modelo.nome}]${vars}`;
+}
+
+/**
+ * Renderiza palavra por palavra o corpo aprovado que a Meta enviará.
+ * O nome técnico do modelo continua em `templateNome`; `texto` é reservado ao
+ * conteúdo humano que apareceu no WhatsApp.
+ */
+export function renderizarCorpoDoModelo(
+  corpo: string,
+  parametros: string[],
+): { ok: true; texto: string } | { ok: false; falta: string } {
+  const texto = corpo.replace(/\{\{(\d+)\}\}/g, (marcador, numero: string) => {
+    const valor = parametros[Number(numero) - 1];
+    return valor == null || valor.trim() === "" ? marcador : valor;
+  });
+
+  const pendente = texto.match(/\{\{\d+\}\}/)?.[0];
+  if (pendente) return { ok: false, falta: `não foi possível renderizar ${pendente} do modelo aprovado` };
+  return { ok: true, texto };
 }
 
 interface LeadParaAbordar {
@@ -499,10 +519,23 @@ export async function abordarLead(
     parametros: montagem.parametros,
   };
 
+  const modeloPersistido = await modeloAprovadoDaSala(db, modelo.nome, modelo.idioma);
+  if (!modeloPersistido?.corpo) {
+    return {
+      abordou: false,
+      motivo: "semDadoParaOModelo",
+      detalhe: "o corpo integral do modelo aprovado não está sincronizado; nada foi enviado",
+    };
+  }
+  const textoIntegral = renderizarCorpoDoModelo(modeloPersistido.corpo, modelo.parametros);
+  if (!textoIntegral.ok) {
+    return { abordou: false, motivo: "semDadoParaOModelo", detalhe: textoIntegral.falta };
+  }
+
   // ── Trava 3: gravar antes de enviar ────────────────────────────────────
   const gravada = await registrarSaida(db, {
     leadId: lead.id,
-    texto: resumoDoModelo(modelo),
+    texto: textoIntegral.texto,
     autor: params.autor,
     autorUserId: params.autorUserId,
     tipo: "TEMPLATE",

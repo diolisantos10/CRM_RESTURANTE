@@ -12,15 +12,20 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { montarParametros, abordarLead, primeiroNome, saudacaoDoLead, resumoDoModelo, modeloConfigurado } from "./abordar";
+import { montarParametros, abordarLead, primeiroNome, saudacaoDoLead, resumoDoModelo, modeloConfigurado, renderizarCorpoDoModelo } from "./abordar";
 
 const enviarModelo = vi.hoisted(() => vi.fn());
 const canalPronto = vi.hoisted(() => vi.fn(() => true));
+const modeloAprovado = vi.hoisted(() => vi.fn());
 
 vi.mock("@/services/foocci-sdr/FoocciSalesChannel", async (original) => {
   const real = await original<typeof import("@/services/foocci-sdr/FoocciSalesChannel")>();
   return { ...real, enviarModeloDeVendas: enviarModelo, canalDeVendasPronto: canalPronto };
 });
+
+vi.mock("@/services/foocci-sdr/sincronizarModelos", () => ({
+  modeloAprovadoDaSala: modeloAprovado,
+}));
 
 const ambiente = { ...process.env };
 
@@ -144,6 +149,21 @@ beforeEach(() => {
   enviarModelo.mockReset();
   enviarModelo.mockResolvedValue({ ok: true });
   canalPronto.mockReturnValue(true);
+  modeloAprovado.mockImplementation(async () => {
+    const n = Number(process.env.FOOCCI_SDR_MODELO_VARIAVEIS || "1");
+    const corpos: Record<number, string> = {
+      1: "Olá, {{1}}! Aqui é a Foocci.",
+      2: "Olá, {{1}}! Estou falando com o {{2}}.",
+      3: "Olá, {{1}}! Estou falando com o {{2}} porque encontramos vocês em {{3}}.",
+    };
+    return {
+      nome: "foocci_abordagem_inicial",
+      idioma: "pt_BR",
+      situacao: "APPROVED",
+      variaveis: n,
+      corpo: corpos[n] ?? "Olá, {{1}}! Aqui é a Foocci.",
+    };
+  });
   process.env.FOOCCI_SDR_MODELO_ABORDAGEM = "foocci_abordagem_inicial";
   process.env.FOOCCI_SDR_MODELO_IDIOMA = "pt_BR";
 });
@@ -343,6 +363,45 @@ describe("a configuração do modelo", () => {
     // Bolha vazia na tela do vendedor é pior que uma que diz o nome do modelo.
     expect(resumoDoModelo({ nome: "foocci_abordagem_inicial", idioma: "pt_BR", parametros: ["Marina"] }))
       .toBe("[modelo: foocci_abordagem_inicial] (Marina)");
+  });
+
+  it("grava na conversa exatamente o texto renderizado que o cliente recebe", async () => {
+    const { db, gravadas } = banco();
+    const r = await abordarLead(db, { leadId: "L1", autorUserId: "u1", agora: AGORA });
+
+    expect(r.abordou, JSON.stringify(r)).toBe(true);
+    expect(gravadas[0]?.texto).toBe("Olá, Marina! Aqui é a Foocci.");
+    expect(gravadas[0]?.templateNome).toBe("foocci_abordagem_inicial");
+  });
+
+  it("recusa antes do envio quando o corpo integral não está sincronizado", async () => {
+    modeloAprovado.mockResolvedValue(null);
+    const { db, gravadas } = banco();
+    const r = await abordarLead(db, { leadId: "L1", autorUserId: "u1", agora: AGORA });
+
+    expect(r.abordou).toBe(false);
+    expect(gravadas).toHaveLength(0);
+    expect(enviarModelo).not.toHaveBeenCalled();
+  });
+});
+
+describe("texto integral do template", () => {
+  it("substitui todas as variáveis na ordem aprovada", () => {
+    const r = renderizarCorpoDoModelo(
+      "Olá, {{1}}! Estou falando com o {{2}} porque encontramos vocês em {{3}}.",
+      ["Kiyota Sushi", "Kiyota Sushi", "Google"],
+    );
+    expect(r).toEqual({
+      ok: true,
+      texto: "Olá, Kiyota Sushi! Estou falando com o Kiyota Sushi porque encontramos vocês em Google.",
+    });
+  });
+
+  it("não grava texto parcial quando falta uma variável", () => {
+    expect(renderizarCorpoDoModelo("Olá {{1}}, origem {{2}}", ["João"])).toEqual({
+      ok: false,
+      falta: "não foi possível renderizar {{2}} do modelo aprovado",
+    });
   });
 });
 
