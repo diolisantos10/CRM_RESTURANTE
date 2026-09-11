@@ -246,8 +246,13 @@ export async function montarFilaDeProspeccao(
   };
 }
 
-/** Meta de elegíveis que a conferência tenta confirmar antes de parar de escanear. */
-const ALVO_DE_ELEGIVEIS_NA_CONFERENCIA = 2000;
+/**
+ * Meta de elegíveis que a conferência tenta confirmar antes de parar de
+ * escanear — e também o TETO do `?alvo=` público em `route.ts`. Exportada para
+ * que o teto da rota e o padrão da varredura sejam o mesmo número, e não dois
+ * que alguém esquece de manter iguais.
+ */
+export const ALVO_DE_ELEGIVEIS_NA_CONFERENCIA = 2000;
 
 /** Quantos itens PENDENTE a conferência lê do banco por página, ao escanear a Base fria. */
 const TAMANHO_DA_PAGINA_NA_CONFERENCIA = 500;
@@ -259,23 +264,35 @@ export interface ResultadoDaConferencia {
   /** Quantos itens estão PENDENTE na Base fria agora. Contagem exata, direto do banco. */
   pendentes: number;
   /**
-   * Quantos dos itens escaneados avaliaram como elegíveis pelas MESMAS regras da
-   * rodada (`avaliarAbordagemDeProspeccao`). Quando `varreuTudo` é `false`, este
-   * número é um PISO — "pelo menos isso" — e não o total real.
+   * Quantos dos itens escaneados são elegíveis PELAS REGRAS DO CONTATO — opt-out,
+   * telefone, base legal, histórico, tentativas, descanso, janela de horário —
+   * SE a operação estivesse ativada. Não é o que pode ser abordado agora: é o
+   * que o contato em si permite, isolado do estado do canal e do interruptor
+   * (ver o comentário grande abaixo). Quando `varreuTudo` é `false`, este número
+   * é um PISO — "pelo menos isso" — e não o total real.
    */
-  elegiveis: number;
-  /** Quantos dos itens escaneados avaliaram como barrados. */
+  elegiveisSeAtivar: number;
+  /** Quantos dos itens escaneados foram barrados PELAS REGRAS DO CONTATO — nunca por canal ou interruptor, que aqui são forçados como se estivessem ligados. */
   barrados: number;
   /** Quantos itens PENDENTE foram de fato lidos e avaliados nesta conferência. */
   itensAvaliados: number;
   /**
    * `true` só quando a varredura esgotou os PENDENTE sem nunca atingir
-   * `alvoDeElegiveis` — `elegiveis` é então o total exato. `false` quando ela
-   * parou ao confirmar a meta: sobraram pendentes nunca avaliados.
+   * `alvoDeElegiveis` — `elegiveisSeAtivar` é então o total exato. `false`
+   * quando ela parou ao confirmar a meta: sobraram pendentes nunca avaliados.
    */
   varreuTudo: boolean;
   /** A meta que a varredura tenta confirmar (2.000, salvo override explícito). */
   alvoDeElegiveis: number;
+
+  // ── ESTADO OPERACIONAL — fatos de agora, não a hipótese usada acima ────────
+  /** `FOOCCI_SALES_PHONE_NUMBER_ID`/`FOOCCI_SALES_ACCESS_TOKEN` presentes? */
+  canalConfigurado: boolean;
+  /** `FOOCCI_SDR_SEND_ENABLED === "true"`? A chave que hoje está desligada. */
+  envioAutorizado: boolean;
+  /** `outboundLigado` e não `pausadoEm`, agora — não a hipótese acima. */
+  prospeccaoLigada: boolean;
+
   usadosHoje: number;
   tetoDoDia: number;
   /** `max(0, tetoDoDia - usadosHoje)` — o que falta do teto contado pelo dia civil. */
@@ -283,8 +300,15 @@ export interface ResultadoDaConferencia {
   usadosNaJanela: number;
   /** Quanto ainda cabe na janela de 24h da Meta — ver o comentário em `FilaDeProspeccao`. */
   saldoDaJanela: number;
-  /** `min(elegiveis, saldoDiario, saldoDaJanela)`, nunca negativo. */
-  capacidadeReal: number;
+  /** `min(elegiveisSeAtivar, saldoDiario, saldoDaJanela)` SE a operação fosse ativada agora. */
+  capacidadeAoAtivar: number;
+  /**
+   * A capacidade REAL, agora — `capacidadeAoAtivar` se canal, envio e
+   * prospecção estiverem TODOS ligados; **zero** caso contrário. É este número,
+   * e não `capacidadeAoAtivar`, que responde "quantos serão abordados se eu não
+   * mudar nada".
+   */
+  capacidadeOperacionalAgora: number;
   /** Os primeiros até 50 itens avaliados, na ordem real da fila. AMOSTRA — não a lista inteira. */
   previaAmostral: CandidatoAAbordagem[];
 }
@@ -292,23 +316,51 @@ export interface ResultadoDaConferencia {
 /**
  * A CONFERÊNCIA — quantos contatos são de fato elegíveis agora, sem tocar em nada.
  *
- * ── ⚠️ ESTA FUNÇÃO NÃO ESCREVE, E FUNCIONA COM TUDO PAUSADO ──────────────────
+ * ── ⛔⛔ CORREÇÃO CIRÚRGICA, 11/09/2026 — "FUNCIONA COM O ENVIO DESLIGADO" ERA
+ * MENTIRA NO CÓDIGO ANTERIOR ─────────────────────────────────────────────────
  *
- * `montarFilaDeProspeccao` devolve fila vazia quando a prospecção está desligada
- * ou pausada — está certo para ELA, porque ela é o primeiro passo de uma rodada
- * de verdade, e uma rodada desligada não deve abordar ninguém. Mas essa mesma
- * regra torna `montarFilaDeProspeccao` inútil para conferir a base ANTES de
- * ligar: com o interruptor desligado, ela sempre devolveria zero, e a pergunta
- * "quantos contatos elegíveis eu realmente tenho?" ficaria sem resposta até o
- * dono já ter ligado a prospecção — exatamente o momento errado para descobrir.
+ * A primeira versão desta função recebia `canalPronto` de quem chamava — a
+ * rota passava `canalDeVendasPronto()`, que exige `FOOCCI_SDR_SEND_ENABLED`. Com
+ * a chave desligada (o estado de hoje), `avaliarAbordagemDeProspeccao` barrava
+ * **todo mundo** como `CANAL_INDISPONIVEL`, e a tela mostraria zero elegíveis —
+ * não porque os contatos fossem ruins, mas porque a pergunta errada estava
+ * sendo feita ao portão. A auditoria pediu exatamente isto de volta: "a
+ * conferência afirma funcionar com o envio desligado, mas isso não é verdade no
+ * código atual."
  *
- * Esta função não olha `outboundLigado` nem `pausadoEm`, e não pára se o freio de
- * ritmo disser que o dia já está travado: ela sempre AVALIA os pendentes contra
- * `avaliarAbordagemDeProspeccao` — a mesma função, com os mesmos argumentos que
- * `montarFilaDeProspeccao` usa — e deixa os números (`saldoDiario`, `saldoDaJanela`)
- * contarem a história de quanto disso cabe agora. Dois parsers divergindo é o
- * defeito que este arquivo existe para evitar; por isso ela não reimplementa a
- * decisão, só decide quando parar de olhar.
+ * O DEFEITO ERA MISTURAR DUAS PERGUNTAS DIFERENTES NUMA SÓ:
+ *
+ *   1. ELEGIBILIDADE DO CONTATO — opt-out, telefone, base legal declarada,
+ *      histórico, tentativas, descanso, janela de horário. Propriedades DO
+ *      CONTATO: não mudam se alguém liga ou desliga o envio às 15h.
+ *   2. ESTADO OPERACIONAL — canal configurado, envio autorizado, prospecção
+ *      ligada/pausada, saldo diário, saldo da janela da Meta. Propriedades DO
+ *      MOMENTO: podem mudar a qualquer hora, sem tocar em nenhum contato.
+ *
+ * A CORREÇÃO NÃO CRIA UM SEGUNDO PORTÃO. Ela chama o MESMO
+ * `avaliarAbordagemDeProspeccao` que `montarFilaDeProspeccao` usa, com
+ * `canalPronto: true` e `prospeccaoLiberada: true` FIXOS — como se a operação já
+ * estivesse ativada. Isso não afrouxa nada: força só os DOIS gates
+ * operacionais do portão a nunca disparar, deixando passar exclusivamente os
+ * motivos de bloqueio que são do CONTATO (`LEAD_OPT_OUT`,
+ * `PROSPECCAO_SEM_BASE_LEGAL`, `HISTORICO_DESCONHECIDO`, `TETO_DE_TENTATIVAS`,
+ * `DESCANSO_ATIVO`, `FORA_DA_JANELA`). O resultado (`elegiveisSeAtivar`,
+ * `barrados`) responde "este contato pode ser abordado, quando a operação
+ * estiver ligada?" — e é exatamente a pergunta que faz sentido conferir com
+ * tudo desligado.
+ *
+ * O ESTADO OPERACIONAL é lido À PARTE — `canalConfigurado`/`envioAutorizado`
+ * vêm de quem chama (a rota, que já sabe ler `isFoocciSalesChannelConfigured`/
+ * `isFoocciSdrSendEnabled`), `prospeccaoLigada` vem do `ProspeccaoConfig` que
+ * esta função já lê. `capacidadeOperacionalAgora` só é maior que zero quando OS
+ * TRÊS estão de pé — é essa combinação que prova, em teste, que a conferência
+ * devolve `capacidadeOperacionalAgora: 0` sempre que `FOOCCI_SDR_SEND_ENABLED`
+ * estiver desligado, sem depender de vasculhar cada contato de novo.
+ *
+ * `montarFilaDeProspeccao` continua devolvendo fila vazia com a prospecção
+ * pausada — está certo para ELA, que é o primeiro passo de uma rodada de
+ * verdade. Esta função nunca olha `outboundLigado`/`pausadoEm` para decidir SE
+ * avalia — só para reportar `prospeccaoLigada` como um fato a mais.
  *
  * ── POR QUE PAGINAR EM VEZ DE PEGAR OS 50 PRIMEIRO ────────────────────────────
  *
@@ -324,11 +376,22 @@ export interface ResultadoDaConferencia {
  * mesmo tempo e mudar `situacao` de itens no meio da varredura, o pior caso é
  * pular ou reler um item — aceitável aqui, e não vale a complexidade extra de
  * paginação por cursor para um número que já nasce com margem (a meta é 2.000).
+ *
+ * ⚠️ `alvoDeElegiveis` NÃO é validado aqui contra um teto — esta função é
+ * chamada só por código do servidor (a rota, os testes). Quem expõe um `?alvo=`
+ * público (`route.ts`) é quem tem de limitá-lo antes de repassar: uma varredura
+ * arbitrariamente grande pedida por URL é problema da borda pública, não desta
+ * função interna.
  */
 export async function conferirElegibilidadeReal(
   db: Cliente,
-  opcoes: { canalPronto: boolean; agora?: Date; alvoDeElegiveis?: number } = {
-    canalPronto: false,
+  opcoes: {
+    /** O canal de vendas está configurado (`FOOCCI_SALES_PHONE_NUMBER_ID`/`_ACCESS_TOKEN`)? Fato de agora — não afeta `elegiveisSeAtivar`, só `capacidadeOperacionalAgora`. */
+    canalConfigurado: boolean;
+    /** `FOOCCI_SDR_SEND_ENABLED === "true"`? Fato de agora — mesma observação acima. */
+    envioAutorizado: boolean;
+    agora?: Date;
+    alvoDeElegiveis?: number;
   },
 ): Promise<ResultadoDaConferencia> {
   const agora = opcoes.agora ?? new Date();
@@ -342,6 +405,7 @@ export async function conferirElegibilidadeReal(
     REGRA.descansoHoras,
     config?.horasEntreAbordagens ?? REGRA.descansoHoras,
   );
+  const prospeccaoLigada = Boolean(config?.outboundLigado) && !config?.pausadoEm;
 
   const [pendentes, usadosHoje, ritmo] = await Promise.all([
     db.itemDeProspeccao.count({ where: { situacao: "PENDENTE" } }),
@@ -353,7 +417,7 @@ export async function conferirElegibilidadeReal(
   const saldoDaJanela = Math.max(0, tetoDoDia - usadosNaJanela);
   const saldoDiario = Math.max(0, tetoDoDia - usadosHoje);
 
-  let elegiveis = 0;
+  let elegiveisSeAtivar = 0;
   let barrados = 0;
   let itensAvaliados = 0;
   let pagina = 0;
@@ -376,8 +440,8 @@ export async function conferirElegibilidadeReal(
     }
 
     for (const item of itens) {
-      // Mesma leitura, mesma avaliação, mesmos argumentos de `montarFilaDeProspeccao`
-      // — a conferência não pode divergir da rodada sobre quem é elegível.
+      // Mesma leitura de lead que `montarFilaDeProspeccao` usa — a conferência
+      // não pode divergir da rodada sobre o histórico de ninguém.
       const lead = await lerLeadDoItem(db, item);
 
       const decisao = avaliarAbordagemDeProspeccao({
@@ -386,7 +450,12 @@ export async function conferirElegibilidadeReal(
         tentativas: lead?.tentativas ?? 0,
         ultimoContatoEm: lead?.lastContactedAt ?? null,
         historicoConhecido: true,
-        canalPronto: opcoes.canalPronto,
+        // ⭐ SEMPRE true — de propósito, e é o coração da correção de
+        // 11/09/2026. Ver o comentário grande da função: isto isola a
+        // ELEGIBILIDADE DO CONTATO do ESTADO OPERACIONAL, que é reportado à
+        // parte (`canalConfigurado`, `envioAutorizado`, `prospeccaoLigada`) e
+        // decide `capacidadeOperacionalAgora`, não este laço.
+        canalPronto: true,
         prospeccaoLiberada: true,
         baseLegalDeclarada: item.lote.proveniencia,
         descansoHoras,
@@ -402,7 +471,7 @@ export async function conferirElegibilidadeReal(
         decisao,
       };
 
-      if (decisao.sendable) elegiveis += 1;
+      if (decisao.sendable) elegiveisSeAtivar += 1;
       else barrados += 1;
       itensAvaliados += 1;
 
@@ -410,7 +479,7 @@ export async function conferirElegibilidadeReal(
         previaAmostral.push(candidato);
       }
 
-      if (elegiveis >= alvoDeElegiveis) {
+      if (elegiveisSeAtivar >= alvoDeElegiveis) {
         bateuAAlvo = true;
         break;
       }
@@ -422,21 +491,27 @@ export async function conferirElegibilidadeReal(
     pagina += 1;
   }
 
-  const capacidadeReal = Math.max(0, Math.min(elegiveis, saldoDiario, saldoDaJanela));
+  const capacidadeAoAtivar = Math.max(0, Math.min(elegiveisSeAtivar, saldoDiario, saldoDaJanela));
+  const capacidadeOperacionalAgora =
+    opcoes.canalConfigurado && opcoes.envioAutorizado && prospeccaoLigada ? capacidadeAoAtivar : 0;
 
   return {
     pendentes,
-    elegiveis,
+    elegiveisSeAtivar,
     barrados,
     itensAvaliados,
     varreuTudo: acabouABase && !bateuAAlvo,
     alvoDeElegiveis,
+    canalConfigurado: opcoes.canalConfigurado,
+    envioAutorizado: opcoes.envioAutorizado,
+    prospeccaoLigada,
     usadosHoje,
     tetoDoDia,
     saldoDiario,
     usadosNaJanela,
     saldoDaJanela,
-    capacidadeReal,
+    capacidadeAoAtivar,
+    capacidadeOperacionalAgora,
     previaAmostral,
   };
 }

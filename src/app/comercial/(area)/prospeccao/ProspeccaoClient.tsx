@@ -144,20 +144,29 @@ interface CandidatoDaAmostra {
  *
  * Espelha `ResultadoDaConferencia` campo a campo — não reimplementa nada, só
  * mostra o que o backend calculou pelas MESMAS regras da rodada.
+ *
+ * ⛔ 11/09/2026: `elegiveis`/`capacidadeReal` viraram `elegiveisSeAtivar`/
+ * `capacidadeAoAtivar` (a hipótese "se a operação estivesse ligada") mais
+ * `capacidadeOperacionalAgora` (o fato — zero enquanto canal, envio ou
+ * prospecção estiverem desligados). Ver o comentário grande em `selecao.ts`.
  */
 interface Conferencia {
   pendentes: number;
-  elegiveis: number;
+  elegiveisSeAtivar: number;
   barrados: number;
   itensAvaliados: number;
   varreuTudo: boolean;
   alvoDeElegiveis: number;
+  canalConfigurado: boolean;
+  envioAutorizado: boolean;
+  prospeccaoLigada: boolean;
   usadosHoje: number;
   tetoDoDia: number;
   saldoDiario: number;
   usadosNaJanela: number;
   saldoDaJanela: number;
-  capacidadeReal: number;
+  capacidadeAoAtivar: number;
+  capacidadeOperacionalAgora: number;
   previaAmostral: CandidatoDaAmostra[];
 }
 
@@ -240,13 +249,20 @@ function FichaDoContato({ c }: { c: ContatoDaBase }) {
  * número que a operação não olha o tempo todo. O botão deixa a conferência
  * explícita: quem clica sabe que pediu uma varredura de verdade.
  *
- * ── E POR QUE ELA FUNCIONA COM TUDO PAUSADO ──────────────────────────────────
+ * ── E POR QUE ELA FUNCIONA COM TUDO DESLIGADO ────────────────────────────────
  *
  * Ao contrário da seção "Fila automática" (que usa `montarFilaDeProspeccao` e
  * fica vazia com a prospecção desligada), esta seção lê
- * `conferirElegibilidadeReal`, que avalia os pendentes pelas mesmas regras
- * independente do interruptor — por isso ela é a resposta certa para "quantos
- * contatos elegíveis eu tenho, antes de ligar?".
+ * `conferirElegibilidadeReal`, que avalia os pendentes pelas mesmas regras DO
+ * CONTATO independente do canal e do interruptor — por isso ela é a resposta
+ * certa para "quantos contatos elegíveis eu tenho, antes de ligar?".
+ *
+ * ⚠️ Por isso a tela mostra DOIS números de capacidade, e não um: "se a
+ * operação for ativada" (a hipótese, sempre calculável) e "agora" (o fato —
+ * fica em zero sozinho enquanto o canal, o envio ou a prospecção estiverem
+ * desligados). Confundir os dois foi exatamente o defeito da correção de
+ * 11/09/2026: mostrar zero elegíveis com `FOOCCI_SDR_SEND_ENABLED` desligado,
+ * quando a pergunta certa era sobre os CONTATOS, não sobre a chave.
  */
 function ConferenciaDaBase() {
   const [estado, setEstado] = useState<
@@ -277,8 +293,8 @@ function ConferenciaDaBase() {
         <div>
           <h2 className="text-[15px] font-semibold text-ink">Conferência da Base fria</h2>
           <p className="mt-0.5 text-[12.5px] text-muted">
-            Audita quantos contatos são elegíveis de verdade, agora — funciona com a
-            prospecção pausada ou desligada.{" "}
+            Audita quantos contatos são elegíveis pelas regras do contato — funciona com o
+            canal desligado, o envio desautorizado ou a prospecção pausada.{" "}
             <strong className="text-ink">Só lê: não cria lead, não consome item, não envia nada.</strong>
           </p>
         </div>
@@ -299,26 +315,54 @@ function ConferenciaDaBase() {
 
       {estado.fase === "pronta" && (
         <div className="mt-3 space-y-3 border-t border-line pt-3">
+          {/* ── ESTADO OPERACIONAL — os fatos de agora, não a hipótese ──── */}
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-[12px]">
+            <span className={estado.dados.canalConfigurado ? "text-ink2" : "text-ink font-semibold"}>
+              Canal configurado: {estado.dados.canalConfigurado ? "sim" : "não"}
+            </span>
+            <span className={estado.dados.envioAutorizado ? "text-ink2" : "text-ink font-semibold"}>
+              Envio autorizado: {estado.dados.envioAutorizado ? "ligado" : "desligado"}
+            </span>
+            <span className={estado.dados.prospeccaoLigada ? "text-ink2" : "text-ink font-semibold"}>
+              Prospecção: {estado.dados.prospeccaoLigada ? "ligada" : "pausada"}
+            </span>
+          </div>
+
           <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
             <div>
               <p className="text-[11px] uppercase text-muted">Pendentes</p>
               <p className="text-[15px] font-semibold text-ink tabular-nums">{estado.dados.pendentes}</p>
             </div>
             <div>
-              <p className="text-[11px] uppercase text-muted">Elegíveis</p>
+              <p className="text-[11px] uppercase text-muted">Elegíveis se ativar</p>
               <p className="text-[15px] font-semibold text-ink tabular-nums">
                 {estado.dados.varreuTudo ? "" : "≥ "}
-                {estado.dados.elegiveis}
+                {estado.dados.elegiveisSeAtivar}
               </p>
             </div>
             <div>
-              <p className="text-[11px] uppercase text-muted">Barrados</p>
+              <p className="text-[11px] uppercase text-muted">Barrados (regras do contato)</p>
               <p className="text-[15px] font-semibold text-ink tabular-nums">{estado.dados.barrados}</p>
             </div>
             <div>
-              <p className="text-[11px] uppercase text-muted">Capacidade real da próxima rodada</p>
-              <p className="text-[15px] font-semibold text-ink tabular-nums">{estado.dados.capacidadeReal}</p>
+              <p className="text-[11px] uppercase text-muted">Capacidade ao ativar</p>
+              <p className="text-[15px] font-semibold text-ink tabular-nums">{estado.dados.capacidadeAoAtivar}</p>
             </div>
+          </div>
+
+          {/* ⭐ O número que importa para "vai sair mensagem agora?" — zero
+              sozinho enquanto canal, envio ou prospecção estiverem desligados. */}
+          <div className="rounded-lg border border-line bg-canvas px-3 py-2">
+            <p className="text-[11px] uppercase text-muted">Capacidade operacional AGORA</p>
+            <p className="text-[18px] font-semibold text-ink tabular-nums">
+              {estado.dados.capacidadeOperacionalAgora}
+            </p>
+            {estado.dados.capacidadeOperacionalAgora === 0 && estado.dados.capacidadeAoAtivar > 0 && (
+              <p className="mt-0.5 text-[12px] text-muted">
+                Zero porque o canal, o envio ou a prospecção estão desligados — não porque faltam
+                contatos elegíveis.
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[12.5px] text-muted sm:grid-cols-3">

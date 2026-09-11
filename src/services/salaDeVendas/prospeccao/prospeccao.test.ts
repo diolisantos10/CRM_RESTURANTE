@@ -537,16 +537,78 @@ describe("a fila do dia", () => {
 });
 
 /**
- * ⭐ A CONFERÊNCIA — correção cirúrgica pós-merge do PR #238.
+ * ⭐ A CONFERÊNCIA — correção cirúrgica pós-merge do PR #238, e correção
+ * CIRÚRGICA DA CORREÇÃO em 11/09/2026: a primeira versão recebia `canalPronto`
+ * de quem chamava, e a rota passava `canalDeVendasPronto()` — que exige
+ * `FOOCCI_SDR_SEND_ENABLED`. Com a chave desligada (o estado de hoje), TODO
+ * MUNDO era barrado como `CANAL_INDISPONIVEL`, e a conferência mentia ao
+ * afirmar que "funciona com o envio desligado".
  *
- * A prova de ponta a ponta (várias páginas, zero escrita contra banco real)
- * está em `scripts/jornada-conferencia-somente-leitura.test.ts`. Aqui, com
- * dublê, ficam as duas propriedades que diferenciam esta função de
- * `montarFilaDeProspeccao`: ela NÃO some com a pausa, e a meta de elegíveis
- * pode parar a varredura antes de esgotar os pendentes.
+ * Agora a função avalia cada contato como se a operação já estivesse
+ * ativada (`canalPronto`/`prospeccaoLiberada` fixos em `true` dentro do laço —
+ * ver o comentário grande em `selecao.ts`) e devolve o estado operacional
+ * separado (`canalConfigurado`, `envioAutorizado`, `prospeccaoLigada`), que só
+ * então decide `capacidadeOperacionalAgora`.
+ *
+ * A prova de ponta a ponta (várias páginas, zero escrita, volume de ~5.000
+ * contatos, tempo de varredura) está em
+ * `scripts/jornada-conferencia-somente-leitura.test.ts`.
  */
 describe("a conferência (auditoria somente leitura)", () => {
-  it("⭐⭐ funciona com a prospecção PAUSADA — não é 'vazio como a fila'", async () => {
+  it("⛔⛔ ELEGIBILIDADE DO CONTATO não depende do canal nem do envio — a mentira que a correção fecha", async () => {
+    // O caso exato do achado: FOOCCI_SDR_SEND_ENABLED desligado
+    // (`envioAutorizado: false`) e canal não configurado
+    // (`canalConfigurado: false`). Um contato bom continua contando como
+    // elegível — porque elegibilidade é do CONTATO, não da chave.
+    const { db } = dbDeFila(
+      { outboundLigado: true, limiteDiario: 20, pausadoEm: null },
+      [ITEM],
+    );
+    db.itemDeProspeccao.count = vi.fn().mockResolvedValue(1);
+
+    const c = await conferirElegibilidadeReal(db, {
+      canalConfigurado: false,
+      envioAutorizado: false,
+      agora: AGORA,
+    });
+
+    expect(c.elegiveisSeAtivar, "o envio desligado não pode barrar o contato").toBe(1);
+    expect(c.barrados).toBe(0);
+  });
+
+  it("⛔⛔ CAPACIDADE OPERACIONAL AGORA é zero com o envio desligado, mesmo com contatos elegíveis", async () => {
+    const { db } = dbDeFila(
+      { outboundLigado: true, limiteDiario: 20, pausadoEm: null },
+      [ITEM],
+    );
+    db.itemDeProspeccao.count = vi.fn().mockResolvedValue(1);
+
+    const c = await conferirElegibilidadeReal(db, {
+      canalConfigurado: true,
+      envioAutorizado: false, // a chave de hoje
+      agora: AGORA,
+    });
+
+    expect(c.elegiveisSeAtivar).toBe(1);
+    expect(c.capacidadeAoAtivar).toBe(1); // a hipótese continua positiva
+    expect(c.capacidadeOperacionalAgora, "zero — é isso que 'desligado' precisa significar").toBe(0);
+    expect(c.envioAutorizado).toBe(false);
+  });
+
+  it("⛔ capacidade operacional agora também é zero com canal não configurado, mesmo com envio autorizado", async () => {
+    const { db } = dbDeFila({ outboundLigado: true, limiteDiario: 20, pausadoEm: null }, [ITEM]);
+    db.itemDeProspeccao.count = vi.fn().mockResolvedValue(1);
+
+    const c = await conferirElegibilidadeReal(db, {
+      canalConfigurado: false,
+      envioAutorizado: true,
+      agora: AGORA,
+    });
+
+    expect(c.capacidadeOperacionalAgora).toBe(0);
+  });
+
+  it("⭐⭐ funciona com a prospecção PAUSADA — não é 'vazio como a fila', e zera a capacidade agora", async () => {
     // `montarFilaDeProspeccao` devolveria fila vazia aqui. A conferência existe
     // exatamente para responder "quantos elegíveis eu tenho?" nesse estado.
     const { db } = dbDeFila(
@@ -555,24 +617,45 @@ describe("a conferência (auditoria somente leitura)", () => {
     );
     db.itemDeProspeccao.count = vi.fn().mockResolvedValue(1);
 
-    const c = await conferirElegibilidadeReal(db, { canalPronto: true, agora: AGORA });
+    const c = await conferirElegibilidadeReal(db, {
+      canalConfigurado: true,
+      envioAutorizado: true,
+      agora: AGORA,
+    });
 
     expect(c.pendentes).toBe(1);
-    expect(c.elegiveis).toBe(1);
+    expect(c.elegiveisSeAtivar).toBe(1);
     expect(c.varreuTudo).toBe(true);
+    expect(c.prospeccaoLigada).toBe(false);
+    expect(c.capacidadeOperacionalAgora, "a pausa também tem que zerar a capacidade agora").toBe(0);
+  });
+
+  it("⭐ tudo ligado — capacidade operacional agora ACOMPANHA a hipótese", async () => {
+    const { db } = dbDeFila({ outboundLigado: true, limiteDiario: 20, pausadoEm: null }, [ITEM]);
+    db.itemDeProspeccao.count = vi.fn().mockResolvedValue(1);
+
+    const c = await conferirElegibilidadeReal(db, {
+      canalConfigurado: true,
+      envioAutorizado: true,
+      agora: AGORA,
+    });
+
+    expect(c.prospeccaoLigada).toBe(true);
+    expect(c.capacidadeOperacionalAgora).toBe(c.capacidadeAoAtivar);
+    expect(c.capacidadeOperacionalAgora).toBe(1);
   });
 
   it("⛔⛔ NÃO ESCREVE NADA — nenhuma chamada de escrita, em nenhuma tabela", async () => {
     const { db } = dbDeFila({ outboundLigado: false, limiteDiario: 20, pausadoEm: null }, [ITEM]);
     db.itemDeProspeccao.count = vi.fn().mockResolvedValue(1);
 
-    await conferirElegibilidadeReal(db, { canalPronto: true, agora: AGORA });
+    await conferirElegibilidadeReal(db, { canalConfigurado: false, envioAutorizado: false, agora: AGORA });
 
     expect(db.itemDeProspeccao.update).not.toHaveBeenCalled();
     expect(db.siteLead.create).not.toHaveBeenCalled();
   });
 
-  it("capacidadeReal = min(elegíveis, saldo diário, saldo da janela)", async () => {
+  it("capacidadeAoAtivar = min(elegíveis, saldo diário, saldo da janela)", async () => {
     const { db } = dbDeFila(
       { outboundLigado: true, limiteDiario: 3, pausadoEm: null },
       [ITEM],
@@ -582,12 +665,16 @@ describe("a conferência (auditoria somente leitura)", () => {
     );
     db.itemDeProspeccao.count = vi.fn().mockResolvedValue(1);
 
-    const c = await conferirElegibilidadeReal(db, { canalPronto: true, agora: AGORA });
+    const c = await conferirElegibilidadeReal(db, {
+      canalConfigurado: true,
+      envioAutorizado: true,
+      agora: AGORA,
+    });
 
-    expect(c.elegiveis).toBe(1);
+    expect(c.elegiveisSeAtivar).toBe(1);
     expect(c.saldoDiario).toBe(2); // 3 - 1
     expect(c.saldoDaJanela).toBe(3); // 3 - 0
-    expect(c.capacidadeReal).toBe(1); // min(1, 2, 3)
+    expect(c.capacidadeAoAtivar).toBe(1); // min(1, 2, 3)
   });
 
   it("⭐ a meta pára a varredura cedo, e diz honestamente 'varreuTudo: false'", async () => {
@@ -596,12 +683,13 @@ describe("a conferência (auditoria somente leitura)", () => {
     db.itemDeProspeccao.count = vi.fn().mockResolvedValue(5);
 
     const c = await conferirElegibilidadeReal(db, {
-      canalPronto: true,
+      canalConfigurado: true,
+      envioAutorizado: true,
       agora: AGORA,
       alvoDeElegiveis: 2,
     });
 
-    expect(c.elegiveis).toBe(2);
+    expect(c.elegiveisSeAtivar).toBe(2);
     expect(c.itensAvaliados).toBe(2); // parou nos 2, não avaliou os outros 3
     expect(c.varreuTudo).toBe(false);
     expect(c.pendentes).toBe(5); // a contagem total continua exata

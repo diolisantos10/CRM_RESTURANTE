@@ -66,8 +66,13 @@ import {
 import {
   montarFilaDeProspeccao,
   conferirElegibilidadeReal,
+  ALVO_DE_ELEGIVEIS_NA_CONFERENCIA,
 } from "@/services/salaDeVendas/prospeccao/selecao";
-import { canalDeVendasPronto } from "@/services/foocci-sdr/FoocciSalesChannel";
+import {
+  canalDeVendasPronto,
+  isFoocciSalesChannelConfigured,
+  isFoocciSdrSendEnabled,
+} from "@/services/foocci-sdr/FoocciSalesChannel";
 import { preVooDoModelo } from "@/services/foocci-sdr/modelosDaMeta";
 
 export const runtime = "nodejs";
@@ -496,21 +501,43 @@ async function listarBaseFria(params: URLSearchParams) {
  * prospecção LIGADA: desligada ou pausada, ela sempre volta vazia — está certa
  * para uma rodada de verdade, mas inútil para responder "quantos contatos
  * elegíveis eu tenho de verdade?" ANTES de ligar. Esta rota chama
- * `conferirElegibilidadeReal` (`selecao.ts`), que avalia contra as MESMAS regras
- * (`avaliarAbordagemDeProspeccao`) independente do interruptor — e nunca chama
- * `materializarLead`: nenhum lead nasce, nenhum item sai de PENDENTE, nenhuma
- * mensagem é enviada, abrir ou recarregar esta tela quantas vezes for.
+ * `conferirElegibilidadeReal` (`selecao.ts`), que avalia os contatos pelas
+ * MESMAS regras (`avaliarAbordagemDeProspeccao`) independente do canal e do
+ * interruptor — e nunca chama `materializarLead`: nenhum lead nasce, nenhum
+ * item sai de PENDENTE, nenhuma mensagem é enviada, abrir ou recarregar esta
+ * tela quantas vezes for.
  *
- * `?alvo=N` é opcional e sobrescreve a meta de 2.000 que a varredura tenta
- * confirmar — só para depuração; a tela usa o padrão.
+ * ── ⛔ CORREÇÃO DE 11/09/2026 — O ESTADO OPERACIONAL VEM DAQUI, NÃO DE DENTRO
+ * DA VARREDURA ────────────────────────────────────────────────────────────────
+ *
+ * Até aqui esta rota passava `canalDeVendasPronto()` para dentro da varredura —
+ * e com `FOOCCI_SDR_SEND_ENABLED` desligado (o estado de hoje),
+ * `canalDeVendasPronto()` é `false`, e a varredura barrava TODO MUNDO como
+ * `CANAL_INDISPONIVEL`. A tela mostrava zero elegíveis com a base cheia de
+ * contatos bons — a auditoria pegou exatamente isso: "a conferência afirma
+ * funcionar com o envio desligado, mas isso não é verdade no código atual".
+ *
+ * Agora `conferirElegibilidadeReal` nunca recebe o estado operacional dentro do
+ * laço de avaliação — ela avalia cada contato como se a operação já estivesse
+ * ativada, e só DEPOIS decide `capacidadeOperacionalAgora` cruzando isso com
+ * `canalConfigurado`/`envioAutorizado`/`prospeccaoLigada`, lidos aqui, de fato.
+ * Ver o comentário grande em `selecao.ts`.
+ *
+ * `?alvo=N` é opcional e sobrescreve a meta que a varredura tenta confirmar —
+ * limitado a `ALVO_DE_ELEGIVEIS_NA_CONFERENCIA` (2.000): é parâmetro público, e
+ * sem teto qualquer um poderia pedir uma varredura arbitrariamente grande da
+ * Base fria por URL.
  */
 async function conferirParaAuditoria(params: URLSearchParams) {
   const alvoBruto = filtro(params, "alvo");
-  const alvo = alvoBruto ? inteiroNaoNegativo(Number(alvoBruto)) : null;
+  const alvoPedido = alvoBruto ? inteiroNaoNegativo(Number(alvoBruto)) : null;
+  const alvo =
+    alvoPedido && alvoPedido > 0 ? Math.min(alvoPedido, ALVO_DE_ELEGIVEIS_NA_CONFERENCIA) : null;
 
   const conferencia = await conferirElegibilidadeReal(prisma, {
-    canalPronto: canalDeVendasPronto(),
-    ...(alvo && alvo > 0 ? { alvoDeElegiveis: alvo } : {}),
+    canalConfigurado: isFoocciSalesChannelConfigured(),
+    envioAutorizado: isFoocciSdrSendEnabled(),
+    ...(alvo ? { alvoDeElegiveis: alvo } : {}),
   });
 
   return NextResponse.json({ ok: true, data: conferencia });
