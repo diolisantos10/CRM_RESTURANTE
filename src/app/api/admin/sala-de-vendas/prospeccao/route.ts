@@ -1,32 +1,39 @@
 /**
  * PROSPECÇÃO — a porta da importação, do interruptor e da fila do dia.
  *
- *   GET  ?recorte=fila           → fila do dia + interruptor + lotes (paginado)
+ *   GET  ?recorte=fila           → fila do dia + interruptor + resumo da Base fria
  *   GET  ?recorte=importacoes    → histórico de arquivos (paginado)
  *   GET  ?recorte=importacao     → os contatos de UMA importação (paginado)
  *   GET  ?recorte=base           → a base contínua, com busca e filtros
  *   POST { acao: "abrirImportacao" }   → declara o arquivo antes das partes
- *   POST { acao: "importar" }          → carrega uma parte, já LIBERADA
+ *   POST { acao: "importar" }          → carrega uma parte, já elegível
  *   POST { acao: "concluirImportacao" }→ fecha o arquivo
- *   POST { acao: "cancelarImportacao"} → desfaz: pausa os lotes, sem apagar
- *   POST { acao: "liberar" }     → RETOMA um lote pausado (registra quem)
- *   POST { acao: "pausarLote" }  → trava um lote
+ *   POST { acao: "cancelarImportacao"} → retira da fila os PENDENTES do arquivo, sem apagar nada
+ *   POST { acao: "rodada" }      → dispara a rodada automática do dia
  *   POST { acao: "interruptor" } → liga/desliga/pausa a prospecção inteira
+ *
+ * ── ⛔ A OPERAÇÃO POR LOTES FOI REMOVIDA EM 11/09/2026 ───────────────────────
+ *
+ * Não existe mais "liberar lista" nem "pausar lote" nesta rota — as ações
+ * `liberar` e `pausarLote` foram apagadas, não só escondidas. Ordem explícita:
+ * *"nenhuma importação pode depender de liberação manual"* e *"lote não pode
+ * aparecer como etapa operacional nem impedir envio."* Todo contato válido
+ * importado entra direto na Base fria contínua e fica elegível na hora —
+ * `montarFilaDeProspeccao` (`selecao.ts`) só olha `situacao: "PENDENTE"` do
+ * item, nunca mais a situação do lote.
+ *
+ * `LoteDeProspeccao` continua existindo no banco só para rastrear arquivo,
+ * procedência, responsável e data — histórico, visível na aba Importações —
+ * e não decide mais quem é abordado.
  *
  * ── QUEM PODE O QUÊ, E POR QUE NÃO É UM PAPEL SÓ ────────────────────────────
  *
  * Ler a fila é trabalho de SDR. **Autorizar a casa a falar com estranhos não é.**
  * Essa decisão responde por danos que o SDR não tem como avaliar — número
  * restringido, denúncia, marca queimada — e por isso exige papel de gestão,
- * mesmo que o SDR veja a tela inteira.
- *
- * ── ⚠️ E POR QUE IMPORTAR ENTROU NESSA LISTA EM 10/09/2026 ──────────────────
- *
- * Porque importar passou a liberar. O lote nasce LIBERADO (ver `lote.ts`), então
- * subir um arquivo virou o ato que autoriza a abordagem. Deixar `importar` na
- * guarda antiga teria aberto uma porta lateral silenciosa: quem nunca pôde
- * clicar "Liberar" autorizaria a mesma coisa subindo a planilha. A trava não
- * afrouxou em lugar nenhum — ela acompanhou o ato que mudou de peso.
+ * mesmo que o SDR veja a tela inteira. Subir um arquivo é o que autoriza hoje
+ * (ver `lote.ts`), e por isso `importar`/`abrirImportacao` exigem o mesmo papel
+ * de quem dispara a rodada.
  *
  * ⚠️ Nenhuma ação daqui envia mensagem por conta própria. A entrega continua
  * atrás de `FOOCCI_SDR_SEND_ENABLED`, que mora no ambiente e é do dono.
@@ -40,8 +47,6 @@ import { abordarItemDaFila, abordarARodadaDoDia } from "@/services/salaDeVendas/
 import {
   conferirLista,
   importarLote,
-  liberarLote,
-  pausarLote,
   ListaGrandeDemais,
   ProvenienciaAusente,
   MAX_LINHAS_POR_IMPORTACAO,
@@ -112,8 +117,6 @@ type Acao =
   | "cancelarImportacao"
   | "abordar"
   | "rodada"
-  | "liberar"
-  | "pausarLote"
   | "interruptor";
 
 interface Corpo {
@@ -137,8 +140,6 @@ interface Corpo {
   canalDeObtencao?: string;
   /** "Sei que esta planilha já subiu, quero subir de novo." */
   confirmarRepetido?: boolean;
-  // liberar / pausarLote
-  loteId?: string;
   // interruptor
   ligado?: boolean;
   pausar?: boolean;
@@ -153,19 +154,21 @@ interface Corpo {
  * ela cresceu — e cresceu por um motivo que vale registrar: desde que o lote
  * nasce LIBERADO, **subir um arquivo é autorizar**. Se `importar` e
  * `abrirImportacao` tivessem ficado na guarda de baixo, o SDR passaria a
- * autorizar pela porta da importação exatamente aquilo que a rota lhe recusa no
- * botão "Liberar" — e ninguém veria, porque o 403 continuaria aparecendo no
- * lugar de sempre.
+ * autorizar pela porta da importação exatamente aquilo que hoje exige quem
+ * responde pela marca — e ninguém veria, porque o 403 continuaria aparecendo
+ * no lugar de sempre.
  *
  * `cancelarImportacao` entra pelo lado oposto: parar a lista dos outros também é
- * decisão de quem responde pela operação.
+ * decisão de quem responde pela operação. `rodada` guardada aqui, e não como
+ * `abordar`, pelo mesmo motivo de sempre: mandar a casa falar com duzentos
+ * estranhos de uma vez é da mesma natureza que autorizar a lista.
  */
 const ACOES_QUE_AUTORIZAM = new Set<Acao>([
   "abrirImportacao",
   "importar",
   "concluirImportacao",
   "cancelarImportacao",
-  "liberar",
+  "rodada",
   "interruptor",
 ]);
 
@@ -180,40 +183,24 @@ export async function GET(req: NextRequest) {
   if (recorte === "importacao") return listarContatosDaImportacao(params);
   if (recorte === "base") return listarBaseFria(params);
 
-  const { pagina, porPagina, pular } = paginacao(params);
-
-  const [fila, lotes, totalDeLotes, config, totalNaBase, pendentesNaBase] = await Promise.all([
+  const [fila, config, totalNaBase, pendentesNaBase] = await Promise.all([
     // Teto de leitura: sem ele, um teto diário alto faria cada abertura da tela
     // varrer a fila inteira, com uma consulta de lead por item. A tela mostra
     // uma página; o teto do dia continua sendo o do banco.
     montarFilaDeProspeccao(prisma, { canalPronto: canalDeVendasPronto(), limite: 50 }),
-    prisma.loteDeProspeccao.findMany({
-      orderBy: { criadoEm: "desc" },
-      skip: pular,
-      take: porPagina,
-      include: { _count: { select: { itens: true } } },
-    }),
-    // ── ⚠️ O TOTAL VAI JUNTO, E ISSO NÃO É ENFEITE ────────────────────────
-    //
-    // A versão anterior mandava `take: 20` e mais nada. A tela mostrava vinte
-    // lotes como se fossem TODOS os lotes — e ninguém tinha como desconfiar,
-    // porque não havia número ao lado dizendo o contrário. Lista truncada sem
-    // total é a mentira que esta mudança existe para acabar.
-    prisma.loteDeProspeccao.count(),
     prisma.prospeccaoConfig.findUnique({ where: { id: "singleton" } }),
     prisma.itemDeProspeccao.count(),
-    prisma.itemDeProspeccao.count({
-      where: { situacao: "PENDENTE", lote: { situacao: "LIBERADO" } },
-    }),
+    // ⚠️ Só `situacao: "PENDENTE"` — desde 11/09/2026 a situação do lote não
+    // exclui mais ninguém daqui (ver o cabeçalho deste arquivo).
+    prisma.itemDeProspeccao.count({ where: { situacao: "PENDENTE" } }),
   ]);
 
   return NextResponse.json({
     ok: true,
     data: {
       fila,
-      lotes: { linhas: lotes, total: totalDeLotes, pagina, porPagina },
-      // O estoque unificado em dois números, que é a leitura que a tela da fila
-      // precisa dar: quanto existe, e quanto disso ainda espera abordagem.
+      // O RESUMO da Base fria — não a lista. A lista de verdade, com busca e
+      // detalhe expansível por contato, é `?recorte=base`.
       base: { total: totalNaBase, pendentes: pendentesNaBase },
       // Ausência de configuração é dita como está: desligada, teto zero. Não é
       // "sem limite", e a tela precisa poder mostrar a diferença.
@@ -223,6 +210,8 @@ export async function GET(req: NextRequest) {
         horasEntreAbordagens: 72,
         pausadoEm: null,
         motivo: null,
+        ultimaRodadaAutomaticaEm: null,
+        ultimaRodadaAutomaticaPor: null,
       },
       canalPronto: canalDeVendasPronto(),
     },
@@ -435,6 +424,7 @@ async function listarBaseFria(params: URLSearchParams) {
 
         return {
           id: item.id,
+          // ── Colunas principais (a tela mostra estas por padrão) ──────────
           nome: item.nome,
           whatsapp: item.whatsapp,
           empresa: item.empresa,
@@ -444,8 +434,30 @@ async function listarBaseFria(params: URLSearchParams) {
           situacao: item.situacao,
           entrouEm: item.criadoEm,
           leadId: item.leadId,
+
+          // ── ⭐ AMPLIAÇÃO DA BASE FRIA, 11/09/2026 — detalhe expansível ────
+          // Não são colunas da tabela: a ficha do contato as mostra quando o
+          // operador expande a linha. Ver regra 8 da entrega.
+          cargo: item.cargo,
+          telefoneSecundario: item.telefoneSecundario,
+          email: item.email,
+          bairro: item.bairro,
+          endereco: item.endereco,
+          cep: item.cep,
+          cnpj: item.cnpj,
+          instagram: item.instagram,
+          site: item.site,
+          googleMapsUrl: item.googleMapsUrl,
+          numeroDeUnidades: item.numeroDeUnidades,
+          canaisAtuais: item.canaisAtuais,
+          observacoes: item.observacoes,
+          tags: item.tags,
+
+          // ── Rastro do arquivo — histórico, não etapa operacional ─────────
+          // `loteId`/`proveniencia`/`responsavel` continuam existindo só para
+          // responder "de onde veio, e quem assinou" (regra 7 da entrega); a
+          // situação do lote NÃO decide mais quem é abordado.
           loteId: item.loteId,
-          loteSituacao: item.lote.situacao,
           proveniencia: item.lote.proveniencia,
           responsavel: item.lote.liberadoPor,
           importacaoId: item.lote.importacao?.id ?? null,
@@ -453,14 +465,12 @@ async function listarBaseFria(params: URLSearchParams) {
           canalDeObtencao: item.lote.importacao?.canalDeObtencao ?? null,
           tentativas: saida?._count._all ?? 0,
           ultimaTentativa: saida?._max.ocorreuEm ?? lead?.lastContactedAt ?? null,
-          // O motivo de bloqueio em UMA frase, na ordem em que ele pesa: o
-          // silêncio pedido vence tudo; depois o motivo gravado na entrada;
-          // depois o lote parado. Sem esta coluna, o operador vê "não é
-          // abordado" e não tem como saber qual das três coisas aconteceu.
-          motivoDeBloqueio: lead?.optOutAt
-            ? "Pediu silêncio"
-            : (item.motivo ??
-              (item.lote.situacao !== "LIBERADO" ? `Lote ${item.lote.situacao.toLowerCase()}` : null)),
+          // O motivo de bloqueio em UMA frase. Só o silêncio pedido e o motivo
+          // gravado na entrada (telefone repetido, já era lead…) — lote
+          // pausado deixou de bloquear em 11/09/2026, então deixou de entrar
+          // aqui: dizer "Lote pausado" quando o pausado não impede mais nada
+          // seria a tela mentindo sobre o que o sistema faz.
+          motivoDeBloqueio: lead?.optOutAt ? "Pediu silêncio" : item.motivo,
         };
       }),
       total,
@@ -657,7 +667,7 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // ── Cancelar: pausa os lotes daquele arquivo, e não apaga nada ──
+  // ── Cancelar: retira os itens PENDENTES da fila, e não apaga nada ──
   if (c.acao === "cancelarImportacao") {
     if (!c.importacaoId) {
       return NextResponse.json({ ok: false, error: "importacaoId é obrigatório." }, { status: 400 });
@@ -668,7 +678,9 @@ export async function POST(req: NextRequest) {
       motivo: c.motivo,
     });
     return NextResponse.json(
-      r.ok ? { ok: true, data: { lotesPausados: r.lotesPausados } } : { ok: false, error: r.motivo },
+      r.ok
+        ? { ok: true, data: { lotesPausados: r.lotesPausados, itensRetirados: r.itensRetirados } }
+        : { ok: false, error: r.motivo },
       { status: r.ok ? 200 : 409 },
     );
   }
@@ -701,7 +713,8 @@ export async function POST(req: NextRequest) {
   }
 
   /**
-   * A RODADA DO DIA — o laço que faltava.
+   * A RODADA DO DIA — o laço que faltava, e desde 11/09/2026 o ÚNICO jeito de
+   * abordar em volume — não existe mais "liberar lote por lote".
    *
    * ⚠️ O comentário da ação `abordar`, logo acima, argumenta contra aceitar uma
    * lista: *"faria o freio valer para o lote inteiro a partir de uma leitura
@@ -709,24 +722,11 @@ export async function POST(req: NextRequest) {
    * `abordarItemDaFila` uma vez por item, e ele relê `conferirRitmo` a cada
    * chamada. O freio continua sendo lido por abordagem, não por rodada.
    *
-   * O que muda é só quem aperta o botão. Sem isto, os 250 do CEO são 250
-   * cliques — medido em 08/09/2026: não existe cron de prospecção.
-   *
-   * Guardada como `liberar` e `interruptor`, e não como `abordar`: mandar a
-   * casa falar com duzentos estranhos de uma vez é da mesma natureza que
-   * autorizar a lista, não que tocar um contato.
+   * A guarda de autorização está em `ACOES_QUE_AUTORIZAM`, lá em cima, junto
+   * com as outras — mandar a casa falar com duzentos estranhos de uma vez é da
+   * mesma natureza que autorizar a lista, não que tocar um contato.
    */
   if (c.acao === "rodada") {
-    if (!vePelaOperacaoToda(portao.sessao)) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: "Disparar a rodada é de quem responde pela marca — SDR conduz, não autoriza.",
-        },
-        { status: 403 },
-      );
-    }
-
     const teto = typeof c.teto === "number" && Number.isInteger(c.teto) && c.teto > 0
       ? c.teto
       : undefined;
@@ -740,35 +740,6 @@ export async function POST(req: NextRequest) {
     });
 
     return NextResponse.json({ ok: true, data: r });
-  }
-
-  // ── Retomar um lote pausado ───────────────────────────────────────────────
-  //
-  // ⚠️ A ação continua se chamando `liberar` de propósito: renomeá-la quebraria
-  // qualquer favorito, script ou tela antiga que ainda a chame, e o efeito dela
-  // não mudou — o lote volta a LIBERADO com a assinatura de quem mandou. O que
-  // mudou é quando ela é usada: não mais na entrada da lista (o lote já nasce
-  // liberado), e sim para retomar o que foi pausado ou cancelado.
-  //
-  // A guarda de autorização dela está lá em cima, com as outras.
-  if (c.acao === "liberar") {
-    if (!c.loteId) {
-      return NextResponse.json({ ok: false, error: "loteId é obrigatório." }, { status: 400 });
-    }
-    const r = await liberarLote(prisma, c.loteId, quem, portao.sessao.userId);
-    return NextResponse.json(r.ok ? { ok: true } : { ok: false, error: r.motivo }, {
-      status: r.ok ? 200 : 400,
-    });
-  }
-
-  if (c.acao === "pausarLote") {
-    if (!c.loteId) {
-      return NextResponse.json({ ok: false, error: "loteId é obrigatório." }, { status: 400 });
-    }
-    const r = await pausarLote(prisma, c.loteId, quem);
-    return NextResponse.json(r.ok ? { ok: true } : { ok: false, error: r.motivo }, {
-      status: r.ok ? 200 : 404,
-    });
   }
 
   if (c.acao === "interruptor") {

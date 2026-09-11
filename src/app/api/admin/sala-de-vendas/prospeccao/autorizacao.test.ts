@@ -9,9 +9,11 @@ import { NextRequest } from "next/server";
  * O SDR **conduz** a prospecção: ele precisa ver a fila do dia, e precisa ver
  * quem foi barrado e por quê. Isso é trabalho dele.
  *
- * **Liberar um lote e mexer no interruptor não são.** São o ato de autorizar a
- * empresa a abordar gente que nunca pediu nada — e esse ato responde por danos
- * que o SDR não tem como avaliar: número restringido, denúncia, marca queimada.
+ * **Disparar a rodada e mexer no interruptor não são.** São o ato de autorizar
+ * a empresa a abordar gente que nunca pediu nada — e esse ato responde por
+ * danos que o SDR não tem como avaliar: número restringido, denúncia, marca
+ * queimada. (Até 10/09/2026 "liberar um lote" também exigia isso; a operação
+ * por lotes foi removida em 11/09/2026 — ver `route.ts`.)
  *
  * A tela já esconde os botões de quem não pode. Menu escondido não é
  * autorização: quem souber o endereço manda o POST na mão. Por isso estes testes
@@ -23,7 +25,7 @@ import { NextRequest } from "next/server";
 
 const autorizarInterno = vi.fn();
 const criarEvento = vi.fn();
-const liberarLote = vi.fn();
+const abordarARodadaDoDia = vi.fn();
 const upsertConfig = vi.fn();
 const lerConfig = vi.fn();
 
@@ -42,11 +44,11 @@ vi.mock("@/lib/prisma", () => ({
   },
 }));
 
-vi.mock("@/services/salaDeVendas/prospeccao/lote", async () => {
-  const real = await vi.importActual<typeof import("@/services/salaDeVendas/prospeccao/lote")>(
-    "@/services/salaDeVendas/prospeccao/lote",
-  );
-  return { ...real, liberarLote: (...a: unknown[]) => liberarLote(...a) };
+vi.mock("@/services/salaDeVendas/prospeccao/abordarDaFila", async () => {
+  const real = await vi.importActual<
+    typeof import("@/services/salaDeVendas/prospeccao/abordarDaFila")
+  >("@/services/salaDeVendas/prospeccao/abordarDaFila");
+  return { ...real, abordarARodadaDoDia: (...a: unknown[]) => abordarARodadaDoDia(...a) };
 });
 
 const SDR = {
@@ -84,35 +86,41 @@ function pedido(corpo: unknown): NextRequest {
 beforeEach(() => {
   autorizarInterno.mockReset();
   criarEvento.mockReset().mockResolvedValue({});
-  liberarLote.mockReset().mockResolvedValue({ ok: true });
+  abordarARodadaDoDia.mockReset().mockResolvedValue({
+    abordados: 0,
+    pulados: 0,
+    parouPor: "filaAcabou",
+    falha: null,
+    extrato: [],
+  });
   upsertConfig.mockReset().mockResolvedValue({ id: "singleton", outboundLigado: true });
   // Teto já configurado: o caso comum. Os testes que exercitam o teto zero
   // sobrescrevem este valor explicitamente.
   lerConfig.mockReset().mockResolvedValue({ id: "singleton", limiteDiario: 20 });
 });
 
-describe("liberar lote", () => {
-  it("⛔ o SDR humano NÃO libera lote — ele conduz, não autoriza", async () => {
+describe("disparar a rodada", () => {
+  it("⛔ o SDR humano NÃO dispara a rodada — ele conduz, não autoriza", async () => {
     autorizarInterno.mockReturnValue({ ok: true, sessao: SDR });
     const { POST } = await import("./route");
 
-    const res = await POST(pedido({ acao: "liberar", loteId: "lote1" }));
+    const res = await POST(pedido({ acao: "rodada" }));
 
     expect(res.status).toBe(403);
     // A trava tem que barrar ANTES de chamar o serviço: um 403 devolvido depois
-    // de o lote já ter sido liberado seria uma mensagem de erro por cima de um
-    // fato consumado.
-    expect(liberarLote).not.toHaveBeenCalled();
+    // de a rodada já ter falado com gente seria uma mensagem de erro por cima
+    // de um fato consumado.
+    expect(abordarARodadaDoDia).not.toHaveBeenCalled();
   });
 
-  it("o Diretor libera", async () => {
+  it("o Diretor dispara", async () => {
     autorizarInterno.mockReturnValue({ ok: true, sessao: DIRETOR });
     const { POST } = await import("./route");
 
-    const res = await POST(pedido({ acao: "liberar", loteId: "lote1" }));
+    const res = await POST(pedido({ acao: "rodada" }));
 
     expect(res.status).toBe(200);
-    expect(liberarLote).toHaveBeenCalled();
+    expect(abordarARodadaDoDia).toHaveBeenCalled();
   });
 });
 
@@ -199,9 +207,9 @@ describe("a porta de entrada", () => {
     });
     const { POST } = await import("./route");
 
-    const res = await POST(pedido({ acao: "liberar", loteId: "lote1" }));
+    const res = await POST(pedido({ acao: "rodada" }));
 
     expect(res.status).toBe(401);
-    expect(liberarLote).not.toHaveBeenCalled();
+    expect(abordarARodadaDoDia).not.toHaveBeenCalled();
   });
 });

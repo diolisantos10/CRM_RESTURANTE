@@ -26,10 +26,48 @@ export interface LinhaLida {
   cidade: string | null;
   estado: string | null;
   tipo: string | null;
+
+  // ── ⭐ AMPLIAÇÃO DA BASE FRIA, 11/09/2026 — ver ItemDeProspeccao no schema ──
+  email: string | null;
+  cargo: string | null;
+  telefoneSecundario: string | null;
+  bairro: string | null;
+  endereco: string | null;
+  cep: string | null;
+  cnpj: string | null;
+  instagram: string | null;
+  site: string | null;
+  googleMapsUrl: string | null;
+  /** `null` quando a coluna não veio, ou veio e não é um número. */
+  numeroDeUnidades: number | null;
+  /** Uma célula "iFood, Rappi, WhatsApp" vira três — ver `pegaLista`. */
+  canaisAtuais: string[];
+  observacoes: string | null;
+  tags: string[];
 }
 
 /** O que cada coluna do arquivo virou. É isto que a tela mostra ao operador. */
-export type CampoConhecido = "nome" | "whatsapp" | "empresa" | "cidade" | "estado" | "tipo";
+export type CampoConhecido =
+  | "nome"
+  | "whatsapp"
+  | "empresa"
+  | "cidade"
+  | "estado"
+  | "tipo"
+  | "email"
+  | "cargo"
+  | "telefoneSecundario"
+  | "bairro"
+  | "endereco"
+  | "cep"
+  | "cnpj"
+  | "instagram"
+  | "site"
+  | "googleMapsUrl"
+  | "numeroDeUnidades"
+  | "canaisAtuais"
+  | "observacoes"
+  | "tags";
 
 export interface ColunaLida {
   /** Como veio escrito no arquivo (ou "coluna 3" quando não há cabeçalho). */
@@ -79,6 +117,58 @@ const CABECALHOS: Readonly<Record<string, CampoConhecido>> = {
   tipo: "tipo",
   categoria: "tipo",
   segmento: "tipo",
+
+  // ── ⭐ AMPLIAÇÃO DA BASE FRIA, 11/09/2026 ────────────────────────────────
+  email: "email",
+  correioeletronico: "email",
+
+  cargo: "cargo",
+  funcao: "cargo",
+  posicao: "cargo",
+
+  telefonesecundario: "telefoneSecundario",
+  telefone2: "telefoneSecundario",
+  segundotelefone: "telefoneSecundario",
+  telefonealternativo: "telefoneSecundario",
+  fixo: "telefoneSecundario",
+
+  bairro: "bairro",
+
+  endereco: "endereco",
+  logradouro: "endereco",
+  rua: "endereco",
+
+  cep: "cep",
+
+  cnpj: "cnpj",
+
+  instagram: "instagram",
+  insta: "instagram",
+
+  site: "site",
+  website: "site",
+
+  googlemaps: "googleMapsUrl",
+  maps: "googleMapsUrl",
+  linkdomaps: "googleMapsUrl",
+  urlgooglemaps: "googleMapsUrl",
+  localizacao: "googleMapsUrl",
+
+  unidades: "numeroDeUnidades",
+  numerodeunidades: "numeroDeUnidades",
+  qtdunidades: "numeroDeUnidades",
+  quantidadedeunidades: "numeroDeUnidades",
+
+  canais: "canaisAtuais",
+  canaisatuais: "canaisAtuais",
+  marketplaces: "canaisAtuais",
+
+  observacoes: "observacoes",
+  obs: "observacoes",
+  notas: "observacoes",
+
+  tags: "tags",
+  etiquetas: "tags",
 };
 
 /** Sem acento, sem espaço, sem pontuação — para `Razão Social` casar com `razaosocial`. */
@@ -238,6 +328,10 @@ export function lerPlanilha(texto: string): LeituraDaPlanilha {
       return v || null;
     };
 
+    const numeroDeUnidades = pega("numeroDeUnidades");
+    const canaisAtuais = pega("canaisAtuais");
+    const tags = pega("tags");
+
     linhas.push({
       nome: pega("nome"),
       whatsapp,
@@ -245,8 +339,36 @@ export function lerPlanilha(texto: string): LeituraDaPlanilha {
       cidade: pega("cidade"),
       estado: pega("estado"),
       tipo: pega("tipo"),
+      email: pega("email"),
+      cargo: pega("cargo"),
+      telefoneSecundario: pega("telefoneSecundario"),
+      bairro: pega("bairro"),
+      endereco: pega("endereco"),
+      cep: pega("cep"),
+      cnpj: pega("cnpj"),
+      instagram: pega("instagram"),
+      site: pega("site"),
+      googleMapsUrl: pega("googleMapsUrl"),
+      numeroDeUnidades: numeroDeUnidades ? paraNumero(numeroDeUnidades) : null,
+      canaisAtuais: canaisAtuais ? dividirEmLista(canaisAtuais) : [],
+      observacoes: pega("observacoes"),
+      tags: tags ? dividirEmLista(tags) : [],
     });
   }
 
   return { linhas, colunas, descartadas, separador, temCabecalho };
+}
+
+/** Divide uma célula de lista: `"iFood, Rappi; WhatsApp"` → três valores. */
+export function dividirEmLista(v: string): string[] {
+  return v
+    .split(/[,;]/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/** Um inteiro positivo lido de uma célula, ou `null` quando não é um número. */
+export function paraNumero(v: string): number | null {
+  const n = Number(v.replace(/\D/g, ""));
+  return Number.isFinite(n) && n > 0 ? n : null;
 }

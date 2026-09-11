@@ -7444,6 +7444,40 @@ model ItemDeProspeccao {
   estado  String?
   tipo    String?
 
+  // ── ⭐ AMPLIAÇÃO DA BASE FRIA, 11/09/2026 ──────────────────────────────────
+  //
+  // A prospecção B2B consultiva não se qualifica só com nome, telefone e
+  // cidade. Estes catorze campos são o que faltava para o contato frio virar
+  // uma FICHA, não uma linha — e são todos aditivos: nenhuma coluna anterior
+  // mudou de nome, tipo ou significado. Reaproveitam-se `nome` (responsável),
+  // `empresa` (restaurante) e `tipo` (tipo de restaurante) já existentes.
+  /// E-mail do contato, quando a planilha traz.
+  email String?
+  /// Cargo ou função de quem responde — "responsável" nem sempre é o dono.
+  cargo String?
+  /// Um segundo telefone (fixo, ou outro celular), separado do WhatsApp
+  /// principal — que continua sendo `whatsapp`/`whatsappDigits`.
+  telefoneSecundario String?
+  bairro             String?
+  endereco           String?
+  cep                String?
+  cnpj               String?
+  instagram          String?
+  site               String?
+  /// O link do Google Maps do estabelecimento — não o texto do endereço.
+  googleMapsUrl      String?
+  /// Quantas casas/unidades a empresa tem. Mesmo conceito de
+  /// `LeadQualificacao.unidades`; migra para lá quando o contato vira lead.
+  numeroDeUnidades   Int?
+  /// Onde ele já vende hoje (iFood, Rappi, WhatsApp, salão…). Mesmo conceito
+  /// de `LeadQualificacao.canaisAtuais`; migra para lá quando vira lead.
+  canaisAtuais       String[] @default([])
+  /// Texto livre de quem importou ou enriqueceu. Migra para
+  /// `LeadQualificacao.observacoes` quando o contato vira lead.
+  observacoes        String?  @db.Text
+  /// Etiquetas livres, do mesmo tipo de `SiteLead.tags` — migra para lá.
+  tags               String[] @default([])
+
   situacao SituacaoDoItem @default(PENDENTE)
 
   /// Preenchido quando o item vira (ou encontra) um lead.

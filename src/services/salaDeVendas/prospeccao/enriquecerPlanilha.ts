@@ -58,24 +58,44 @@ function normalizarWhatsappParaBusca(whatsapp: string): string | null {
 }
 
 /**
+ * Os campos de TEXTO simples que o enriquecimento preenche — nome (do
+ * responsável), empresa (o restaurante), e os catorze da ampliação de
+ * 11/09/2026. Uma lista só, para não repetir a mesma verificação campo a
+ * campo: `canaisAtuais`, `numeroDeUnidades`, `observacoes` e `tags` são
+ * tratados à parte, porque não são texto simples (dois são lista, um é
+ * número, um é texto longo que pode ter vindo vazio de propósito).
+ */
+const CAMPOS_DE_TEXTO = [
+  "nome",
+  "empresa",
+  "cidade",
+  "estado",
+  "tipo",
+  "email",
+  "cargo",
+  "telefoneSecundario",
+  "bairro",
+  "endereco",
+  "cep",
+  "cnpj",
+  "instagram",
+  "site",
+  "googleMapsUrl",
+] as const satisfies readonly (keyof LinhaLida)[];
+
+/**
  * Preenche os campos nulos de um item com valores não-nulos da linha.
- * Devolve quantos campos foram atualizados.
+ * Devolve só o que a LINHA trouxe — quem decide o que realmente muda é
+ * `mudancasParaOItem`, comparando contra o item de verdade.
  */
 function contarCamposAVencer(
   linha: LinhaLida,
-): {
-  nome?: string;
-  empresa?: string;
-  cidade?: string;
-  estado?: string;
-  tipo?: string;
-} {
-  const updates: Record<string, string> = {};
-  if (linha.nome) updates.nome = linha.nome;
-  if (linha.empresa) updates.empresa = linha.empresa;
-  if (linha.cidade) updates.cidade = linha.cidade;
-  if (linha.estado) updates.estado = linha.estado;
-  if (linha.tipo) updates.tipo = linha.tipo;
+): Partial<Record<(typeof CAMPOS_DE_TEXTO)[number], string>> {
+  const updates: Partial<Record<(typeof CAMPOS_DE_TEXTO)[number], string>> = {};
+  for (const campo of CAMPOS_DE_TEXTO) {
+    const v = linha[campo];
+    if (typeof v === "string" && v) updates[campo] = v;
+  }
   return updates;
 }
 
@@ -141,15 +161,27 @@ export async function enriquecerPlanilhaDeItems(
       // Montar os updates para este item
       const updates = contarCamposAVencer(linha);
 
-      // Atualizar cada item: só preencher o que é null
+      // Atualizar cada item: só preencher o que é null (ou lista/observação vazia)
       for (const item of items) {
-        const mudancas: Record<string, string> = {};
+        const mudancas: Record<string, string | number | string[]> = {};
 
-        if (item.nome === null && updates.nome) mudancas.nome = updates.nome;
-        if (item.empresa === null && updates.empresa) mudancas.empresa = updates.empresa;
-        if (item.cidade === null && updates.cidade) mudancas.cidade = updates.cidade;
-        if (item.estado === null && updates.estado) mudancas.estado = updates.estado;
-        if (item.tipo === null && updates.tipo) mudancas.tipo = updates.tipo;
+        for (const campo of CAMPOS_DE_TEXTO) {
+          const novo = updates[campo];
+          if (item[campo] === null && novo) mudancas[campo] = novo;
+        }
+
+        if (item.numeroDeUnidades === null && linha.numeroDeUnidades !== null) {
+          mudancas.numeroDeUnidades = linha.numeroDeUnidades;
+        }
+        if (item.canaisAtuais.length === 0 && linha.canaisAtuais.length > 0) {
+          mudancas.canaisAtuais = linha.canaisAtuais;
+        }
+        if (item.observacoes === null && linha.observacoes) {
+          mudancas.observacoes = linha.observacoes;
+        }
+        if (item.tags.length === 0 && linha.tags.length > 0) {
+          mudancas.tags = linha.tags;
+        }
 
         if (Object.keys(mudancas).length === 0) {
           resultado.naoAlterados++;

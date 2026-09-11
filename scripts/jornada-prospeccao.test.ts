@@ -21,11 +21,16 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { PrismaClient } from "@prisma/client";
-import { importarLote, liberarLote, pausarLote } from "@/services/salaDeVendas/prospeccao/lote";
+import { importarLote } from "@/services/salaDeVendas/prospeccao/lote";
 import {
   montarFilaDeProspeccao,
   materializarLead,
 } from "@/services/salaDeVendas/prospeccao/selecao";
+import {
+  abrirImportacao,
+  concluirImportacao,
+  cancelarImportacao,
+} from "@/services/salaDeVendas/prospeccao/importacao";
 
 const prisma = new PrismaClient();
 
@@ -78,20 +83,21 @@ describe("Jornada 3 — prospecção, ponta a ponta", () => {
   });
 
   /**
-   * ⛔ ESTE PASSO MUDOU DE LADO EM 10/09/2026, POR ORDEM APROVADA.
+   * ⛔ ESTE PASSO MUDOU DE LADO DUAS VEZES: 10/09/2026 E 11/09/2026.
    *
-   * Ele exigia que o lote nascesse `RASCUNHO` e que, mesmo com a prospecção
-   * ligada, ninguém entrasse na fila até alguém clicar "Liberar". A regra era
-   * boa e virou defeito quando a operação cresceu: o arquivo é fatiado de 500
-   * em 500, então uma lista de 8.000 contatos exigia dezesseis liberações
-   * manuais para uma decisão que a pessoa já tinha tomado ao subir o arquivo.
+   * Primeiro deixou de exigir que o lote nascesse `RASCUNHO` (uma lista de
+   * 8.000 em partes de 500 exigia dezesseis liberações manuais para uma
+   * decisão já tomada ao subir o arquivo). Depois, em 11/09/2026, a operação
+   * por lotes foi removida por completo: nem pausar um lote tira mais alguém
+   * da fila (ver passos 3c e 7). O único jeito de excluir um contato da fila
+   * hoje é ele deixar de estar `PENDENTE`.
    *
    * ── ⚠️ O QUE O PASSO PRECISA CONTINUAR PROVANDO ─────────────────────────
    *
-   * "Entra sozinho" não pode virar "sai sozinho". O que a base contínua tira é
-   * a liberação por bloco — e **só** ela. Continuam de pé, e este passo mede os
-   * três: o interruptor global (passo 2, acima), o teto diário, e a pausa que
-   * tira uma importação inteira da fila sem apagar nada.
+   * "Entra sozinho" não pode virar "sai sozinho" por nenhum motivo que não
+   * esteja na lista de travas comerciais. Este passo mede o interruptor
+   * global (passo 2, acima) e o teto diário (passo 3b) — os dois que
+   * continuam de pé.
    */
   it("3. ⭐ ligada a prospecção, a importação JÁ está na fila — sem liberação por bloco", async () => {
     await prisma.prospeccaoConfig.create({
@@ -128,23 +134,35 @@ describe("Jornada 3 — prospecção, ponta a ponta", () => {
     });
   });
 
-  it("3c. ⛔ pausar a importação tira os contatos da fila, e não apaga nada", async () => {
-    // É o cancelamento de uma lista: o lote sai da fila, os contatos ficam no
-    // banco. Se apagasse, não haveria como responder depois de onde veio o
-    // contato de alguém que reclamou.
+  it("3c. ⛔ PAUSAR O LOTE NÃO TIRA MAIS OS CONTATOS DA FILA — ordem do CEO, 11/09/2026", async () => {
+    // ── O QUE ESTE PASSO PROVAVA ATÉ 10/09/2026, E POR QUE MUDOU ────────────
+    //
+    // Ele chamava `pausarLote` (serviço que só existia para girar
+    // `LoteDeProspeccao.situacao`) e conferia que a fila esvaziava. A
+    // operação por lotes foi removida por ordem explícita: *"lote não pode
+    // aparecer como etapa operacional nem impedir envio."* `pausarLote` e
+    // `liberarLote` foram apagados de `lote.ts` — não só escondidos — e
+    // `montarFilaDeProspeccao` não lê mais `lote.situacao`.
+    //
+    // O update abaixo é feito DIRETO no Prisma, sem passar por nenhum
+    // serviço, porque não existe mais serviço para isso — e é exatamente
+    // essa ausência que este passo prova: mesmo alguém mexendo na situação do
+    // lote na mão, os itens continuam elegíveis.
     const itensAntes = await prisma.itemDeProspeccao.count();
-    await pausarLote(prisma, loteId, "jornada-ci");
+    await prisma.loteDeProspeccao.update({
+      where: { id: loteId },
+      data: { situacao: "PAUSADO", pausadoEm: new Date(), pausadoPor: "jornada-ci" },
+    });
 
     const fila = await montarFilaDeProspeccao(prisma, { canalPronto: true, agora: AGORA });
-    expect(fila.liberados).toHaveLength(0);
+    expect(fila.liberados, "lote PAUSADO voltou a barrar — a remoção regrediu").toHaveLength(2);
     expect(await prisma.itemDeProspeccao.count()).toBe(itensAntes);
 
-    // E retomar devolve os dois — é para isto que `liberarLote` continua
-    // existindo depois da base contínua: retomar, não autorizar pela primeira
-    // vez.
-    expect((await liberarLote(prisma, loteId, "jornada-ci")).ok).toBe(true);
-    const voltou = await montarFilaDeProspeccao(prisma, { canalPronto: true, agora: AGORA });
-    expect(voltou.liberados).toHaveLength(2);
+    // Devolve ao estado original para não vazar para os passos seguintes.
+    await prisma.loteDeProspeccao.update({
+      where: { id: loteId },
+      data: { situacao: "LIBERADO", pausadoEm: null, pausadoPor: null },
+    });
   });
 
   it("4. ⭐ montar a fila NÃO escreve nada", async () => {
@@ -234,8 +252,7 @@ describe("Jornada 3 — prospecção, ponta a ponta", () => {
     expect(lote.jaEramLead).toBe(1);
     expect(lote.aceitas).toBe(0);
 
-    await liberarLote(prisma, lote.loteId, "jornada-ci");
-
+    // Nenhuma liberação a mais: `importarLote` já entrega o lote elegível.
     const fila = await montarFilaDeProspeccao(prisma, { canalPronto: true, agora: AGORA });
 
     // Ninguém deste lote pode sair liberado.
@@ -248,14 +265,24 @@ describe("Jornada 3 — prospecção, ponta a ponta", () => {
     expect(item?.leadId).toBe(legado.id);
   });
 
-  it("7. o freio do lote esvazia a fila", async () => {
-    await pausarLote(prisma, loteId, "jornada-ci");
+  it("7. ⛔ o lote não é mais freio nenhum — pausá-lo de novo continua sem efeito", async () => {
+    // Repete a prova do passo 3c num ponto diferente da jornada (depois de uma
+    // materialização e de um segundo lote), para não sobreviver como um caso
+    // isolado que só valia ali.
+    await prisma.loteDeProspeccao.update({
+      where: { id: loteId },
+      data: { situacao: "PAUSADO", pausadoEm: new Date(), pausadoPor: "jornada-ci" },
+    });
     const fila = await montarFilaDeProspeccao(prisma, { canalPronto: true, agora: AGORA });
-    expect(fila.liberados).toHaveLength(0);
+    expect(fila.liberados.length, "lote PAUSADO voltou a barrar").toBeGreaterThan(0);
+
+    await prisma.loteDeProspeccao.update({
+      where: { id: loteId },
+      data: { situacao: "LIBERADO", pausadoEm: null, pausadoPor: null },
+    });
   });
 
   it("8. o freio geral esvazia a fila, e diz o motivo", async () => {
-    await liberarLote(prisma, loteId, "jornada-ci");
     await prisma.prospeccaoConfig.update({
       where: { id: "singleton" },
       data: { pausadoEm: new Date(), pausadoPor: "jornada-ci", motivo: "teste do freio" },
@@ -281,5 +308,106 @@ describe("Jornada 3 — prospecção, ponta a ponta", () => {
     for (const barrado of fila.barrados) {
       expect(barrado.decisao.detail.length).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * ⭐⭐ P0.1, 11/09/2026 — O CANCELAMENTO QUE NÃO CANCELAVA NADA.
+ *
+ * Achado da auditoria: `cancelarImportacao` continuava pausando os LOTES,
+ * mas a seleção (`selecao.ts`) parou de ler `lote.situacao` quando a operação
+ * por lotes foi removida — então uma importação "cancelada" continuava
+ * abordando gente. A correção não volta a ler `lote.situacao`: age direto no
+ * ITEM, que é o que a seleção de fato olha.
+ */
+describe("Jornada — cancelar importação retira os PENDENTES da fila, sem apagar nada", () => {
+  let importacaoId = "";
+
+  it("10. uma importação com duas linhas entra; uma delas materializa ANTES do cancelamento", async () => {
+    importacaoId = await abrirImportacao(prisma, {
+      arquivoNome: "cancelamento-jornada.csv",
+      proveniencia: "Lista sintética da jornada de CI.",
+    });
+
+    const r = await importarLote(prisma, {
+      nome: "Lote a cancelar",
+      proveniencia: "Lista sintética da jornada de CI.",
+      criadoPor: "jornada-ci",
+      importacaoId,
+      linhas: [
+        { whatsapp: "11955570001", nome: "Fica Pendente" },
+        { whatsapp: "11955570002", nome: "Já Vira Lead Antes De Cancelar" },
+      ],
+    });
+    expect(r.aceitas).toBe(2);
+    await concluirImportacao(prisma, importacaoId);
+
+    // Materializa UM dos dois ANTES do cancelamento — prova que quem já virou
+    // lead não é tocado por ele.
+    const item2 = await prisma.itemDeProspeccao.findFirstOrThrow({
+      where: { whatsappDigits: "5511955570002" },
+    });
+    const m = await materializarLead(prisma, item2.id);
+    expect(m.materializado).toBe(true);
+  });
+
+  it("11. ⭐⭐ cancelar retira o PENDENTE da fila (RECUSADO, motivo declarado) e não toca no que já virou lead", async () => {
+    const leadsAntes = await prisma.siteLead.count();
+
+    const r = await cancelarImportacao(prisma, importacaoId, { quem: "jornada-ci" });
+    expect(r.ok).toBe(true);
+    expect(r.itensRetirados).toBe(1); // só o PENDENTE — o outro já não era
+
+    const pendente = await prisma.itemDeProspeccao.findFirstOrThrow({
+      where: { whatsappDigits: "5511955570001" },
+    });
+    expect(pendente.situacao).toBe("RECUSADO");
+    expect(pendente.motivo).toBe("Importação cancelada");
+
+    // O que já virou lead continua EXATAMENTE como estava — nada apagado,
+    // nada desfeito.
+    const jaEraLead = await prisma.itemDeProspeccao.findFirstOrThrow({
+      where: { whatsappDigits: "5511955570002" },
+    });
+    expect(jaEraLead.situacao).toBe("VIROU_LEAD");
+    expect(jaEraLead.leadId).not.toBeNull();
+    expect(await prisma.siteLead.count()).toBe(leadsAntes);
+
+    const importacao = await prisma.importacaoDeLeads.findUniqueOrThrow({
+      where: { id: importacaoId },
+    });
+    expect(importacao.situacao).toBe("CANCELADA");
+  });
+
+  it("12. ⭐ o item cancelado NÃO aparece mais na fila — nem liberado, nem barrado", async () => {
+    const fila = await montarFilaDeProspeccao(prisma, { canalPronto: true, agora: AGORA });
+    const aindaNaFila =
+      fila.liberados.some((c) => c.whatsapp === "11955570001") ||
+      fila.barrados.some((c) => c.whatsapp === "11955570001");
+    expect(aindaNaFila, "o item cancelado ainda aparece na fila").toBe(false);
+  });
+
+  it("13. o arquivo corrigido pode ser reimportado, num lote novo, e fica elegível sem NENHUMA liberação", async () => {
+    // ⚠️ O item cancelado ficou RECUSADO, não PENDENTE: o índice
+    // (loteId, whatsappDigits) só protege dentro do MESMO lote, e a
+    // deduplicação contra "pendente em outro lote" só olha PENDENTE — um
+    // RECUSADO não bloqueia a reentrada.
+    const r = await importarLote(prisma, {
+      nome: "Lote corrigido, reenviado",
+      proveniencia: "Lista sintética da jornada de CI, corrigida.",
+      criadoPor: "jornada-ci",
+      linhas: [{ whatsapp: "11955570001", nome: "Fica Pendente, Corrigido" }],
+    });
+    expect(r.aceitas).toBe(1);
+
+    const fila = await montarFilaDeProspeccao(prisma, { canalPronto: true, agora: AGORA });
+    const reimportado = fila.liberados.find((c) => c.whatsapp === "11955570001");
+    expect(reimportado, "o reimportado não ficou elegível sem nenhuma liberação").toBeTruthy();
+  });
+
+  it("14. cancelar de novo devolve erro claro, sem tocar em nada", async () => {
+    const r = await cancelarImportacao(prisma, importacaoId, { quem: "jornada-ci" });
+    expect(r.ok).toBe(false);
+    expect(r.itensRetirados).toBe(0);
   });
 });

@@ -25,6 +25,8 @@ import {
   detectarSeparador,
   quebrarLinha,
   pareceTelefone,
+  dividirEmLista,
+  paraNumero,
   type CampoConhecido,
   type LinhaLida,
 } from "./lerPlanilha";
@@ -96,6 +98,10 @@ export function construirLinhasComMapeamento(
       continue;
     }
 
+    const numeroDeUnidades = pega(linha, "numeroDeUnidades");
+    const canaisAtuais = pega(linha, "canaisAtuais");
+    const tags = pega(linha, "tags");
+
     linhas.push({
       nome: pega(linha, "nome"),
       whatsapp,
@@ -103,6 +109,20 @@ export function construirLinhasComMapeamento(
       cidade: pega(linha, "cidade"),
       estado: pega(linha, "estado"),
       tipo: pega(linha, "tipo"),
+      email: pega(linha, "email"),
+      cargo: pega(linha, "cargo"),
+      telefoneSecundario: pega(linha, "telefoneSecundario"),
+      bairro: pega(linha, "bairro"),
+      endereco: pega(linha, "endereco"),
+      cep: pega(linha, "cep"),
+      cnpj: pega(linha, "cnpj"),
+      instagram: pega(linha, "instagram"),
+      site: pega(linha, "site"),
+      googleMapsUrl: pega(linha, "googleMapsUrl"),
+      numeroDeUnidades: numeroDeUnidades ? paraNumero(numeroDeUnidades) : null,
+      canaisAtuais: canaisAtuais ? dividirEmLista(canaisAtuais) : [],
+      observacoes: pega(linha, "observacoes"),
+      tags: tags ? dividirEmLista(tags) : [],
     });
   }
 

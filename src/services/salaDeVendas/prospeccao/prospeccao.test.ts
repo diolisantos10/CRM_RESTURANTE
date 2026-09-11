@@ -10,7 +10,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   importarLote,
-  liberarLote,
   ListaGrandeDemais,
   ProvenienciaAusente,
   MAX_LINHAS_POR_IMPORTACAO,
@@ -284,39 +283,10 @@ describe("importar a lista", () => {
   });
 });
 
-describe("liberar o lote", () => {
-  it("⛔ não libera lote sem proveniência", async () => {
-    const { db } = dbDeImportacao();
-    db.loteDeProspeccao.findUnique.mockResolvedValue({
-      situacao: "RASCUNHO",
-      proveniencia: "  ",
-    });
-    const r = await liberarLote(db, "lote1", "diego");
-    expect(r.ok).toBe(false);
-  });
-
-  it("⛔ lote encerrado não volta a abordar", async () => {
-    const { db } = dbDeImportacao();
-    db.loteDeProspeccao.findUnique.mockResolvedValue({
-      situacao: "ENCERRADO",
-      proveniencia: "lista",
-    });
-    expect((await liberarLote(db, "lote1", "diego")).ok).toBe(false);
-  });
-
-  it("liberar registra QUEM liberou — autorização sem assinatura não é autorização", async () => {
-    const { db } = dbDeImportacao();
-    db.loteDeProspeccao.findUnique.mockResolvedValue({
-      situacao: "RASCUNHO",
-      proveniencia: "Lista pública, 08/2026",
-    });
-    await liberarLote(db, "lote1", "diego");
-    const dados = (db.loteDeProspeccao.update as any).mock.calls[0][0].data;
-    expect(dados.situacao).toBe("LIBERADO");
-    expect(dados.liberadoPor).toBe("diego");
-    expect(dados.liberadoEm).toBeInstanceOf(Date);
-  });
-});
+// ⛔ `describe("liberar o lote", ...)` foi removido em 11/09/2026:
+// `liberarLote`/`pausarLote` deixaram de existir (`lote.ts`) — a operação por
+// lotes foi apagada, não escondida. Ver `selecao.test` / `prospeccao.test.ts`
+// mais abaixo para a prova de que a situação do lote não gate mais nada.
 
 // ═══════════════════════════════════════════════════════════════════════════
 // A FILA DO DIA
@@ -382,6 +352,15 @@ const ITEM = {
   empresa: "Cantina do Zé",
   cidade: "Curitiba",
   tipo: "Italiana",
+  // ── ⭐ AMPLIAÇÃO DA BASE FRIA, 11/09/2026 ──────────────────────────────────
+  // `materializarLead` lê estes quatro para decidir se cria LeadQualificacao
+  // e para transferir email/tags — sem eles aqui, `item.canaisAtuais.length`
+  // quebraria em runtime (undefined não tem `.length`).
+  email: null,
+  numeroDeUnidades: null,
+  canaisAtuais: [] as string[],
+  observacoes: null,
+  tags: [] as string[],
   lote: { id: "lote1", proveniencia: "Lista pública, 08/2026", limiteDiario: 20 },
 };
 
@@ -488,24 +467,33 @@ describe("a fila do dia", () => {
     expect(db.siteLead.create).not.toHaveBeenCalled();
   });
 
-  it("⛔ não materializa contato de lote que não está liberado", async () => {
+  it("⭐ materializa mesmo com o lote PAUSADO — ordem do CEO, 11/09/2026: lote não impede envio", async () => {
+    // Até 10/09/2026 esta trava recusava, e o teste esperava `materializado:
+    // false` — ver o commit anterior. A operação por lotes foi removida:
+    // `materializarLead` não lê mais `lote.situacao` (nem sequer busca o lote).
+    const leadsCriados: any[] = [];
     const db = {
       itemDeProspeccao: {
         findUnique: vi.fn().mockResolvedValue({
           ...ITEM,
           situacao: "PENDENTE",
-          lote: { situacao: "PAUSADO" },
         }),
-        update: vi.fn(),
+        update: vi.fn().mockResolvedValue({}),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
-      siteLead: { findFirst: vi.fn(), create: vi.fn() },
+      siteLead: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn(async ({ data }: any) => {
+          leadsCriados.push(data);
+          return { id: "novo-lead" };
+        }),
+      },
     } as any;
 
     const r = await materializarLead(db, "i1");
 
-    expect(r.materializado).toBe(false);
-    expect(db.siteLead.create).not.toHaveBeenCalled();
+    expect(r.materializado, JSON.stringify(r)).toBe(true);
+    expect(leadsCriados).toHaveLength(1);
   });
 
   it("o barrado aparece na fila com motivo — não é filtrado para a tela ficar bonita", async () => {
@@ -530,6 +518,21 @@ describe("a fila do dia", () => {
     // `null` porque o contato ainda não é lead — e não virar lead só por
     // aparecer numa lista é exatamente o ponto.
     expect(fila.liberados[0]!.leadId).toBeNull();
+  });
+
+  it("⭐⭐ a consulta NÃO filtra mais por situação do lote — ordem do CEO, 11/09/2026", async () => {
+    // "Duplo de banco que ignora o argumento não testa consulta — testa o
+    // retorno que você mesmo escreveu" (doutrina de abordar.test.ts). Este
+    // caso inspeciona o `where` de verdade em vez de só o resultado: a
+    // situação do lote sumiu por completo, e não só na prática — no `where`.
+    const { db } = dbDeFila(
+      { outboundLigado: true, limiteDiario: 20, pausadoEm: null },
+      [ITEM],
+    );
+    await montarFilaDeProspeccao(db, { canalPronto: true, agora: AGORA });
+
+    const where = (db.itemDeProspeccao.findMany as any).mock.calls[0][0].where;
+    expect(where).toEqual({ situacao: "PENDENTE" });
   });
 });
 

@@ -161,15 +161,23 @@ export async function montarFilaDeProspeccao(
 
   const quantos = Math.min(cabeNoTeto, opcoes.limite ?? cabeNoTeto);
 
-  // ── ⭐ A BASE É UMA SÓ — E O FILTRO DE LOTE MUDOU DE PAPEL EM 10/09/2026 ───
+  // ── ⭐ A OPERAÇÃO POR LOTES FOI REMOVIDA EM 11/09/2026 ─────────────────────
   //
-  // `lote: { situacao: "LIBERADO" }` continua aqui, e continua sendo obrigatório,
-  // mas ele já **não é mais o portão de autorização**: o lote nasce LIBERADO
-  // desde que a importação passou a assinar a liberação (ver `lote.ts`). O que
-  // ele faz agora é EXCLUIR o lote que alguém parou de propósito — o botão de
-  // pausa, e o cancelamento de uma importação inteira, que pausa todos os lotes
-  // daquele arquivo. Sem esta linha, cancelar uma importação não teria efeito
-  // nenhum sobre quem é abordado amanhã de manhã.
+  // Ordem explícita: "nenhuma importação pode depender de liberação manual
+  // para entrar na prospecção" e "lote não pode aparecer como etapa
+  // operacional nem impedir envio." Até aqui esta consulta ainda filtrava por
+  // `lote: { situacao: "LIBERADO" }` — o que fazia um lote PAUSADO (pelo botão,
+  // ou por `cancelarImportacao`) continuar excluindo itens da fila. Essa era
+  // exatamente a "etapa operacional" que a ordem manda tirar do caminho.
+  //
+  // A ÚNICA trava que resta sobre QUAIS itens entram na consulta é
+  // `situacao: "PENDENTE"` — o item já foi abordado, recusado ou virou lead?
+  // Não entra. Nem "opt-out", "telefone inválido" nem "já abordado" precisam de
+  // um segundo filtro aqui: quem pediu silêncio e quem já é lead são pegos
+  // adiante, por `avaliarAbordagemDeProspeccao`, com o histórico de verdade —
+  // e telefone inválido nunca chega a `PENDENTE` (`importarLote` já marca
+  // `RECUSADO`). Todo contato válido importado é elegível desde o instante em
+  // que entra, sem clique nenhum.
   //
   // ⚠️ `limiteDiario` do lote NÃO é mais lido. A coluna continua no banco (é
   // registro de como o lote entrou), e a fila deixou de obedecê-la: com o
@@ -178,7 +186,7 @@ export async function montarFilaDeProspeccao(
   // deles invisível, e ninguém entendendo por que a fila parava. Pedir só o que
   // se usa é o que impede a coluna de voltar a valer por descuido.
   const itens = await db.itemDeProspeccao.findMany({
-    where: { situacao: "PENDENTE", lote: { situacao: "LIBERADO" } },
+    where: { situacao: "PENDENTE" },
     orderBy: { criadoEm: "asc" },
     take: quantos,
     include: {
@@ -229,7 +237,7 @@ export async function montarFilaDeProspeccao(
     barrados,
     motivoDaFilaVazia:
       liberados.length === 0 && barrados.length === 0
-        ? "Nenhum contato pendente na base — ou a lista acabou, ou os lotes estão pausados."
+        ? "Nenhum contato pendente na Base fria — a lista acabou."
         : null,
     usadosHoje,
     tetoDoDia,
@@ -311,15 +319,11 @@ export async function materializarLead(
   db: Cliente,
   itemId: string,
 ): Promise<ResultadoDaMaterializacao> {
-  const item = await db.itemDeProspeccao.findUnique({
-    where: { id: itemId },
-    include: { lote: { select: { situacao: true } } },
-  });
+  // ⚠️ Não filtra mais por `lote.situacao` — ordem de 11/09/2026: lote não
+  // pode impedir envio. Ver o comentário grande em `montarFilaDeProspeccao`.
+  const item = await db.itemDeProspeccao.findUnique({ where: { id: itemId } });
 
   if (!item) return { materializado: false, motivo: "Item não encontrado." };
-  if (item.lote.situacao !== "LIBERADO") {
-    return { materializado: false, motivo: "O lote deste contato não está liberado." };
-  }
   if (item.situacao !== "PENDENTE") {
     // Idempotente: materializar duas vezes devolve o mesmo lead, não cria outro.
     return item.leadId
@@ -380,6 +384,16 @@ export async function materializarLead(
         restaurante: item.empresa,
         cidade: item.cidade,
         tipo: item.tipo,
+        // ── ⭐ AMPLIAÇÃO DA BASE FRIA, 11/09/2026 ──────────────────────────
+        // Só os campos que têm um EQUIVALENTE já existente em SiteLead
+        // migram — email e tags. Os demais (cargo, telefone secundário,
+        // bairro, endereço, CEP, CNPJ, Instagram, site, Maps) não têm coluna
+        // irmã em SiteLead hoje; ficam retidos no registro frio
+        // (`ItemDeProspeccao`, ainda acessível pela ficha do contato via
+        // `leadId`) em vez de inventar coluna nova numa tabela que não é
+        // desta entrega.
+        email: item.email,
+        tags: item.tags,
         fonte: "LISTA_PROSPECCAO",
         origem: "prospeccao",
         stage: "NOVO",
@@ -393,6 +407,21 @@ export async function materializarLead(
       where: { id: item.id },
       data: { leadId: criado.id },
     });
+
+    // A qualificação só nasce quando há algo de fato para qualificar — criar
+    // uma linha vazia em `LeadQualificacao` para todo lead de prospecção
+    // encheria a tabela de registros sem informação, que ninguém filtra
+    // depois.
+    if (item.numeroDeUnidades !== null || item.canaisAtuais.length > 0 || item.observacoes) {
+      await db.leadQualificacao.create({
+        data: {
+          leadId: criado.id,
+          unidades: item.numeroDeUnidades,
+          canaisAtuais: item.canaisAtuais,
+          observacoes: item.observacoes,
+        },
+      });
+    }
 
     return { materializado: true, leadId: criado.id };
   } catch (erro) {
