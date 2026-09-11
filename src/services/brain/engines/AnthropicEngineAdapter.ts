@@ -7,7 +7,8 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import type { StructuredCallInput } from "./EngineAdapter";
+import type { StructuredCallInput, StructuredCallResult, EngineUsage } from "./EngineAdapter";
+import { USO_DESCONHECIDO } from "./EngineAdapter";
 
 let client: Anthropic | null = null;
 
@@ -16,7 +17,15 @@ function getClient(): Anthropic {
   return client;
 }
 
-export async function callAnthropic(input: StructuredCallInput): Promise<string> {
+/** `usage` ausente é desconhecido, nunca zero — mesma regra do piloto OPENAI. */
+function lerUso(usage: { input_tokens?: number; output_tokens?: number } | undefined | null): EngineUsage {
+  const entrada = usage?.input_tokens;
+  const saida = usage?.output_tokens;
+  if (typeof entrada !== "number" || typeof saida !== "number") return USO_DESCONHECIDO;
+  return { promptTokens: entrada, completionTokens: saida, desconhecido: false };
+}
+
+export async function callAnthropic(input: StructuredCallInput): Promise<StructuredCallResult> {
   const wantsJson = (input.responseFormat ?? "json") === "json";
   const system = wantsJson
     ? `${input.systemPrompt}\n\nIMPORTANTE: responda SOMENTE com um objeto JSON válido, sem markdown, sem texto fora do JSON.`
@@ -38,5 +47,5 @@ export async function callAnthropic(input: StructuredCallInput): Promise<string>
   const block = response.content.find((b) => b.type === "text");
   const text = block && block.type === "text" ? block.text : "";
   if (!text) throw new Error("Engine CLAUDE sem conteúdo");
-  return wantsJson ? `{${text}` : text;
+  return { raw: wantsJson ? `{${text}` : text, usage: lerUso(response.usage) };
 }

@@ -122,10 +122,37 @@ const linha = (over: Partial<UsageRow> = {}): UsageRow => ({
 describe("custo por agente", () => {
   it("agente de produto SEM atribuição sai `naoMedido`, nunca zero", () => {
     /*
-      A metade que reprova. Só `waiter` grava `agentSlug` hoje
-      (src/services/ai/AIOrderService.ts:1256). Se alguém trocar o `naoMedido`
-      por `zeroProvado` "porque não tem linha nenhuma", este caso fica vermelho —
-      e é o caso que faria a tela dizer que o agente de CRM não custou nada.
+      A metade que reprova. Se alguém trocar o `naoMedido` por `zeroProvado`
+      "porque não tem linha nenhuma", este caso fica vermelho — e é o caso que
+      faria a tela dizer que um agente não custou nada quando o que houve foi
+      não termos como saber.
+
+      O slug de exemplo era `crm` até 28/08/2026. Deixou de servir no dia em que
+      o dispatcher do Brain passou a medir: o `crm` entrou em
+      AGENTES_COM_CUSTO_ATRIBUIDO e usá-lo aqui testaria o oposto do que a frase
+      do teste diz. O exemplo agora é um slug que de fato não tem instrumento.
+    */
+    const sala = montarSalaDosAgentes(
+      insumos({
+        perfisDeProduto: veio([perfil({ slug: "agente-sem-instrumento", area: "CRM" })]),
+        usoDeIA: veio([linha({ agentSlug: "waiter" })]),
+      }),
+    );
+    const semInstrumento = sala.agentes.find((a) => a.slug === "agente-sem-instrumento")!;
+    for (const rotulo of ["Chamadas de IA (30d)", "Custo atribuído (30d)", "Tokens (30d)"]) {
+      const m = metrica(semInstrumento.metricas, rotulo);
+      expect(m.estado, `${rotulo} não pode ser zero`).toBe("naoMedido");
+      if (m.estado === "naoMedido") expect(m.motivo).toContain("agentSlug");
+    }
+    expect(sala.lacunas.join(" ")).toContain("agente-sem-instrumento");
+  });
+
+  it("agente instrumentado SEM nenhuma linha na janela também sai `naoMedido`", () => {
+    /*
+      A armadilha que a instrumentação nova cria: estar na lista de agentes
+      instrumentados NÃO prova que o agente rodou. Se `instrumentado` passasse a
+      autorizar `zeroProvado`, o cartão do `crm` diria "custou US$ 0,00" num mês
+      em que a cobertura simplesmente não pegou nenhuma chamada dele.
     */
     const sala = montarSalaDosAgentes(
       insumos({
@@ -134,12 +161,7 @@ describe("custo por agente", () => {
       }),
     );
     const crm = sala.agentes.find((a) => a.slug === "crm")!;
-    for (const rotulo of ["Chamadas de IA (30d)", "Custo atribuído (30d)", "Tokens (30d)"]) {
-      const m = metrica(crm.metricas, rotulo);
-      expect(m.estado, `${rotulo} não pode ser zero`).toBe("naoMedido");
-      if (m.estado === "naoMedido") expect(m.motivo).toContain("agentSlug");
-    }
-    expect(sala.lacunas.join(" ")).toContain("crm");
+    expect(metrica(crm.metricas, "Custo atribuído (30d)").estado).toBe("naoMedido");
   });
 
   it("agente COM atribuição e modelo precificado sai `medido` com o número certo", () => {

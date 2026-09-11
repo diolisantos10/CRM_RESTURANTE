@@ -1312,7 +1312,12 @@ enum OfferType {
 
 model AIInteractionLog {
   id               String   @id @default(cuid())
-  restaurantId     String
+  // NULÁVEL desde 28/08/2026. Metade das chamadas de IA desta casa não nasce
+  // dentro de um restaurante (SDR, biblioteca de agentes, mineração de FAQ,
+  // oficina de peças). Enquanto a coluna era obrigatória, a única saída para
+  // essas chamadas era NÃO registrar — e o gasto sumia do radar. Origem
+  // desconhecida contabilizada vale mais que gasto invisível (guardrail 1).
+  restaurantId     String?
   conversationId   String?
   model            String
   promptTokens     Int      @default(0)
@@ -1330,7 +1335,7 @@ model AIInteractionLog {
   agentSlug        String?
   createdAt        DateTime @default(now())
 
-  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  restaurant Restaurant? @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 
   @@index([restaurantId])
   @@index([conversationId])

@@ -16,6 +16,8 @@
  * Não guarda conteúdo de mensagem: só a forma da falha.
  */
 
+import type { EngineUsage } from "./EngineAdapter";
+
 /** Por que a IA não devolveu leitura utilizável. */
 export type MotivoDeFalhaDaIA =
   /** Não há credencial configurada — o motor nem chegou a ser chamado. */
@@ -36,11 +38,19 @@ export type MotivoDeFalhaDaIA =
 /** Erro do motor que já sabe se explicar. */
 export class FalhaDeMotor extends Error {
   readonly motivo: MotivoDeFalhaDaIA;
+  /**
+   * Tokens que a chamada CONSUMIU mesmo tendo falhado. Resposta cortada pelo
+   * teto e resposta vazia são cobradas pelo provedor — o gasto existe e precisa
+   * entrar na conta. `undefined` = a falha aconteceu ANTES de o provedor rodar
+   * (sem chave, por exemplo) e não há nada a contabilizar.
+   */
+  readonly usage?: EngineUsage;
 
-  constructor(motivo: MotivoDeFalhaDaIA, detalhe: string) {
+  constructor(motivo: MotivoDeFalhaDaIA, detalhe: string, usage?: EngineUsage) {
     super(`${motivo}: ${detalhe}`);
     this.name = "FalhaDeMotor";
     this.motivo = motivo;
+    this.usage = usage;
   }
 }
 

@@ -57,7 +57,14 @@ export async function draftCampaign(restaurantId: string, requestText: string): 
 
   let raw: string;
   try {
-    raw = await callStructuredJson({ selection, systemPrompt, userContent: `PEDIDO DO LOJISTA: "${text}"`, temperature: 0.4, maxTokens: 400 });
+    raw = await callStructuredJson({
+      selection,
+      systemPrompt,
+      userContent: `PEDIDO DO LOJISTA: "${text}"`,
+      temperature: 0.4,
+      maxTokens: 400,
+      context: { restaurantId, agentSlug: "crm" },
+    });
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message.slice(0, 120) : "erro no motor de IA" };
   }

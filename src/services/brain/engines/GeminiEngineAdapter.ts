@@ -6,13 +6,23 @@
  * responseMimeType.
  */
 
-import type { StructuredCallInput } from "./EngineAdapter";
+import type { StructuredCallInput, StructuredCallResult, EngineUsage } from "./EngineAdapter";
+import { USO_DESCONHECIDO } from "./EngineAdapter";
 
 interface GeminiResponse {
   candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
 }
 
-export async function callGemini(input: StructuredCallInput): Promise<string> {
+/** `usageMetadata` ausente é desconhecido, nunca zero. */
+function lerUso(meta: GeminiResponse["usageMetadata"]): EngineUsage {
+  const entrada = meta?.promptTokenCount;
+  const saida = meta?.candidatesTokenCount;
+  if (typeof entrada !== "number" || typeof saida !== "number") return USO_DESCONHECIDO;
+  return { promptTokens: entrada, completionTokens: saida, desconhecido: false };
+}
+
+export async function callGemini(input: StructuredCallInput): Promise<StructuredCallResult> {
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY ausente");
 
@@ -37,5 +47,5 @@ export async function callGemini(input: StructuredCallInput): Promise<string> {
   const data = (await res.json()) as GeminiResponse;
   const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
   if (!text) throw new Error("Engine GEMINI sem conteúdo");
-  return text;
+  return { raw: text, usage: lerUso(data.usageMetadata) };
 }

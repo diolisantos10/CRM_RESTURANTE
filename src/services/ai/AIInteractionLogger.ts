@@ -20,14 +20,21 @@ interface ToolCallRecord {
 }
 
 export interface AILogInput {
-  restaurantId: string;
-  conversationId: string;
+  /**
+   * OPCIONAL desde 28/08/2026. Nem toda chamada de IA nasce dentro de um
+   * restaurante — SDR, biblioteca de agentes e mineração de FAQ não têm dono.
+   * Ausente vira `null` (origem desconhecida) e CONTINUA sendo contabilizada.
+   * O que não se pode fazer é atribuir ao restaurante errado.
+   */
+  restaurantId?: string | null;
+  conversationId?: string | null;
   model: string;
   promptTokens: number;
   completionTokens: number;
   latencyMs: number;
-  turnNumber: number;
-  toolCalls: ToolCallRecord[];
+  /** Turno da conversa. Ausente = 0 (chamada avulsa, fora de conversa). */
+  turnNumber?: number;
+  toolCalls?: ToolCallRecord[];
   success: boolean;
   errorMessage?: string;
   /**
@@ -44,8 +51,22 @@ export interface AILogInput {
   tokensUnknown?: boolean;
 }
 
+/** O que aconteceu com a gravação. `gravado: false` NUNCA vira exceção. */
+export interface ResultadoDoRegistro {
+  readonly gravado: boolean;
+  readonly erro?: unknown;
+}
+
 export class AIInteractionLogger {
-  static async log(input: AILogInput): Promise<void> {
+  /**
+   * NUNCA lança. Devolve o resultado em vez de sinalizar por exceção: quem já
+   * chamava (`AIOrderService`) segue ignorando o retorno e nada muda para o
+   * cliente; quem PRECISA saber que a linha não entrou — o registrador do motor,
+   * que tenta de novo sem atribuição quando a chave estrangeira recusa — pergunta.
+   * Trocar isto por `throw` reintroduziria o guardrail 5: a proteção derrubando
+   * o fluxo que ela deveria só observar.
+   */
+  static async log(input: AILogInput): Promise<ResultadoDoRegistro> {
     try {
       const totalTokens = input.promptTokens + input.completionTokens;
       // `costUsd` é null quando o modelo não está precificado. Gravar null é a
@@ -63,15 +84,15 @@ export class AIInteractionLogger {
 
       await prisma.aIInteractionLog.create({
         data: {
-          restaurantId: input.restaurantId,
-          conversationId: input.conversationId,
+          restaurantId: vazioParaNulo(input.restaurantId),
+          conversationId: vazioParaNulo(input.conversationId),
           model: input.model,
           promptTokens: input.promptTokens,
           completionTokens: input.completionTokens,
           totalTokens,
           latencyMs: input.latencyMs,
-          turnNumber: input.turnNumber,
-          toolCalls: input.toolCalls as object[],
+          turnNumber: input.turnNumber ?? 0,
+          toolCalls: (input.toolCalls ?? []) as object[],
           estimatedCostUsd: finalCostUsd,
           agentSlug: slug,
           success: input.success,
@@ -81,6 +102,13 @@ export class AIInteractionLogger {
     } catch (err) {
       // Logging failures must never break the ordering flow
       console.error("[AIInteractionLogger] Failed to persist log:", err);
+      return { gravado: false, erro: err };
     }
+    return { gravado: true };
   }
+}
+
+/** `""` e `undefined` viram `null`. Nunca se grava string vazia como se fosse id. */
+function vazioParaNulo(v: string | null | undefined): string | null {
+  return typeof v === "string" && v.trim() !== "" ? v.trim() : null;
 }

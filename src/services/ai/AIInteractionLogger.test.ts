@@ -75,15 +75,29 @@ describe("agentSlug gravado", () => {
 });
 
 describe("falha de log nunca quebra o fluxo do cliente", () => {
-  it("erro do prisma é engolido", async () => {
+  it("erro do prisma é engolido — nunca lança", async () => {
     create.mockRejectedValue(new Error("db down"));
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
 
+    /*
+      A garantia é a mesma de sempre: NÃO LANÇA. O que mudou em 28/08/2026 é que
+      o resultado passou a ser DITO em vez de sumir — o medidor do motor precisa
+      saber que a linha não entrou para tentar de novo sem atribuição. Trocar
+      isto por `throw` derrubaria o fluxo do cliente (guardrail 5).
+    */
     await expect(
       AIInteractionLogger.log({ ...base, model: "gpt-4o-mini" }),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ gravado: false });
 
     spy.mockRestore();
+  });
+
+  it("gravação bem-sucedida devolve `gravado: true`", async () => {
+    // A outra metade: sem ela, devolver sempre `{gravado:false}` passaria no
+    // teste acima — e o medidor gravaria tudo duas vezes, achando que falhou.
+    await expect(
+      AIInteractionLogger.log({ ...base, model: "gpt-4o-mini" }),
+    ).resolves.toEqual({ gravado: true });
   });
 });
 

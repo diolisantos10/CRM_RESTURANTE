@@ -17,6 +17,7 @@ import { veio } from "../amostra";
 import { lerAgentesDeDesenvolvimento } from "../leituraDeArquivos";
 import {
   AGENTES_COM_CUSTO_ATRIBUIDO,
+  COBERTURA_DO_LOG,
   ESSENCIAIS,
   montarSalaDosAgentes,
 } from "../montagem";
@@ -229,23 +230,60 @@ function arquivosDeCodigo(dir: string): string[] {
 }
 
 describe("as afirmações que a Sala escreve na tela continuam verdadeiras", () => {
-  it("`AIInteractionLog` ainda tem UM único escritor", () => {
+  it("`AIInteractionLog` tem exatamente os DOIS escritores que a Sala declara", () => {
     /*
-      A Sala diz ao dono, em `lacunas`, que o custo cobre só o caminho do Garçom
-      em `AIOrderService.ts:1271`. No dia em que um segundo `AIInteractionLogger.log`
-      entrar, essa frase vira mentira — e mentira em texto explicativo é pior que
-      número errado, porque desarma a desconfiança.
+      A Sala diz ao dono, em `lacunas`, EXATAMENTE o que o custo cobre. No dia em
+      que um terceiro `AIInteractionLogger.log` entrar, essa frase vira mentira —
+      e mentira em texto explicativo é pior que número errado, porque desarma a
+      desconfiança.
 
-      A metade que reprova: acrescentar um segundo ponto de log sem atualizar
+      A metade que reprova: acrescentar um ponto de log novo sem atualizar
       `COBERTURA_DO_LOG` e `AGENTES_COM_CUSTO_ATRIBUIDO`.
+      A metade que passa: os dois escritores legítimos de hoje — o fluxo de
+      pedido do Garçom e o medidor do dispatcher do Brain — continuam ali.
+    */
+    /*
+      `semComentarios` não é zelo: sem ele, um COMENTÁRIO que cite
+      `AIInteractionLogger.log(` faz o arquivo entrar na lista sem escrever nada
+      — e, pior, faz um arquivo que DEIXOU de escrever continuar aparecendo como
+      escritor. Foi exatamente o que uma mutação pegou em 28/08/2026: trocar a
+      chamada por um apelido (`registrador.log`) escondia o escritor do detector,
+      e o teste passava porque o comentário do arquivo casava com a regex.
     */
     const chamadas = arquivosDeCodigo(path.join(RAIZ, "src")).filter((f) =>
-      /AIInteractionLogger\.log\(/.test(readFileSync(f, "utf8")),
+      /AIInteractionLogger\.log\(/.test(semComentarios(readFileSync(f, "utf8"))),
     );
-    expect(chamadas.map((f) => path.relative(RAIZ, f))).toEqual([
+    expect(chamadas.map((f) => path.relative(RAIZ, f)).sort()).toEqual([
       "src/services/ai/AIOrderService.ts",
+      "src/services/brain/engines/EngineUsageRecorder.ts",
     ]);
-    expect(AGENTES_COM_CUSTO_ATRIBUIDO).toEqual(["waiter"]);
+    expect(AGENTES_COM_CUSTO_ATRIBUIDO).toEqual(["waiter", "crm", "whatsapp", "suporte-tecnico"]);
+
+    /*
+      A segunda metade da varredura: quem escreve DIRETO no banco, sem passar
+      pelo logger, também é escritor — e escaparia da regex acima. Só o próprio
+      logger pode chamar `aIInteractionLog.create`.
+    */
+    const escritoresDiretos = arquivosDeCodigo(path.join(RAIZ, "src")).filter((f) =>
+      /aIInteractionLog\.create\(/.test(semComentarios(readFileSync(f, "utf8"))),
+    );
+    expect(escritoresDiretos.map((f) => path.relative(RAIZ, f))).toEqual([
+      "src/services/ai/AIInteractionLogger.ts",
+    ]);
+  });
+
+  it("a frase que o dono lê nomeia os DOIS caminhos medidos e o que ficou de fora", () => {
+    /*
+      `COBERTURA_DO_LOG` é a única linha da tela que diz ao dono o quanto do gasto
+      o número dele representa. Ela envelheceu calada uma vez (dizia "só o
+      Garçom" quando o dispatcher do Brain já era o maior consumidor). Este teste
+      é o alarme: a frase precisa citar o arquivo de cada caminho medido E
+      continuar nomeando quem ficou fora — senão o piso vira "a fatura".
+    */
+    expect(COBERTURA_DO_LOG).toContain("src/services/ai/AIOrderService.ts:1271");
+    expect(COBERTURA_DO_LOG).toContain("src/services/brain/engines/OpenAIEngineAdapter.ts");
+    expect(COBERTURA_DO_LOG).toContain("recepcionista do WhatsApp");
+    expect(COBERTURA_DO_LOG).toContain("transcrição de áudio");
   });
 
   it("nenhum módulo da Sala usa `?? 0`, `|| 0` ou `Number(x) || 0` em cima de métrica", () => {

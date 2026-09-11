@@ -75,7 +75,15 @@ export async function reasonWithLLM(
 
   const selection = await selectEngineRouted("waiter", { taskProfile: "REASON" });
   if (selection.provider === "MOCK") throw new Error("nenhum piloto de IA configurado");
-  const raw = await callStructuredJson({ selection, systemPrompt: SYSTEM_PROMPT, userContent, temperature: 0.2 });
+  const raw = await callStructuredJson({
+    selection,
+    systemPrompt: SYSTEM_PROMPT,
+    userContent,
+    temperature: 0.2,
+    // Só o agente. O contexto de raciocínio traz o NOME do restaurante, não o
+    // id — e nome não é id. Fica sem restaurante, com o gasto contabilizado.
+    context: { agentSlug: "waiter" },
+  });
   const parsed = JSON.parse(raw) as Partial<LLMReasoningCore>;
   if (!parsed.primaryIntent || !parsed.idealResponse || !parsed.trainingRule) {
     throw new Error("LLM JSON incompleto");

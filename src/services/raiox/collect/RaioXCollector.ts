@@ -131,7 +131,7 @@ async function collectAi(now: Date): Promise<AiSample> {
     v === null || v === undefined ? null : Math.round(Number(v) * 1_000_000);
 
   const byModelMap = new Map<string, { calls: number; failures: number; totalTokens: number; knownCostMicroUsd: number; unpricedCalls: number }>();
-  const byConv = new Map<string, { calls: number; knownCostMicroUsd: number; unpricedCalls: number; restaurantId: string }>();
+  const byConv = new Map<string, { calls: number; knownCostMicroUsd: number; unpricedCalls: number; restaurantId: string | null }>();
   let knownCostMicroUsd = 0;
   let unpricedCalls = 0;
   const unpricedModels = new Set<string>();

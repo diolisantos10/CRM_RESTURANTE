@@ -84,7 +84,7 @@ export const iaCustoProbe: RaioXProbe = {
         summary: `${N(s.totalFailures)} de ${N(s.totalCalls)} chamadas falharam (${taxa}%) nas últimas 24h.`,
         evidence: s.failureSamples
           .slice(0, 5)
-          .map((f) => `${f.model} · restaurante ${f.restaurantId} · ${f.error.slice(0, 160)}`),
+          .map((f) => `${f.model} · restaurante ${f.restaurantId ?? "(sem dono)"} · ${f.error.slice(0, 160)}`),
         metrics: { ...metrics, taxaFalhaPct: taxa },
         recommendation:
           "Cada falha é token pago sem resposta ao cliente. Ver se é cota, chave ou tempo esgotado — as três têm remédios diferentes.",

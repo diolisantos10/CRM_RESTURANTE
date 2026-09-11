@@ -131,7 +131,8 @@ export interface AiCallGroup {
 
 export interface AiConversationLoad {
   conversationId: string;
-  restaurantId: string;
+  /** `null` quando a conversa não pertence a um restaurante. */
+  restaurantId: string | null;
   calls: number;
   knownCostMicroUsd: number;
   /** Chamadas desta conversa sem custo conhecido. */
@@ -156,7 +157,8 @@ export interface AiSample {
   unpricedModels: string[];
   byModel: AiCallGroup[];
   /** Amostras das falhas, já truncadas (mensagem de erro crua). */
-  failureSamples: { model: string; error: string; restaurantId: string }[];
+  /** `restaurantId: null` = chamada sem restaurante dono (SDR, oficina, FAQ). Não é dado faltando: é dado que não existe. */
+  failureSamples: { model: string; error: string; restaurantId: string | null }[];
   /** Conversas mais pesadas na janela, ordem decrescente de chamadas. */
   heaviestConversations: AiConversationLoad[];
 }

@@ -245,7 +245,16 @@ export async function reasonAsAgent(req: BrainReasoningRequest): Promise<BrainRe
       req.currentResponse ? `RESPOSTA ATUAL DO AGENTE (sanitizada): "${req.currentResponse}"` : "",
     ].filter(Boolean).join("\n");
 
-    const raw = await callStructuredJson({ selection: engine, systemPrompt, userContent, temperature: 0.2 });
+    const raw = await callStructuredJson({
+      selection: engine,
+      systemPrompt,
+      userContent,
+      temperature: 0.2,
+      // Atribuição do gasto. `agentId` e `businessId` já são os mesmos que o
+      // roteador usou para escolher o piloto — não é chute novo, é o dado que
+      // esta função já tinha na mão e jogava fora.
+      context: { restaurantId: req.businessId, agentSlug: req.agentId },
+    });
     const parsed = JSON.parse(raw) as RawCore;
     if (!parsed.primaryIntent || !parsed.idealResponse) throw new Error("Brain JSON incompleto");
 

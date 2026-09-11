@@ -1572,3 +1572,37 @@ com regra inventada, e o revisor só descobre a diferença relendo as duas fonte
 Anotar a proveniência **por bloco** transforma a conferência de "acreditar" em
 "conferir", que é a mesma razão pela qual entrada de vitrine carrega data, origem
 e commit.
+
+## 2026-08-28 — Medidor de custo no dispatcher do Brain
+
+**Pedido:** fazer `callStructuredJson` registrar o consumo de tokens.
+
+**O que quebrou pelo caminho:**
+
+1. `ai_interaction_logs.restaurantId` era NOT NULL com FK. Metade das chamadas
+   do Brain (SDR, oficina, FAQ, biblioteca de agentes) não tem restaurante — a
+   coluna obrigatória era o motivo REAL de o gasto não ser registrado, não o
+   `usage` descartado. O `usage` era a metade visível.
+2. Primeira tentativa fez `AIInteractionLogger.log` LANÇAR em falha. Errado:
+   `AIOrderService` faz `await` nela no fluxo do cliente. Virou resultado
+   devolvido (`{gravado}`), que o chamador antigo ignora sem saber.
+3. `EngineUsageRecorder` importava prisma estaticamente → o banco entrava no
+   grafo de import do gargalo de TODO o Brain. Virou import tardio.
+4. Ao adicionar o segundo escritor, o teste `umUnicoEscritorDeLog` caiu — de
+   propósito, é o alarme da casa. `COBERTURA_DO_LOG` e
+   `AGENTES_COM_CUSTO_ATRIBUIDO` foram atualizados junto.
+
+**As duas mutações que SOBREVIVERAM (e o que ensinaram):**
+
+- Tirar o try/catch de `registrarUsoDoMotor`: passou, porque o `.catch` do
+  disparo em segundo plano cobria o caminho do dispatcher. Função exportada tem
+  contrato próprio — testar só o chamador atual deixa o contrato sem trava.
+- Esconder o escritor atrás de um apelido: passou, porque a varredura lia o
+  arquivo COM comentários e o comentário do próprio medidor citava a chamada.
+  **Um comentário meu desarmou o detector.** Pior: um arquivo que DEIXASSE de
+  escrever continuaria na lista de escritores enquanto o comentário ficasse.
+
+**O que ficou por provar:** que a linha chega ao Postgres de verdade (todo teste
+usa prisma mockado); que `req.businessId` do `BrainReasoner` é sempre um
+`Restaurant.id` válido — quando não é, a segunda tentativa salva o gasto e perde
+o dono, e isso só aparece em `console.warn`.

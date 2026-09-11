@@ -59,27 +59,45 @@ export const ESSENCIAIS = [
 
 /**
  * ONDE o custo de IA é efetivamente registrado — apurado por varredura em
- * 07/08/2026, não por memória.
+ * 28/08/2026, não por memória.
  *
- * `AIInteractionLog` tem UM único escritor: `AIInteractionLogger.log`, chamado de
- * `src/services/ai/AIOrderService.ts:1271`, sempre com `agentSlug: "waiter"`
- * (`src/services/ai/AIOrderService.ts:1256`).
+ * `AIInteractionLog` tem DOIS escritores, e cada um cobre uma metade:
  *
- * Existem OUTROS quatro caminhos que chamam a OpenAI e NÃO passam por ele:
- * `WhatsAppReceptionistService`, `ChatSimService`, `AISimulatorService` e
- * `brain/engines/OpenAIEngineAdapter`. Somar este log e chamar de "o custo do
- * projeto" seria subestimar sem avisar.
+ *  1. `AIInteractionLogger.log` chamado de `src/services/ai/AIOrderService.ts:1271`,
+ *     sempre com `agentSlug: "waiter"` (`AIOrderService.ts:1256`) — o fluxo de
+ *     pedido do Garçom, que nunca passou pelo Brain.
+ *  2. `src/services/brain/engines/EngineUsageRecorder.ts`, disparado por
+ *     `callStructuredJson` (`OpenAIEngineAdapter.ts`) — o gargalo por onde passa
+ *     TODA chamada do Brain. Até 28/08/2026 este caminho lia `completion.usage`
+ *     e o descartava: ~20 chamadores de produção gastavam sem deixar rastro.
+ *
+ * A atribuição por agente vem de `BrainReasoner.reasonAsAgent`, que repassa
+ * `req.agentId` e `req.businessId` ao dispatcher — por isso os quatro perfis
+ * ativos aparecem abaixo. Chamador que NÃO passa contexto continua sendo
+ * contabilizado, no balde "não atribuído": o total é medido, o dono não.
+ *
+ * O que AINDA fica de fora (não importa `callStructuredJson` e não loga):
+ * `WhatsAppReceptionistService`, `AISimulatorService`, `ChatSimService`,
+ * `KnowledgeEmbeddingService` (embeddings), `TranscriptionAdapter` (áudio) e
+ * `imageEnhancement/providers/openai.ts` (imagem).
  *
  * Consequência que atravessa o arquivo inteiro: **ausência de linha nunca vira
  * `zeroProvado`** para custo. O teste `umUnicoEscritorDeLog` reprova quando um
- * segundo `AIInteractionLogger.log` aparecer no código — porque nesse dia esta
- * frase deixa de ser verdade e o motivo precisa mudar junto.
+ * escritor NOVO aparecer no código — porque nesse dia esta frase deixa de ser
+ * verdade e o motivo precisa mudar junto.
  */
-export const AGENTES_COM_CUSTO_ATRIBUIDO: readonly string[] = ["waiter"];
+export const AGENTES_COM_CUSTO_ATRIBUIDO: readonly string[] = [
+  "waiter",
+  "crm",
+  "whatsapp",
+  "suporte-tecnico",
+];
 
 export const COBERTURA_DO_LOG =
-  "o registro de custo cobre só o caminho do Garçom em src/services/ai/AIOrderService.ts:1271; " +
-  "recepcionista do WhatsApp, simulador, laboratório de chat e o adaptador do Brain chamam IA e não gravam nele";
+  "o registro de custo cobre o fluxo de pedido do Garçom (src/services/ai/AIOrderService.ts:1271) e " +
+  "TODA chamada que passa pelo dispatcher do Brain (src/services/brain/engines/OpenAIEngineAdapter.ts), " +
+  "medida desde 28/08/2026; recepcionista do WhatsApp, simulador, laboratório de chat, embeddings, " +
+  "transcrição de áudio e geração de imagem chamam IA por fora e ainda não gravam nele";
 
 /** `agentSlug` passou a existir nesta data — nada antes dela pode ser atribuído. */
 export const DESDE_QUANDO_HA_ATRIBUICAO = "2026-08-07";
