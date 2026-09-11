@@ -485,7 +485,10 @@ export async function abordarLead(
   // aprovaria um contrato e o disparo montaria outro — o defeito que a P0.2
   // existe para matar, de volta pela porta dos fundos e com pré-voo verde por
   // cima. Sem banco, a função cai na reserva do ambiente e nada muda.
-  const montagem = montarParametros(await parametrosDoEnvioAgora(db), lead);
+  const montagem = montarParametros(await parametrosDoEnvioAgora(db), {
+    ...lead,
+    proveniencia: await provenienciaDoLead(db, lead),
+  });
   if (!montagem.ok) {
     return { abordou: false, motivo: "semDadoParaOModelo", detalhe: montagem.falta };
   }
@@ -563,6 +566,8 @@ type LeadParaOsParametros = {
   restaurante: string | null;
   fonte: string | null;
   cidade?: string | null;
+  /** Texto declarado no lote: responde de onde obtivemos o contato. */
+  proveniencia?: string | null;
 };
 
 /**
@@ -578,16 +583,27 @@ type LeadParaOsParametros = {
  */
 function camposDoModelo(lead: LeadParaOsParametros): Array<{ rotulo: string; valor: string | null }> {
   return [
-    // ⚠️ O restaurante é a queda de propósito: `saudacaoDoLead` recusa nome que
-    // é telefone (e faz bem — "Olá 5511988887777" é pior que não chamar pelo
-    // nome), mas uma lista de prospecção quase sempre traz o NOME DA CASA. Sem
-    // esta queda, metade da lista seria recusada por falta de dado que existe.
+    // Contrato lido do template APPROVED `abordagem_restaurante_fria` na Meta:
+    // "Olá, {{1}} ... falando com o {{2}} porque encontramos ... em {{3}}".
+    // A ordem é parte do texto aprovado e não pode ser inferida pela quantidade.
     {
-      rotulo: "saudação (nome ou restaurante)",
-      valor: saudacaoDoLead(lead) ?? ((lead.restaurante ?? "").trim() || null),
+      rotulo: "nome do contato",
+      valor: saudacaoDoLead(lead),
     },
-    { rotulo: "cidade", valor: (lead.cidade ?? "").trim() || null },
+    { rotulo: "nome do restaurante", valor: (lead.restaurante ?? "").trim() || null },
+    { rotulo: "procedência da lista", valor: (lead.proveniencia ?? "").trim() || null },
   ];
+}
+
+/** A procedência pertence ao lote que autorizou a abordagem, não ao lead. */
+async function provenienciaDoLead(db: Cliente, lead: LeadParaAbordar): Promise<string | null> {
+  if (lead.fonte !== FONTE_DE_LISTA) return null;
+  const item = await db.itemDeProspeccao.findFirst({
+    where: { leadId: lead.id },
+    orderBy: { criadoEm: "desc" },
+    select: { lote: { select: { proveniencia: true } } },
+  });
+  return (item?.lote.proveniencia ?? "").trim() || null;
 }
 
 export function montarParametros(
@@ -700,10 +716,14 @@ export async function diagnosticarAbordagem(
   // envio (e agora o diagnóstico) têm de concordar sobre quantas variáveis o
   // modelo aprovado pede, ou o veredito daqui mente sobre o que o envio faria.
   const quantas = await parametrosDoEnvioAgora(db);
-  const montagem = montarParametros(quantas, lead);
+  const leadComProveniencia = {
+    ...lead,
+    proveniencia: await provenienciaDoLead(db, lead),
+  };
+  const montagem = montarParametros(quantas, leadComProveniencia);
 
   if (!montagem.ok) {
-    const camposFaltando = camposDoModelo(lead)
+    const camposFaltando = camposDoModelo(leadComProveniencia)
       .slice(0, quantas)
       .filter((c) => !c.valor)
       .map((c) => c.rotulo);

@@ -11,9 +11,15 @@ import { describe, it, expect } from "vitest";
 import { montarParametros } from "./abordar";
 import { parametrosQueOEnvioMonta } from "@/services/foocci-sdr/modelosDaMeta";
 
-const COM_TUDO = { nome: "Marina Gambarini", restaurante: "Divino Sabor", fonte: null, cidade: "Guarulhos" };
-const SEM_NOME = { nome: null, restaurante: "Bar 1 Conto", fonte: null, cidade: "Santos" };
-const SEM_CIDADE = { nome: "Omar Freitas", restaurante: "Bar 1 Conto", fonte: null, cidade: null };
+const COM_TUDO = {
+  nome: "Marina Gambarini",
+  restaurante: "Divino Sabor",
+  fonte: "LISTA_PROSPECCAO",
+  cidade: "Guarulhos",
+  proveniencia: "lista pública de estabelecimentos",
+};
+const SEM_NOME = { nome: null, restaurante: "Bar 1 Conto", fonte: "LISTA_PROSPECCAO", cidade: "Santos", proveniencia: "Google Maps" };
+const SEM_PROVENIENCIA = { nome: "Omar Freitas", restaurante: "Bar 1 Conto", fonte: null, proveniencia: null };
 /** Nome que é telefone + sem restaurante: não há saudação possível. */
 const SEM_SAUDACAO = { nome: "5511999998888", restaurante: null, fonte: null, cidade: null };
 
@@ -28,9 +34,14 @@ describe("a montagem é EXATA", () => {
     expect(r.ok && r.parametros).toHaveLength(1);
   });
 
-  it("modelo de duas manda duas, na ordem do contrato", () => {
+  it("modelo aprovado manda nome, restaurante e procedência na ordem literal", () => {
+    const r = montarParametros(3, COM_TUDO);
+    expect(r.ok && r.parametros).toEqual(["Divino Sabor", "Divino Sabor", "lista pública de estabelecimentos"]);
+  });
+
+  it("modelo de duas manda as duas primeiras variáveis do contrato", () => {
     const r = montarParametros(2, COM_TUDO);
-    expect(r.ok && r.parametros).toEqual([expect.any(String), "Guarulhos"]);
+    expect(r.ok && r.parametros).toEqual(["Divino Sabor", "Divino Sabor"]);
   });
 
   it("contato sem nome usa o restaurante na saudação — não fica vazio", () => {
@@ -42,9 +53,9 @@ describe("a montagem é EXATA", () => {
 
 describe("⛔ o que NÃO sai", () => {
   it("falta dado para a variável → RECUSA antes do envio, dizendo qual", () => {
-    const r = montarParametros(2, SEM_CIDADE);
+    const r = montarParametros(3, SEM_PROVENIENCIA);
     expect(r.ok).toBe(false);
-    expect(!r.ok && r.falta).toContain("{{2}}");
+    expect(!r.ok && r.falta).toContain("{{3}}");
   });
 
   it("modelo pede mais variáveis do que o sistema sabe preencher → recusa", () => {
