@@ -14,7 +14,7 @@ import {
   ProvenienciaAusente,
   MAX_LINHAS_POR_IMPORTACAO,
 } from "./lote";
-import { montarFilaDeProspeccao, materializarLead } from "./selecao";
+import { montarFilaDeProspeccao, materializarLead, conferirElegibilidadeReal } from "./selecao";
 import { avaliarAbordagemDeProspeccao } from "@/services/foocci-sdr/LeadContactSafety";
 
 /** Quarta-feira, 14h em São Paulo — dentro da janela, para não misturar causas. */
@@ -536,6 +536,77 @@ describe("a fila do dia", () => {
   });
 });
 
+/**
+ * ⭐ A CONFERÊNCIA — correção cirúrgica pós-merge do PR #238.
+ *
+ * A prova de ponta a ponta (várias páginas, zero escrita contra banco real)
+ * está em `scripts/jornada-conferencia-somente-leitura.test.ts`. Aqui, com
+ * dublê, ficam as duas propriedades que diferenciam esta função de
+ * `montarFilaDeProspeccao`: ela NÃO some com a pausa, e a meta de elegíveis
+ * pode parar a varredura antes de esgotar os pendentes.
+ */
+describe("a conferência (auditoria somente leitura)", () => {
+  it("⭐⭐ funciona com a prospecção PAUSADA — não é 'vazio como a fila'", async () => {
+    // `montarFilaDeProspeccao` devolveria fila vazia aqui. A conferência existe
+    // exatamente para responder "quantos elegíveis eu tenho?" nesse estado.
+    const { db } = dbDeFila(
+      { outboundLigado: true, limiteDiario: 20, pausadoEm: new Date(), motivo: "pausa" },
+      [ITEM],
+    );
+    db.itemDeProspeccao.count = vi.fn().mockResolvedValue(1);
+
+    const c = await conferirElegibilidadeReal(db, { canalPronto: true, agora: AGORA });
+
+    expect(c.pendentes).toBe(1);
+    expect(c.elegiveis).toBe(1);
+    expect(c.varreuTudo).toBe(true);
+  });
+
+  it("⛔⛔ NÃO ESCREVE NADA — nenhuma chamada de escrita, em nenhuma tabela", async () => {
+    const { db } = dbDeFila({ outboundLigado: false, limiteDiario: 20, pausadoEm: null }, [ITEM]);
+    db.itemDeProspeccao.count = vi.fn().mockResolvedValue(1);
+
+    await conferirElegibilidadeReal(db, { canalPronto: true, agora: AGORA });
+
+    expect(db.itemDeProspeccao.update).not.toHaveBeenCalled();
+    expect(db.siteLead.create).not.toHaveBeenCalled();
+  });
+
+  it("capacidadeReal = min(elegíveis, saldo diário, saldo da janela)", async () => {
+    const { db } = dbDeFila(
+      { outboundLigado: true, limiteDiario: 3, pausadoEm: null },
+      [ITEM],
+      1, // usadosHoje
+      null,
+      { nas24h: 0 },
+    );
+    db.itemDeProspeccao.count = vi.fn().mockResolvedValue(1);
+
+    const c = await conferirElegibilidadeReal(db, { canalPronto: true, agora: AGORA });
+
+    expect(c.elegiveis).toBe(1);
+    expect(c.saldoDiario).toBe(2); // 3 - 1
+    expect(c.saldoDaJanela).toBe(3); // 3 - 0
+    expect(c.capacidadeReal).toBe(1); // min(1, 2, 3)
+  });
+
+  it("⭐ a meta pára a varredura cedo, e diz honestamente 'varreuTudo: false'", async () => {
+    const itens = Array.from({ length: 5 }, (_, i) => ({ ...ITEM, id: `i${i}` }));
+    const { db } = dbDeFila({ outboundLigado: true, limiteDiario: 2000, pausadoEm: null }, itens);
+    db.itemDeProspeccao.count = vi.fn().mockResolvedValue(5);
+
+    const c = await conferirElegibilidadeReal(db, {
+      canalPronto: true,
+      agora: AGORA,
+      alvoDeElegiveis: 2,
+    });
+
+    expect(c.elegiveis).toBe(2);
+    expect(c.itensAvaliados).toBe(2); // parou nos 2, não avaliou os outros 3
+    expect(c.varreuTudo).toBe(false);
+    expect(c.pendentes).toBe(5); // a contagem total continua exata
+  });
+});
 
 describe("o descanso configurável", () => {
   it("o valor do banco manda sobre o padrão do desenho", () => {

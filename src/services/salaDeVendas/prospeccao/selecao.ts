@@ -246,6 +246,201 @@ export async function montarFilaDeProspeccao(
   };
 }
 
+/** Meta de elegíveis que a conferência tenta confirmar antes de parar de escanear. */
+const ALVO_DE_ELEGIVEIS_NA_CONFERENCIA = 2000;
+
+/** Quantos itens PENDENTE a conferência lê do banco por página, ao escanear a Base fria. */
+const TAMANHO_DA_PAGINA_NA_CONFERENCIA = 500;
+
+/** Quantos candidatos avaliados entram na prévia amostral — amostra, não o total. */
+const TAMANHO_DA_AMOSTRA_NA_CONFERENCIA = 50;
+
+export interface ResultadoDaConferencia {
+  /** Quantos itens estão PENDENTE na Base fria agora. Contagem exata, direto do banco. */
+  pendentes: number;
+  /**
+   * Quantos dos itens escaneados avaliaram como elegíveis pelas MESMAS regras da
+   * rodada (`avaliarAbordagemDeProspeccao`). Quando `varreuTudo` é `false`, este
+   * número é um PISO — "pelo menos isso" — e não o total real.
+   */
+  elegiveis: number;
+  /** Quantos dos itens escaneados avaliaram como barrados. */
+  barrados: number;
+  /** Quantos itens PENDENTE foram de fato lidos e avaliados nesta conferência. */
+  itensAvaliados: number;
+  /**
+   * `true` só quando a varredura esgotou os PENDENTE sem nunca atingir
+   * `alvoDeElegiveis` — `elegiveis` é então o total exato. `false` quando ela
+   * parou ao confirmar a meta: sobraram pendentes nunca avaliados.
+   */
+  varreuTudo: boolean;
+  /** A meta que a varredura tenta confirmar (2.000, salvo override explícito). */
+  alvoDeElegiveis: number;
+  usadosHoje: number;
+  tetoDoDia: number;
+  /** `max(0, tetoDoDia - usadosHoje)` — o que falta do teto contado pelo dia civil. */
+  saldoDiario: number;
+  usadosNaJanela: number;
+  /** Quanto ainda cabe na janela de 24h da Meta — ver o comentário em `FilaDeProspeccao`. */
+  saldoDaJanela: number;
+  /** `min(elegiveis, saldoDiario, saldoDaJanela)`, nunca negativo. */
+  capacidadeReal: number;
+  /** Os primeiros até 50 itens avaliados, na ordem real da fila. AMOSTRA — não a lista inteira. */
+  previaAmostral: CandidatoAAbordagem[];
+}
+
+/**
+ * A CONFERÊNCIA — quantos contatos são de fato elegíveis agora, sem tocar em nada.
+ *
+ * ── ⚠️ ESTA FUNÇÃO NÃO ESCREVE, E FUNCIONA COM TUDO PAUSADO ──────────────────
+ *
+ * `montarFilaDeProspeccao` devolve fila vazia quando a prospecção está desligada
+ * ou pausada — está certo para ELA, porque ela é o primeiro passo de uma rodada
+ * de verdade, e uma rodada desligada não deve abordar ninguém. Mas essa mesma
+ * regra torna `montarFilaDeProspeccao` inútil para conferir a base ANTES de
+ * ligar: com o interruptor desligado, ela sempre devolveria zero, e a pergunta
+ * "quantos contatos elegíveis eu realmente tenho?" ficaria sem resposta até o
+ * dono já ter ligado a prospecção — exatamente o momento errado para descobrir.
+ *
+ * Esta função não olha `outboundLigado` nem `pausadoEm`, e não pára se o freio de
+ * ritmo disser que o dia já está travado: ela sempre AVALIA os pendentes contra
+ * `avaliarAbordagemDeProspeccao` — a mesma função, com os mesmos argumentos que
+ * `montarFilaDeProspeccao` usa — e deixa os números (`saldoDiario`, `saldoDaJanela`)
+ * contarem a história de quanto disso cabe agora. Dois parsers divergindo é o
+ * defeito que este arquivo existe para evitar; por isso ela não reimplementa a
+ * decisão, só decide quando parar de olhar.
+ *
+ * ── POR QUE PAGINAR EM VEZ DE PEGAR OS 50 PRIMEIRO ────────────────────────────
+ *
+ * A pergunta do dono é "existem pelo menos 2.000 elegíveis?", e os primeiros 50
+ * pendentes podem estar todos barrados (uma leva ruim de opt-outs recentes, por
+ * exemplo) sem que isso diga nada sobre o resto da base. A varredura avança em
+ * páginas de `TAMANHO_DA_PAGINA_NA_CONFERENCIA` até confirmar a meta OU esgotar
+ * os pendentes — o que vier primeiro — e diz honestamente qual dos dois aconteceu
+ * (`varreuTudo`).
+ *
+ * `skip`/`take` em vez de cursor: é uma leitura de auditoria, não uma lista que
+ * precisa ser estável sob escrita concorrente. Se uma rodada de verdade correr ao
+ * mesmo tempo e mudar `situacao` de itens no meio da varredura, o pior caso é
+ * pular ou reler um item — aceitável aqui, e não vale a complexidade extra de
+ * paginação por cursor para um número que já nasce com margem (a meta é 2.000).
+ */
+export async function conferirElegibilidadeReal(
+  db: Cliente,
+  opcoes: { canalPronto: boolean; agora?: Date; alvoDeElegiveis?: number } = {
+    canalPronto: false,
+  },
+): Promise<ResultadoDaConferencia> {
+  const agora = opcoes.agora ?? new Date();
+  const alvoDeElegiveis = opcoes.alvoDeElegiveis ?? ALVO_DE_ELEGIVEIS_NA_CONFERENCIA;
+
+  const config = await db.prospeccaoConfig.findUnique({
+    where: { id: "singleton" },
+  });
+  const tetoDoDia = config?.limiteDiario ?? 0;
+  const descansoHoras = Math.max(
+    REGRA.descansoHoras,
+    config?.horasEntreAbordagens ?? REGRA.descansoHoras,
+  );
+
+  const [pendentes, usadosHoje, ritmo] = await Promise.all([
+    db.itemDeProspeccao.count({ where: { situacao: "PENDENTE" } }),
+    contarAbordagensDeHoje(db, agora),
+    conferirRitmo(db, agora, tetosEmVigor(process.env, tetoDoDia)),
+  ]);
+
+  const usadosNaJanela = ritmo.nasUltimas24h;
+  const saldoDaJanela = Math.max(0, tetoDoDia - usadosNaJanela);
+  const saldoDiario = Math.max(0, tetoDoDia - usadosHoje);
+
+  let elegiveis = 0;
+  let barrados = 0;
+  let itensAvaliados = 0;
+  let pagina = 0;
+  let acabouABase = false;
+  let bateuAAlvo = false;
+  const previaAmostral: CandidatoAAbordagem[] = [];
+
+  while (!acabouABase && !bateuAAlvo) {
+    const itens = await db.itemDeProspeccao.findMany({
+      where: { situacao: "PENDENTE" },
+      orderBy: { criadoEm: "asc" },
+      skip: pagina * TAMANHO_DA_PAGINA_NA_CONFERENCIA,
+      take: TAMANHO_DA_PAGINA_NA_CONFERENCIA,
+      include: { lote: { select: { id: true, proveniencia: true } } },
+    });
+
+    if (itens.length === 0) {
+      acabouABase = true;
+      break;
+    }
+
+    for (const item of itens) {
+      // Mesma leitura, mesma avaliação, mesmos argumentos de `montarFilaDeProspeccao`
+      // — a conferência não pode divergir da rodada sobre quem é elegível.
+      const lead = await lerLeadDoItem(db, item);
+
+      const decisao = avaliarAbordagemDeProspeccao({
+        telefone: item.whatsapp,
+        optOutAt: lead?.optOutAt ?? null,
+        tentativas: lead?.tentativas ?? 0,
+        ultimoContatoEm: lead?.lastContactedAt ?? null,
+        historicoConhecido: true,
+        canalPronto: opcoes.canalPronto,
+        prospeccaoLiberada: true,
+        baseLegalDeclarada: item.lote.proveniencia,
+        descansoHoras,
+        agora,
+      });
+
+      const candidato: CandidatoAAbordagem = {
+        itemId: item.id,
+        loteId: item.loteId,
+        leadId: lead?.id ?? null,
+        nome: item.nome,
+        whatsapp: item.whatsapp,
+        decisao,
+      };
+
+      if (decisao.sendable) elegiveis += 1;
+      else barrados += 1;
+      itensAvaliados += 1;
+
+      if (previaAmostral.length < TAMANHO_DA_AMOSTRA_NA_CONFERENCIA) {
+        previaAmostral.push(candidato);
+      }
+
+      if (elegiveis >= alvoDeElegiveis) {
+        bateuAAlvo = true;
+        break;
+      }
+    }
+
+    if (!bateuAAlvo && itens.length < TAMANHO_DA_PAGINA_NA_CONFERENCIA) {
+      acabouABase = true;
+    }
+    pagina += 1;
+  }
+
+  const capacidadeReal = Math.max(0, Math.min(elegiveis, saldoDiario, saldoDaJanela));
+
+  return {
+    pendentes,
+    elegiveis,
+    barrados,
+    itensAvaliados,
+    varreuTudo: acabouABase && !bateuAAlvo,
+    alvoDeElegiveis,
+    usadosHoje,
+    tetoDoDia,
+    saldoDiario,
+    usadosNaJanela,
+    saldoDaJanela,
+    capacidadeReal,
+    previaAmostral,
+  };
+}
+
 /**
  * O resultado de materializar.
  *

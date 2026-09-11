@@ -29,6 +29,10 @@
  *    (não uma prévia truncada), a última rodada, e "Rodar agora", que exige
  *    confirmação e fica desabilitado sem saldo, sem canal ou com a
  *    prospecção desligada.
+ * 5. A conferência — auditoria somente leitura sob demanda (botão "Conferir
+ *    agora"), que funciona mesmo com a prospecção pausada e o envio
+ *    desligado. Nunca materializa lead nem consome item; ver
+ *    `conferirElegibilidadeReal` em `selecao.ts`.
  *
  * ── ⚠️ NADA AQUI ENVIA MENSAGEM SOZINHO ─────────────────────────────────────
  *
@@ -126,6 +130,37 @@ interface ResultadoDaRodada {
   falha: { itemId: string | null; motivo: string; detalhe: string } | null;
 }
 
+/** Um item avaliado na conferência — mesma forma de `CandidatoAAbordagem` em `selecao.ts`. */
+interface CandidatoDaAmostra {
+  itemId: string;
+  nome: string | null;
+  whatsapp: string;
+  decisao: { sendable: boolean; reason: string | null; detail: string };
+}
+
+/**
+ * ⭐ A CONFERÊNCIA — auditoria somente leitura, ver `conferirElegibilidadeReal`
+ * (`selecao.ts`) e `?recorte=conferencia` (`route.ts`).
+ *
+ * Espelha `ResultadoDaConferencia` campo a campo — não reimplementa nada, só
+ * mostra o que o backend calculou pelas MESMAS regras da rodada.
+ */
+interface Conferencia {
+  pendentes: number;
+  elegiveis: number;
+  barrados: number;
+  itensAvaliados: number;
+  varreuTudo: boolean;
+  alvoDeElegiveis: number;
+  usadosHoje: number;
+  tetoDoDia: number;
+  saldoDiario: number;
+  usadosNaJanela: number;
+  saldoDaJanela: number;
+  capacidadeReal: number;
+  previaAmostral: CandidatoDaAmostra[];
+}
+
 /** Linhas de detalhe que só aparecem quando a pessoa expande o contato. */
 function LinhaDeDetalhe({ rotulo, valor }: { rotulo: string; valor: string | null }) {
   if (!valor) return null;
@@ -191,6 +226,141 @@ function FichaDoContato({ c }: { c: ContatoDaBase }) {
         </div>
       )}
     </li>
+  );
+}
+
+/**
+ * ⭐ A CONFERÊNCIA — seção 5, auditoria somente leitura da Base fria.
+ *
+ * ── POR QUE É UM BOTÃO, E NÃO CARREGA SOZINHA ────────────────────────────────
+ *
+ * `?recorte=conferencia` pode varrer milhares de itens PENDENTE até confirmar
+ * 2.000 elegíveis — é exatamente o que a auditoria pediu, mas rodar essa
+ * varredura toda vez que ALGUÉM abre a tela de prospecção seria pesado para um
+ * número que a operação não olha o tempo todo. O botão deixa a conferência
+ * explícita: quem clica sabe que pediu uma varredura de verdade.
+ *
+ * ── E POR QUE ELA FUNCIONA COM TUDO PAUSADO ──────────────────────────────────
+ *
+ * Ao contrário da seção "Fila automática" (que usa `montarFilaDeProspeccao` e
+ * fica vazia com a prospecção desligada), esta seção lê
+ * `conferirElegibilidadeReal`, que avalia os pendentes pelas mesmas regras
+ * independente do interruptor — por isso ela é a resposta certa para "quantos
+ * contatos elegíveis eu tenho, antes de ligar?".
+ */
+function ConferenciaDaBase() {
+  const [estado, setEstado] = useState<
+    | { fase: "ociosa" }
+    | { fase: "carregando" }
+    | { fase: "pronta"; dados: Conferencia }
+    | { fase: "erro"; detalhe: string }
+  >({ fase: "ociosa" });
+
+  const conferir = useCallback(async () => {
+    setEstado({ fase: "carregando" });
+    try {
+      const res = await fetch(`${ROTA}?recorte=conferencia`, { cache: "no-store" });
+      const json = (await res.json().catch(() => null)) as { data?: Conferencia; error?: string } | null;
+      if (!res.ok || !json?.data) {
+        setEstado({ fase: "erro", detalhe: json?.error ?? `A conferência falhou (${res.status}).` });
+        return;
+      }
+      setEstado({ fase: "pronta", dados: json.data });
+    } catch (e) {
+      setEstado({ fase: "erro", detalhe: e instanceof Error ? e.message : "Falha de rede." });
+    }
+  }, []);
+
+  return (
+    <section className="rounded-xl border border-line bg-paper p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-[15px] font-semibold text-ink">Conferência da Base fria</h2>
+          <p className="mt-0.5 text-[12.5px] text-muted">
+            Audita quantos contatos são elegíveis de verdade, agora — funciona com a
+            prospecção pausada ou desligada.{" "}
+            <strong className="text-ink">Só lê: não cria lead, não consome item, não envia nada.</strong>
+          </p>
+        </div>
+        <button
+          disabled={estado.fase === "carregando"}
+          onClick={conferir}
+          className="rounded-lg border border-line px-3 py-1.5 text-[13px] font-semibold text-ink transition-colors hover:bg-canvas disabled:opacity-50"
+        >
+          {estado.fase === "carregando" ? "Conferindo…" : "Conferir agora"}
+        </button>
+      </div>
+
+      {estado.fase === "erro" && (
+        <p className="mt-3 rounded-lg border border-line px-3 py-2 text-[12.5px] text-ink">
+          {estado.detalhe}
+        </p>
+      )}
+
+      {estado.fase === "pronta" && (
+        <div className="mt-3 space-y-3 border-t border-line pt-3">
+          <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
+            <div>
+              <p className="text-[11px] uppercase text-muted">Pendentes</p>
+              <p className="text-[15px] font-semibold text-ink tabular-nums">{estado.dados.pendentes}</p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase text-muted">Elegíveis</p>
+              <p className="text-[15px] font-semibold text-ink tabular-nums">
+                {estado.dados.varreuTudo ? "" : "≥ "}
+                {estado.dados.elegiveis}
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase text-muted">Barrados</p>
+              <p className="text-[15px] font-semibold text-ink tabular-nums">{estado.dados.barrados}</p>
+            </div>
+            <div>
+              <p className="text-[11px] uppercase text-muted">Capacidade real da próxima rodada</p>
+              <p className="text-[15px] font-semibold text-ink tabular-nums">{estado.dados.capacidadeReal}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[12.5px] text-muted sm:grid-cols-3">
+            <p>
+              Saldo diário: <span className="font-semibold text-ink">{estado.dados.saldoDiario}</span>{" "}
+              ({estado.dados.usadosHoje}/{estado.dados.tetoDoDia} hoje)
+            </p>
+            <p>
+              Saldo da janela Meta: <span className="font-semibold text-ink">{estado.dados.saldoDaJanela}</span>{" "}
+              ({estado.dados.usadosNaJanela} nas últimas 24h)
+            </p>
+            <p>
+              {estado.dados.itensAvaliados} itens avaliados —{" "}
+              {estado.dados.varreuTudo
+                ? "varredura completa"
+                : `parou ao confirmar a meta de ${estado.dados.alvoDeElegiveis}`}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-[12px] font-semibold text-ink">
+              Amostra dos primeiros {estado.dados.previaAmostral.length} itens avaliados
+            </p>
+            <p className="text-[11.5px] text-muted">
+              Isto é uma AMOSTRA da varredura — não a lista completa de elegíveis nem de barrados.
+            </p>
+            <ul className="mt-2 max-h-64 space-y-1 overflow-y-auto">
+              {estado.dados.previaAmostral.map((c) => (
+                <li key={c.itemId} className="flex items-center justify-between gap-2 text-[12px]">
+                  <span className="truncate text-ink">
+                    {c.nome ?? "Sem nome"} · {c.whatsapp}
+                  </span>
+                  <span className={c.decisao.sendable ? "text-ink2" : "text-muted"}>
+                    {c.decisao.sendable ? "elegível" : c.decisao.detail}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -549,6 +719,9 @@ export function ProspeccaoClient() {
           </p>
         )}
       </section>
+
+      {/* ── 5. CONFERÊNCIA — auditoria somente leitura, sob demanda ─────── */}
+      <ConferenciaDaBase />
 
       <EnriquecerModal
         aberto={modalEnriquecerAberto}

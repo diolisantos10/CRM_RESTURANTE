@@ -5,6 +5,9 @@
  *   GET  ?recorte=importacoes    → histórico de arquivos (paginado)
  *   GET  ?recorte=importacao     → os contatos de UMA importação (paginado)
  *   GET  ?recorte=base           → a base contínua, com busca e filtros
+ *   GET  ?recorte=conferencia    → auditoria somente leitura: quantos elegíveis de verdade,
+ *                                  mesmo com a prospecção pausada. Não cria lead, não consome
+ *                                  item, não envia nada. Ver `conferirElegibilidadeReal`.
  *   POST { acao: "abrirImportacao" }   → declara o arquivo antes das partes
  *   POST { acao: "importar" }          → carrega uma parte, já elegível
  *   POST { acao: "concluirImportacao" }→ fecha o arquivo
@@ -60,7 +63,10 @@ import {
   falharImportacao,
   somarParteNaImportacao,
 } from "@/services/salaDeVendas/prospeccao/importacao";
-import { montarFilaDeProspeccao } from "@/services/salaDeVendas/prospeccao/selecao";
+import {
+  montarFilaDeProspeccao,
+  conferirElegibilidadeReal,
+} from "@/services/salaDeVendas/prospeccao/selecao";
 import { canalDeVendasPronto } from "@/services/foocci-sdr/FoocciSalesChannel";
 import { preVooDoModelo } from "@/services/foocci-sdr/modelosDaMeta";
 
@@ -182,6 +188,7 @@ export async function GET(req: NextRequest) {
   if (recorte === "importacoes") return listarImportacoes(params);
   if (recorte === "importacao") return listarContatosDaImportacao(params);
   if (recorte === "base") return listarBaseFria(params);
+  if (recorte === "conferencia") return conferirParaAuditoria(params);
 
   const [fila, config, totalNaBase, pendentesNaBase] = await Promise.all([
     // Teto de leitura: sem ele, um teto diário alto faria cada abertura da tela
@@ -478,6 +485,35 @@ async function listarBaseFria(params: URLSearchParams) {
       porPagina,
     },
   });
+}
+
+/**
+ * A CONFERÊNCIA — auditoria somente leitura da Base fria.
+ *
+ * ── PARA QUE SERVE, E POR QUE `?recorte=fila` NÃO BASTA ──────────────────────
+ *
+ * `?recorte=fila` devolve `montarFilaDeProspeccao`, que só é útil com a
+ * prospecção LIGADA: desligada ou pausada, ela sempre volta vazia — está certa
+ * para uma rodada de verdade, mas inútil para responder "quantos contatos
+ * elegíveis eu tenho de verdade?" ANTES de ligar. Esta rota chama
+ * `conferirElegibilidadeReal` (`selecao.ts`), que avalia contra as MESMAS regras
+ * (`avaliarAbordagemDeProspeccao`) independente do interruptor — e nunca chama
+ * `materializarLead`: nenhum lead nasce, nenhum item sai de PENDENTE, nenhuma
+ * mensagem é enviada, abrir ou recarregar esta tela quantas vezes for.
+ *
+ * `?alvo=N` é opcional e sobrescreve a meta de 2.000 que a varredura tenta
+ * confirmar — só para depuração; a tela usa o padrão.
+ */
+async function conferirParaAuditoria(params: URLSearchParams) {
+  const alvoBruto = filtro(params, "alvo");
+  const alvo = alvoBruto ? inteiroNaoNegativo(Number(alvoBruto)) : null;
+
+  const conferencia = await conferirElegibilidadeReal(prisma, {
+    canalPronto: canalDeVendasPronto(),
+    ...(alvo && alvo > 0 ? { alvoDeElegiveis: alvo } : {}),
+  });
+
+  return NextResponse.json({ ok: true, data: conferencia });
 }
 
 export async function POST(req: NextRequest) {
