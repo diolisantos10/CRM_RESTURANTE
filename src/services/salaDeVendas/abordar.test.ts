@@ -181,25 +181,23 @@ describe("o caminho feliz", () => {
 });
 
 /**
- * ⛔⛔ A CIDADE FALTAVA NO `select` — achado da auditoria, 11/09/2026.
+ * ⛔⛔ CONTRATO REAL DO TEMPLATE — confirmado na Meta em 11/09/2026.
  *
- * `abordarLead` buscava o lead com `select: { ..., restaurante, fonte }` — sem
- * `cidade`. Para qualquer modelo aprovado cuja {{2}} peça cidade,
- * `montarParametros` recebia `lead.cidade === undefined` para TODO contato,
- * mesmo os que têm cidade cadastrada, e recusava com `semDadoParaOModelo` —
- * uma rodada inteira parada por um campo que existia no banco e nunca chegava
- * ao código que o lê.
+ * O texto aprovado exige, nesta ordem: saudação, restaurante e procedência.
+ * A procedência pertence ao lote e precisa chegar tanto ao diagnóstico quanto
+ * ao envio real; se qualquer um montar outra ordem, o teste falha antes de uma
+ * nova rodada em produção.
  */
-describe("⛔⛔ a cidade chega ao modelo — o campo que faltava no select", () => {
+describe("⛔⛔ o payload segue o template aprovado na Meta", () => {
   const semVariaveisExtras = () => {
     delete process.env.FOOCCI_SDR_MODELO_VARIAVEIS;
   };
 
   afterEach(semVariaveisExtras);
 
-  it("⭐ modelo de duas variáveis: {{1}} saudação, {{2}} cidade — e a cidade REALMENTE sai", async () => {
+  it("modelo de duas variáveis leva saudação e restaurante", async () => {
     process.env.FOOCCI_SDR_MODELO_VARIAVEIS = "2";
-    const { db } = banco({ lead: { cidade: "Curitiba", fonte: "LISTA_PROSPECCAO" } });
+    const { db } = banco({ lead: { restaurante: "Divino Sabor", cidade: "Curitiba", fonte: "LISTA_PROSPECCAO" } });
 
     const r = await abordarLead(db, { leadId: "L1", autorUserId: "u1", agora: AGORA });
 
@@ -207,18 +205,22 @@ describe("⛔⛔ a cidade chega ao modelo — o campo que faltava no select", ()
     const modelo = enviarModelo.mock.calls[0]![2] as { parametros: string[] };
     // fonte LISTA_PROSPECCAO: a saudação leva o nome INTEIRO da coluna da
     // lista, não o primeiro nome (ver "a saudação do modelo", acima).
-    expect(modelo.parametros).toEqual(["Marina Gambarini", "Curitiba"]);
+    expect(modelo.parametros).toEqual(["Divino Sabor", "Divino Sabor"]);
   });
 
-  it("⛔ sem cidade cadastrada, o modelo de duas variáveis recusa — mas por FALTA DE DADO, não por bug de consulta", async () => {
-    process.env.FOOCCI_SDR_MODELO_VARIAVEIS = "2";
-    const { db } = banco({ lead: { cidade: null, fonte: "LISTA_PROSPECCAO" } });
+  it("modelo aprovado de três variáveis leva a procedência declarada no lote", async () => {
+    process.env.FOOCCI_SDR_MODELO_VARIAVEIS = "3";
+    const { db } = banco({ lead: { restaurante: "Divino Sabor", fonte: "LISTA_PROSPECCAO" } });
 
     const r = await abordarLead(db, { leadId: "L1", autorUserId: "u1", agora: AGORA });
 
-    expect(r.abordou).toBe(false);
-    expect(r.abordou === false && r.motivo).toBe("semDadoParaOModelo");
-    expect(r.abordou === false && r.detalhe).toContain("cidade");
+    expect(r.abordou, JSON.stringify(r)).toBe(true);
+    const modelo = enviarModelo.mock.calls[0]![2] as { parametros: string[] };
+    expect(modelo.parametros).toEqual([
+      "Divino Sabor",
+      "Divino Sabor",
+      "Lista pública de CNPJs de restaurantes (SP)",
+    ]);
   });
 
   it("⛔⛔ a sonda de regressão — `select` do siteLead.findUnique tem que pedir `cidade`", async () => {
