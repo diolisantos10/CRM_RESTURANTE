@@ -37,7 +37,7 @@ const LEAD = {
 const AGORA = new Date("2026-09-07T13:00:00Z");
 
 function banco(over: {
-  lead?: (Partial<typeof LEAD> & { fonte?: string | null }) | null;
+  lead?: (Partial<typeof LEAD> & { fonte?: string | null; restaurante?: string | null; cidade?: string | null }) | null;
   tentativas?: number;
   jaSairam?: number;
   /** O item de prospecção do lead. `null` = não existe nenhum. */
@@ -67,8 +67,29 @@ function banco(over: {
       siteLead: {
         /** `contarAbordagensDeHoje`, reusada do `selecao.ts`. */
         count: async () => over.usadosHoje ?? 0,
-        findUnique: async () =>
-          over.lead === null ? null : { ...LEAD, ...(over.lead ?? {}) },
+        /**
+         * ⛔ CORRIGIDO, 11/09/2026 — este duplo devolvia `{...LEAD, ...over.lead}`
+         * IGNORANDO o `select` recebido. Foi exatamente esse ponto cego que deixou
+         * `cidade` faltar do `select` real de `abordarLead` sem nenhum dos 41
+         * testes deste arquivo perceber: o duplo inventava o campo de volta,
+         * mesmo quando o código de produção nunca o pedia ao banco.
+         *
+         * Agora a resposta é FILTRADA pelo `select` recebido, como o Prisma faz de
+         * verdade — campo fora do `select` não volta, ponto final. "Duplo de banco
+         * que ignora o argumento não testa consulta — testa o retorno que você
+         * mesmo escreveu" (doutrina já registrada acima, para `itemDeProspeccao`).
+         */
+        findUnique: async (args: { select?: Record<string, boolean> }) => {
+          consultas.push({ modelo: "siteLead.findUnique", ...args });
+          if (over.lead === null) return null;
+          const completo: Record<string, unknown> = { ...LEAD, ...(over.lead ?? {}) };
+          if (!args.select) return completo;
+          const filtrado: Record<string, unknown> = {};
+          for (const campo of Object.keys(args.select)) {
+            if (args.select[campo]) filtrado[campo] = completo[campo];
+          }
+          return filtrado;
+        },
         update: async (args: { data: Record<string, unknown> }) => {
           carimbos.push(args.data);
           return {};
@@ -156,6 +177,60 @@ describe("o caminho feliz", () => {
     const { db, gravadas } = banco();
     await abordarLead(db, { leadId: "L1", autorUserId: "u7", agora: AGORA });
     expect(gravadas[0]!.autorUserId).toBe("u7");
+  });
+});
+
+/**
+ * ⛔⛔ A CIDADE FALTAVA NO `select` — achado da auditoria, 11/09/2026.
+ *
+ * `abordarLead` buscava o lead com `select: { ..., restaurante, fonte }` — sem
+ * `cidade`. Para qualquer modelo aprovado cuja {{2}} peça cidade,
+ * `montarParametros` recebia `lead.cidade === undefined` para TODO contato,
+ * mesmo os que têm cidade cadastrada, e recusava com `semDadoParaOModelo` —
+ * uma rodada inteira parada por um campo que existia no banco e nunca chegava
+ * ao código que o lê.
+ */
+describe("⛔⛔ a cidade chega ao modelo — o campo que faltava no select", () => {
+  const semVariaveisExtras = () => {
+    delete process.env.FOOCCI_SDR_MODELO_VARIAVEIS;
+  };
+
+  afterEach(semVariaveisExtras);
+
+  it("⭐ modelo de duas variáveis: {{1}} saudação, {{2}} cidade — e a cidade REALMENTE sai", async () => {
+    process.env.FOOCCI_SDR_MODELO_VARIAVEIS = "2";
+    const { db } = banco({ lead: { cidade: "Curitiba", fonte: "LISTA_PROSPECCAO" } });
+
+    const r = await abordarLead(db, { leadId: "L1", autorUserId: "u1", agora: AGORA });
+
+    expect(r.abordou, JSON.stringify(r)).toBe(true);
+    const modelo = enviarModelo.mock.calls[0]![2] as { parametros: string[] };
+    // fonte LISTA_PROSPECCAO: a saudação leva o nome INTEIRO da coluna da
+    // lista, não o primeiro nome (ver "a saudação do modelo", acima).
+    expect(modelo.parametros).toEqual(["Marina Gambarini", "Curitiba"]);
+  });
+
+  it("⛔ sem cidade cadastrada, o modelo de duas variáveis recusa — mas por FALTA DE DADO, não por bug de consulta", async () => {
+    process.env.FOOCCI_SDR_MODELO_VARIAVEIS = "2";
+    const { db } = banco({ lead: { cidade: null, fonte: "LISTA_PROSPECCAO" } });
+
+    const r = await abordarLead(db, { leadId: "L1", autorUserId: "u1", agora: AGORA });
+
+    expect(r.abordou).toBe(false);
+    expect(r.abordou === false && r.motivo).toBe("semDadoParaOModelo");
+    expect(r.abordou === false && r.detalhe).toContain("cidade");
+  });
+
+  it("⛔⛔ a sonda de regressão — `select` do siteLead.findUnique tem que pedir `cidade`", async () => {
+    // Prova direta, e não só pelo comportamento: se `cidade: true` sumir de novo
+    // do `select` de `abordarLead`, este teste reprova apontando exatamente
+    // onde, em vez de esperar alguém notar que uma rodada inteira parou.
+    const { db, consultas } = banco();
+    await abordarLead(db, { leadId: "L1", autorUserId: "u1", agora: AGORA });
+
+    const consulta = consultas.find((c) => c.modelo === "siteLead.findUnique");
+    const select = consulta?.select as Record<string, boolean> | undefined;
+    expect(select?.cidade, "select do lead não pede mais `cidade`").toBe(true);
   });
 });
 
