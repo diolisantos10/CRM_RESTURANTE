@@ -125,6 +125,15 @@ describe("as abas continuam fechando por papel", () => {
     expect(dele).not.toContain("Criar acesso");
   });
 
+  it("⭐ o SDR humano também não ganha a aba da Supervisora", () => {
+    // A Supervisora compara o desempenho dos agentes entre si — a mesma razão
+    // de negócio por que o Painel é fechado para o SDR.
+    expect(rotulos("AGENTE_HUMANO")).not.toContain("Supervisora");
+    for (const papel of ["MASTER_CEO", "DIRETOR_FOOCCI", "GERENTE_DEPARTAMENTO", "AUDITOR_QA"] as const) {
+      expect(rotulos(papel), papel).toContain("Supervisora");
+    }
+  });
+
   it("mas ele continua alcançando o trabalho do dia", () => {
     // A metade que passa. Sem ela, uma lista que escondesse TUDO de todos
     // passaria no caso acima e deixaria o vendedor sem tela nenhuma.

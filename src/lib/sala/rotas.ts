@@ -88,6 +88,15 @@ export const ROTAS = {
    */
   baseFria: `${COMERCIAL}/base-fria`,
   acessos: `${COMERCIAL}/acessos`,
+  /**
+   * A Supervisora — a camada de revisão que acompanha todo agente (IA e
+   * humano) que fala com lead. Fica ao lado do Painel e do Agente porque
+   * responde à mesma pergunta de gestão ("como o time está atendendo"), não
+   * à pergunta operacional de "o que eu tenho para fazer agora" — por isso
+   * segue a MESMA lista de papéis de `PAPEIS_DO_PAINEL`, abaixo, e não a
+   * lista `PARA_TODOS`.
+   */
+  supervisora: `${COMERCIAL}/supervisora`,
 } as const;
 
 /**
@@ -197,6 +206,11 @@ export function abasDoComercial(papel: InternalRole | null): Aba[] {
     // é o pior jeito possível.
     ...(tudo || PAPEIS_DO_PAINEL.has(papel) ? [{ href: ROTAS.agente, rotulo: "O agente" }] : []),
     ...(tudo || PAPEIS_DO_WHATSAPP.has(papel) ? [{ href: ROTAS.whatsapp, rotulo: "WhatsApp" }] : []),
+    // A Supervisora segue a MESMA régua do Painel: gestão e auditoria, nunca
+    // o SDR — o painel dela compara agentes entre si, e é exatamente o tipo
+    // de tela que `rotulos("AGENTE_HUMANO")` prova, em `rotas.test.ts`, que
+    // ele NUNCA ganha.
+    ...(tudo || PAPEIS_DO_PAINEL.has(papel) ? [{ href: ROTAS.supervisora, rotulo: "Supervisora" }] : []),
     // A prospecção aparece para a Sala inteira LER, **o SDR humano incluído** —
     // é ele quem vai abordar, e ele precisa ver a fila do dia e por que alguém
     // foi barrado. Esconder dele a fila que ele mesmo executa seria folclore.

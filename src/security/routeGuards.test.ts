@@ -96,7 +96,12 @@ const TENANT_HELPER =
 // mencionam `autorizarInterno` diretamente, e sem esta entrada o portão as
 // acusaria de estarem sem guarda — empurrando o próximo engenheiro a duplicar a
 // checagem em cada rota, que é como uma delas acaba ficando de fora.
-const ADMIN_GUARD = /\b(guardAdmin|checkAdminRequest|autorizarInterno|guardarSalaDeVendas)\b/;
+//
+// `guardarPainelDaSupervisora` entrou em 12/09/2026, pelo mesmo motivo de
+// `guardarSalaDeVendas`: é o mesmo invólucro fino em cima de `autorizarInterno`
+// (`_guardaDoPainel.ts`), só que com a lista de papéis do painel da Supervisora
+// (gestão + auditor, sem o SDR) em vez da lista da Sala inteira.
+const ADMIN_GUARD = /\b(guardAdmin|checkAdminRequest|autorizarInterno|guardarSalaDeVendas|guardarPainelDaSupervisora)\b/;
 
 // …unless it is one of these vetted exceptions. Each does its OWN auth and cannot
 // use the shared helper. Adding to this list is a conscious, reviewed act — a NEW
