@@ -104,9 +104,9 @@ export interface EntradaDeVendas {
    * O que o TA fez com este "oi", quando chegou a ser chamado.
    *
    * Ausente = ele não foi consultado (pedido de silêncio, mensagem sem texto,
-   * ou falha antes disso). **Presente e calado é diferente de ausente**, e a
-   * diferença é o que permite responder "por que o TA não respondeu aquele
-   * cliente?" sem abrir o banco.
+   * reentrega confirmada da Meta, ou falha antes disso). **Presente e calado é
+   * diferente de ausente**, e a diferença é o que permite responder "por que
+   * o TA não respondeu aquele cliente?" sem abrir o banco.
    */
   ta?: ResultadoDoTurno;
 }
@@ -199,13 +199,13 @@ export async function receberMensagemDeVendas(msg: MensagemDeVendas): Promise<En
       if (!novo) {
         return { status: "FALHOU", leadId: null, codigo: null, detalhe: "contato novo NÃO gravado" };
       }
-      await gravarNaConversa(novo.id, msg, agora);
+      const gravacao = await gravarNaConversa(novo.id, msg, agora);
       return {
         status: "CONTATO_NOVO",
         leadId: novo.id,
         codigo: novo.codigo,
         detalhe: "primeiro contato pelo WhatsApp, sem formulário",
-        ta: await chamarOTA(novo.id, msg, leitura, agora),
+        ta: gravacao.repetida ? undefined : await chamarOTA(novo.id, msg, leitura, agora),
       };
     }
 
@@ -215,14 +215,14 @@ export async function receberMensagemDeVendas(msg: MensagemDeVendas): Promise<En
       data: { lastInteractionAt: agora },
     });
     await registrarInteracao(lead.id, "RESPOSTA_RECEBIDA", "Escreveu no WhatsApp de vendas.", agora);
-    await gravarNaConversa(lead.id, msg, agora);
+    const gravacao = await gravarNaConversa(lead.id, msg, agora);
 
     return {
       status: leitura.codigo && lead.codigo === leitura.codigo ? "RECONHECIDO_POR_CODIGO" : "RECONHECIDO_POR_TELEFONE",
       leadId: lead.id,
       codigo: lead.codigo,
       detalhe: leitura.codigo ? `código #${leitura.codigo}` : "reconhecido pelo telefone",
-      ta: await chamarOTA(lead.id, msg, leitura, agora),
+      ta: gravacao.repetida ? undefined : await chamarOTA(lead.id, msg, leitura, agora),
     };
   } catch (e) {
     console.error("[foocci-sdr] falha ao receber mensagem de vendas:", e);
@@ -233,6 +233,19 @@ export async function receberMensagemDeVendas(msg: MensagemDeVendas): Promise<En
       detalhe: e instanceof Error ? e.message.slice(0, 200) : "erro desconhecido",
     };
   }
+}
+
+/**
+ * O que `gravarNaConversa` conseguiu descobrir sobre esta entrada — só o que o
+ * chamador precisa para decidir se chama o TA.
+ *
+ * `repetida: true` é a única coisa que importa para quem chama: **é** a mesma
+ * mensagem que a Meta já entregou antes (o índice único de `waMessageId` viu),
+ * então nada além dela deve tratar este webhook como coisa nova — nem gravar
+ * de novo, nem compor resposta de novo.
+ */
+interface ResultadoDaGravacao {
+  repetida: boolean;
 }
 
 /**
@@ -250,16 +263,41 @@ export async function receberMensagemDeVendas(msg: MensagemDeVendas): Promise<En
  *
  * Sem `waMessageId` não grava: sem ele a reentrega da Meta entraria de novo, e
  * a conversa mostraria a pessoa perguntando o preço duas vezes.
+ *
+ * ── ⛔ `repetida: true` TEM QUE CHEGAR AO CHAMADOR, E CHEGAVA SÓ ATÉ AQUI ────
+ *
+ * Medido em 12/09/2026, contra Postgres de verdade: esta função sabia que a
+ * entrada era uma reentrega da Meta (`registrarEntrada` devolve `repetida:
+ * true`, o índice único da ENTRADA barrando a segunda gravação) — e jogava
+ * fora essa informação, devolvendo `void`. Quem chamava seguia direto para
+ * `chamarOTA`, sem saber que nada de novo tinha chegado.
+ *
+ * `chamarOTA`, por sua vez, não relê o texto que chegou: ele relê "o que está
+ * PENDENTE" (`juntarEntradasDoTurno`). Numa reentrega, a entrada original já
+ * foi consolidada e carimbada no primeiro turno — então não há nada pendente
+ * — e o CHÃO de `turnoConsolidado` (pensado para quando a gravação da entrada
+ * FALHOU de verdade) entra em ação por engano, responde ao texto cru do
+ * webhook, e grava uma SAÍDA nova. Resultado: a Meta reentrega o "oi" que já
+ * foi respondido, e o cliente recebe a mesma resposta duas vezes — o defeito
+ * que a trava de idempotência da ENTRADA existe para evitar, só que do lado
+ * da SAÍDA, que ela nunca olhou.
+ *
+ * A trava de índice único continua sendo só da ENTRADA — não dá para (nem faz
+ * sentido) estender um índice único a "resposta enviada". A correção é o
+ * chamador respeitar o que esta função já sabia: reentrega confirmada não
+ * chama o TA, ponto.
  */
 async function gravarNaConversa(
   leadId: string,
   msg: MensagemDeVendas,
   agora: Date,
-): Promise<void> {
+): Promise<ResultadoDaGravacao> {
   // Capturado numa const: o estreitamento de `msg.waMessageId` pelo `if` acima
   // não sobrevive à entrada no fecho passado a `comIdentidade`.
   const waMessageId = msg.waMessageId;
-  if (!waMessageId) return;
+  // Sem `waMessageId` não há como saber se é reentrega — trata-se como mensagem
+  // nova, que é o comportamento de sempre (guardrail 1: ausência não é negação).
+  if (!waMessageId) return { repetida: false };
 
   try {
     // Roda como SISTEMA porque não há pessoa logada: é a Meta entregando um
@@ -286,9 +324,15 @@ async function gravarNaConversa(
 
     if (!r.ok) {
       console.error(`[foocci-sdr] mensagem NÃO gravada na conversa do lead ${leadId}: ${r.causa}`);
+      // Falha de gravação (ex.: lead sumiu) não é reentrega confirmada — não há
+      // base para calar o TA por causa disto. Comportamento de sempre: segue.
+      return { repetida: false };
     }
+
+    return { repetida: r.repetida };
   } catch (e) {
     console.error("[foocci-sdr] falha ao gravar mensagem na conversa:", e);
+    return { repetida: false };
   }
 }
 

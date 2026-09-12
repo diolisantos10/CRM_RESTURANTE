@@ -1,3 +1,88 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ⛔ ROLLBACK EM PRODUÇÃO — passo a passo, se um dia for preciso desfazer
+-- ═══════════════════════════════════════════════════════════════════════════
+--
+-- Escrito em 12/09/2026, item 7 da auditoria do CEO sobre esta feature.
+-- Nenhum passo abaixo foi um DOWN automático do Prisma (esta cadeia de
+-- migrations não usa `migrate down`) — são comandos para rodar À MÃO, na
+-- ordem, com alguém olhando cada resultado antes do próximo.
+--
+-- ── ANTES DE QUALQUER DROP ───────────────────────────────────────────────────
+--
+--   0a. Confirmar que `SupervisoraConfig.modoEfetivo` está OFF (ou que ninguém
+--       se importa em perder a Supervisora rodando) — GUARD/INTERVENTION ativos
+--       significa que mensagens estão sendo bloqueadas/reescritas por ela AGORA;
+--       desligar o código sem desligar o comportamento primeiro (`POST
+--       /api/admin/sala-de-vendas/supervisora` com `{ligada: false}`) muda o
+--       comportamento de produção no mesmo instante do rollback, sem aviso.
+--   0b. Guardar uma cópia das quatro tabelas novas antes de dropar — elas são
+--       histórico de auditoria (avaliações, sugestões, trocas de modo), não
+--       cache: uma vez dropadas, esse histórico não volta.
+--         pg_dump --table=supervisora_avaliacoes --table=supervisora_config \
+--                 --table=supervisora_modo_historico \
+--                 --table=supervisora_sugestoes_prompt \
+--                 --data-only -Fc "$DATABASE_URL" > supervisora_backup.dump
+--
+-- ── A ORDEM DOS DROPS (de quem depende para quem é dependido) ───────────────
+--
+--   1. `supervisora_sugestoes_prompt` — não tem FK de ninguém apontando pra
+--      ela (só referências textuais soltas, `evidenciaMensagemIds`/
+--      `evidenciaLeadIds`, sem constraint). Primeira a cair.
+--        DROP TABLE IF EXISTS "supervisora_sugestoes_prompt";
+--
+--   2. `supervisora_avaliacoes` — tem FK para `lead_mensagens` e `SiteLead`
+--      (ON DELETE CASCADE nesse sentido, mas a tabela em si não é referenciada
+--      por mais ninguém). Segunda a cair.
+--        DROP TABLE IF EXISTS "supervisora_avaliacoes";
+--
+--   3. `supervisora_modo_historico` — tem FK para `supervisora_config`.
+--      Precisa cair ANTES da config, senão a FK barra o DROP seguinte.
+--        DROP TABLE IF EXISTS "supervisora_modo_historico";
+--
+--   4. `supervisora_config` — por último entre as quatro, já sem nada mais
+--      apontando pra ela.
+--        DROP TABLE IF EXISTS "supervisora_config";
+--
+--   5. As colunas que esta migração ACRESCENTOU em `sdr_ia_config_versoes`
+--      (todas opcionais — remover não quebra nenhuma linha existente, mas
+--      apaga o que estiver preenchido nelas, ex.: sugestões de nível 3 já
+--      aprovadas). Conferir com quem pediu o rollback se isso é aceitável
+--      antes de rodar:
+--        ALTER TABLE "sdr_ia_config_versoes"
+--          DROP COLUMN IF EXISTS "agenteAfetado",
+--          DROP COLUMN IF EXISTS "criadaPorId",
+--          DROP COLUMN IF EXISTS "evidencias",
+--          DROP COLUMN IF EXISTS "justificativaDaAlteracao",
+--          DROP COLUMN IF EXISTS "origemSugestaoId",
+--          DROP COLUMN IF EXISTS "problemaObservado",
+--          DROP COLUMN IF EXISTS "testeCorrespondente",
+--          DROP COLUMN IF EXISTS "trechoAnterior",
+--          DROP COLUMN IF EXISTS "trechoNovoProposto";
+--
+--   6. Os enums — só depois de nada mais usá-los (os DROPs 1-5 já bastam,
+--      porque nenhuma outra tabela deste schema usa estes tipos):
+--        DROP TYPE IF EXISTS "ModoDaSupervisora";
+--        DROP TYPE IF EXISTS "CamadaDaSupervisora";
+--        DROP TYPE IF EXISTS "VeredictoDaSupervisora";
+--        DROP TYPE IF EXISTS "AcaoDaSupervisora";
+--        DROP TYPE IF EXISTS "MotivoDaSupervisora";
+--        DROP TYPE IF EXISTS "AutorDaSugestaoDePrompt";
+--        DROP TYPE IF EXISTS "SituacaoDaSugestaoDePrompt";
+--
+-- ── DEPOIS DO BANCO ───────────────────────────────────────────────────────────
+--
+--   7. O rollback do BANCO não desfaz o CÓDIGO: `entrega.ts` continua chamando
+--      `revisarAntesDeEntregar`, que continua lendo `supervisora_config` — sem
+--      a tabela, `lerConfig` lança, e (para SHADOW) isso é tratado como "não
+--      espera, dispara em segundo plano" (ver `revisao.ts`), o que por sua vez
+--      tentaria gravar em `supervisora_avaliacoes`, que também não existe mais.
+--      Rollback de banco sem reverter (ou pelo menos desligar) o deploy do
+--      código deixa todo turno da IA gerando um erro de "tabela não existe" em
+--      segundo plano — silenciado do ponto de vista do envio (SHADOW nunca
+--      bloqueia), mas barulhento no log. Reverta os dois juntos.
+--
+-- ═══════════════════════════════════════════════════════════════════════════
+
 -- CreateEnum
 CREATE TYPE "ModoDaSupervisora" AS ENUM ('OFF', 'SHADOW', 'GUARD', 'INTERVENTION');
 
