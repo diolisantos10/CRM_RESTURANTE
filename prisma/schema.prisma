@@ -7488,11 +7488,62 @@ model ItemDeProspeccao {
   criadoEm     DateTime  @default(now())
   processadoEm DateTime?
 
+  /// Divergências detectadas quando uma planilha nova trouxe valor diferente
+  /// de um campo já preenchido — ver `ConflitoDeImportacao`.
+  conflitos ConflitoDeImportacao[]
+
   /// O mesmo telefone não entra duas vezes no mesmo lote.
   @@unique([loteId, whatsappDigits])
   @@index([situacao])
   @@index([whatsappDigits])
   @@map("itens_de_prospeccao")
+}
+
+/// ⭐ O CONFLITO DE IMPORTAÇÃO — auditoria de quando um arquivo novo diverge do
+/// que já estava gravado, 12/09/2026 (redesenho da prospecção automática).
+///
+/// ── POR QUE ISTO EXISTE, E POR QUE NÃO É SÓ UM LOG ─────────────────────────
+///
+/// `enriquecerPlanilhaDeItems` só preenche campo NULO — nunca sobrescreve o que
+/// já está preenchido, porque o dado original é a verdade. Até aqui, quando a
+/// planilha nova trazia um valor DIFERENTE de um campo já preenchido, a função
+/// simplesmente ignorava: o valor antigo ficava, e ninguém sabia que uma
+/// segunda fonte discordava dele. Essa divergência é informação — pode ser o
+/// dado velho que está errado, pode ser a planilha nova que trouxe lixo — e
+/// alguém precisa poder olhar e decidir, mesmo que o sistema não decida por
+/// conta própria.
+///
+/// Uma tabela pequena e dedicada, e não `InternalAuditEvent`: o conflito tem
+/// estrutura própria (campo, os dois valores, o item, o arquivo de origem) que
+/// vale poder consultar por `itemId` ou por `campo` — forçar isso dentro do
+/// `Json` de `InternalAuditEvent.detalhe` obrigaria toda consulta a varrer e
+/// desserializar, e o conceito ("dois valores discordando para o mesmo campo
+/// do mesmo item") não é um evento de autorização, é dado de negócio.
+model ConflitoDeImportacao {
+  id String @id @default(cuid())
+
+  itemId String
+  item   ItemDeProspeccao @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  /// O nome do campo em conflito — `empresa`, `cidade`, `email`… os mesmos
+  /// nomes de `ItemDeProspeccao`, para não inventar um segundo dicionário.
+  campo String
+  /// O que já estava gravado, e continua gravado — o conflito NUNCA sobrescreve.
+  valorAtual String
+  /// O que a planilha nova trouxe, e que não entrou.
+  valorNovo String
+
+  /// De qual arquivo veio o valor novo — `ImportacaoDeLeads.arquivoNome`, texto
+  /// solto (e não relação): o enriquecimento por planilha manual não sempre
+  /// tem uma `ImportacaoDeLeads` por trás, e o conflito precisa existir mesmo
+  /// sem ela.
+  arquivoOrigem String?
+
+  detectadoEm DateTime @default(now())
+
+  @@index([itemId])
+  @@index([campo])
+  @@map("conflitos_de_importacao")
 }
 
 /// Em que pé está o processamento de uma importação.
@@ -7610,6 +7661,36 @@ model ModeloDeVendas {
 
   /// ⭐ Quantos `{{n}}` o corpo tem, contado do que a Meta devolveu.
   variaveis Int @default(0)
+
+  /// ⭐ AUTORIZAÇÃO INTERNA — separada do `situacao` da Meta, 12/09/2026.
+  ///
+  /// ── POR QUE ISTO É UM CAMPO A MAIS, E NÃO SÓ `situacao === APPROVED` ──────
+  ///
+  /// A Meta aprova o TEXTO — sintaxe, categoria, política de conteúdo dela.
+  /// Ela nunca aprova a DECISÃO DE NEGÓCIO de usar aquele texto agora: um
+  /// modelo pode estar `APPROVED` na Meta e ainda assim ser um v1 em revisão
+  /// interna, esperando autorização expressa do CEO antes do primeiro envio
+  /// de verdade. As duas perguntas são diferentes e precisam de dois campos.
+  ///
+  /// ⚠️ **`@default(true)`, e a razão é a migração, não a conveniência.** No
+  /// momento em que este campo nasceu, `abordagem_restaurante_fria` já estava
+  /// `APPROVED` e enviando mensagens reais em produção (corrigido no #245) —
+  /// e uma migração que deixasse todo modelo nascendo `false` por padrão
+  /// pararia esse envio no ato seguinte ao deploy, sem ninguém ter decidido
+  /// desligar nada. A migração desta coluna faz o backfill explícito: todo
+  /// modelo com `situacao = 'APPROVED'` já existente no banco sai com
+  /// `autorizado = true` — nunca `false` por engano no que já está no ar. O
+  /// padrão `true` para modelo NOVO é a mesma régua, adiante: sincronizar um
+  /// modelo recém-aprovado da Meta não deve travar por si só — a trava
+  /// explícita de "v1 em revisão" é para quando ALGUÉM MARCAR manualmente
+  /// `autorizado = false` num modelo específico, não para todo modelo nascer
+  /// bloqueado. Ver `20260912000000_gate_de_autorizacao_do_modelo/migration.sql`.
+  ///
+  /// ⛔ **O PRÉ-VOO E O ENVIO PRECISAM LER ESTE CAMPO PELA MESMA FUNÇÃO** —
+  /// mesma régua P0.2 de `parametrosDoEnvioAgora`: dois pontos de leitura que
+  /// divergem sobre "pode enviar?" é o defeito que esta obra já nomeou duas
+  /// vezes. Ver `conferirModeloDeAbordagem` em `modelosDaMeta.ts`.
+  autorizado Boolean @default(true)
 
   metaTemplateId  String?
   motivoDaRecusa  String?

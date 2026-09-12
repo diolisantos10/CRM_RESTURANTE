@@ -10,6 +10,11 @@
  *                                  item, não envia nada. Ver `conferirElegibilidadeReal`.
  *   POST { acao: "abrirImportacao" }   → declara o arquivo antes das partes
  *   POST { acao: "importar" }          → carrega uma parte, já elegível
+ *   POST { acao: "importarClassificado" } → ⭐ a mesma parte, classificada linha a
+ *                                  linha (novo/duplicata/enriquecimento/conflito/
+ *                                  inválido/inelegível) antes de despachar —
+ *                                  ver `classificacao.ts`. Aditiva; `importar`
+ *                                  continua existindo sem mudança.
  *   POST { acao: "concluirImportacao" }→ fecha o arquivo
  *   POST { acao: "cancelarImportacao"} → retira da fila os PENDENTES do arquivo, sem apagar nada
  *   POST { acao: "rodada" }      → dispara a rodada automática do dia
@@ -55,6 +60,7 @@ import {
   MAX_LINHAS_POR_IMPORTACAO,
   type LinhaDaLista,
 } from "@/services/salaDeVendas/prospeccao/lote";
+import { classificarArquivoDeImportacao } from "@/services/salaDeVendas/prospeccao/classificacao";
 import {
   abrirImportacao,
   arquivoJaImportado,
@@ -70,10 +76,14 @@ import {
 } from "@/services/salaDeVendas/prospeccao/selecao";
 import {
   canalDeVendasPronto,
+  conferirCanalDeVendas,
   isFoocciSalesChannelConfigured,
   isFoocciSdrSendEnabled,
 } from "@/services/foocci-sdr/FoocciSalesChannel";
 import { preVooDoModelo } from "@/services/foocci-sdr/modelosDaMeta";
+import { funilPorModelo } from "@/services/foocci-sdr/funilDoModelo";
+import { modelosSincronizadosDaSala } from "@/services/foocci-sdr/sincronizarModelos";
+import { proximaExecucaoDaRodada } from "@/services/salaDeVendas/prospeccao/agendador";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -124,6 +134,7 @@ type Acao =
   | "conferir"
   | "abrirImportacao"
   | "importar"
+  | "importarClassificado"
   | "concluirImportacao"
   | "cancelarImportacao"
   | "abordar"
@@ -177,6 +188,7 @@ interface Corpo {
 const ACOES_QUE_AUTORIZAM = new Set<Acao>([
   "abrirImportacao",
   "importar",
+  "importarClassificado",
   "concluirImportacao",
   "cancelarImportacao",
   "rodada",
@@ -194,6 +206,9 @@ export async function GET(req: NextRequest) {
   if (recorte === "importacao") return listarContatosDaImportacao(params);
   if (recorte === "base") return listarBaseFria(params);
   if (recorte === "conferencia") return conferirParaAuditoria(params);
+  if (recorte === "preVoo") return conferirPreVooParaTela();
+  if (recorte === "canal") return conferirCanalParaTela();
+  if (recorte === "funil") return funilParaTela();
 
   const [fila, config, totalNaBase, pendentesNaBase] = await Promise.all([
     // Teto de leitura: sem ele, um teto diário alto faria cada abertura da tela
@@ -226,6 +241,11 @@ export async function GET(req: NextRequest) {
         ultimaRodadaAutomaticaPor: null,
       },
       canalPronto: canalDeVendasPronto(),
+      // ⭐ 12/09/2026 — "Próxima execução" do bloco Operação. Calculada a
+      // partir da MESMA hora e dos MESMOS dias úteis que `AgendadorDaProspeccao`
+      // usa (`horaDaRodada`/`REGRA.diasUteis`, via `proximaExecucaoDaRodada`) —
+      // não é uma segunda régua de horário, é a mesma andando para a frente.
+      proximaRodadaEm: proximaExecucaoDaRodada(new Date()).toISOString(),
     },
   });
 }
@@ -543,6 +563,52 @@ async function conferirParaAuditoria(params: URLSearchParams) {
   return NextResponse.json({ ok: true, data: conferencia });
 }
 
+/**
+ * ⭐ ?recorte=preVoo — A CONFERÊNCIA DO MODELO, SOZINHA, PARA A TELA.
+ *
+ * Redesenho da prospecção automática e minimalista, 12/09/2026: o bloco
+ * "Aviso operacional" precisa saber SE o modelo aprovado está pronto para
+ * sair — aprovado na Meta, autorizado internamente, com o número de variáveis
+ * batendo — sem gastar um contato para descobrir. `preVooDoModelo` já existe
+ * exatamente para isso (usada pela rodada e pelo cron de pré-voo); esta rota
+ * só abre a mesma leitura para quem está logado na tela, sem exigir
+ * `CRON_SECRET`. Duas leituras contra a Graph, nenhuma escrita, nenhum envio.
+ */
+async function conferirPreVooParaTela() {
+  const conferencia = await preVooDoModelo();
+  return NextResponse.json({ ok: true, data: conferencia });
+}
+
+/**
+ * ⭐ ?recorte=canal — "O CANAL FUNCIONA DE VERDADE?", PARA A TELA.
+ *
+ * `isFoocciSalesChannelConfigured()` (já no GET principal, como `canalPronto`)
+ * só confere PRESENÇA das variáveis. `conferirCanalDeVendas()` pergunta à
+ * própria Meta se o token alcança o número — é o que distingue "canal
+ * indisponível" (nada configurado) de "token inválido" (configurado, e a Meta
+ * recusou) para o Aviso operacional. Um GET no próprio número; não envia nada.
+ */
+async function conferirCanalParaTela() {
+  const canal = await conferirCanalDeVendas();
+  return NextResponse.json({ ok: true, data: canal });
+}
+
+/**
+ * ⭐ ?recorte=funil — O FUNIL POR MODELO, PARA A SEÇÃO "TEMPLATES".
+ *
+ * `funilPorModelo` (métricas por `templateNome`, lidas de `LeadMensagem`) e
+ * `modelosSincronizadosDaSala` (o `autorizado`/`situacao` de cada modelo
+ * persistido) já existem e já são testados — esta rota só os expõe juntos,
+ * numa chamada, para a tela comparar os modelos lado a lado.
+ */
+async function funilParaTela() {
+  const [funil, modelos] = await Promise.all([
+    funilPorModelo(prisma),
+    modelosSincronizadosDaSala(prisma),
+  ]);
+  return NextResponse.json({ ok: true, data: { funil, modelos } });
+}
+
 export async function POST(req: NextRequest) {
   const portao = await guardarSalaDeVendas(req, "mexer_na_prospeccao");
   if (!portao.ok) return portao.resposta;
@@ -720,6 +786,58 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  /**
+   * ⭐ IMPORTAR CLASSIFICADO — a única chamada que um arquivo MISTO precisa,
+   * 12/09/2026. Redesenho da prospecção automática e minimalista: quem sobe
+   * o arquivo não escolhe mais "importar" ou "enriquecer" — o backend
+   * classifica cada linha (`classificarArquivoDeImportacao`, em
+   * `classificacao.ts`) e despacha para os dois escritores testados
+   * (`importarLote`, `enriquecerPlanilhaDeItems`) por conta própria.
+   *
+   * ⚠️ `importar` continua existindo, sem mudança — quem já usa a ação antiga
+   * não quebra. Esta é ADITIVA: uma porta nova para quem sobe um arquivo sem
+   * saber (e sem precisar saber) se ele é uma lista nova, um complemento, ou
+   * os dois misturados.
+   */
+  if (c.acao === "importarClassificado") {
+    if (!Array.isArray(c.linhas) || c.linhas.length === 0) {
+      return NextResponse.json({ ok: false, error: "Lista vazia." }, { status: 400 });
+    }
+    try {
+      const r = await classificarArquivoDeImportacao(prisma, {
+        nome: c.nome ?? "Lote sem nome",
+        proveniencia: c.proveniencia ?? "",
+        linhas: c.linhas,
+        criadoPor: quem,
+        criadoPorUserId: portao.sessao.userId,
+        importacaoId: c.importacaoId,
+        limiteDiario: c.limiteDiario,
+        arquivoHash: c.arquivoHash,
+        arquivoNome: c.arquivoNome,
+      });
+
+      // O mesmo registro de progresso que `importar` já alimenta — a tela de
+      // Importações não precisa saber que o caminho mudou por baixo.
+      if (c.importacaoId) await somarParteNaImportacao(prisma, c.importacaoId, r.importacao);
+
+      return NextResponse.json({ ok: true, data: r });
+    } catch (e) {
+      if (c.importacaoId) {
+        await falharImportacao(
+          prisma,
+          c.importacaoId,
+          e instanceof Error ? e.message : String(e),
+        ).catch(() => {
+          // Registro de falha que falha não pode esconder a falha original.
+        });
+      }
+      if (e instanceof ProvenienciaAusente || e instanceof ListaGrandeDemais) {
+        return NextResponse.json({ ok: false, error: e.message }, { status: 400 });
+      }
+      throw e;
+    }
+  }
+
   if (c.acao === "concluirImportacao") {
     if (!c.importacaoId) {
       return NextResponse.json({ ok: false, error: "importacaoId é obrigatório." }, { status: 400 });
@@ -876,6 +994,8 @@ function fraseDaAbordagem(motivo: string, detalhe: string): string {
       return `O freio de ritmo segurou — ${detalhe}. É proteção do número, não falha: tente mais tarde.`;
     case "naoVirouLead":
       return `Este contato não entrou na carteira: ${detalhe}`;
+    case "modeloNaoAutorizado":
+      return `O modelo de abordagem não está autorizado internamente para envio: ${detalhe}`;
     case "portaoRecusou":
       return `Não pode ser abordado: ${detalhe}`;
     case "naoConseguiuGravar":

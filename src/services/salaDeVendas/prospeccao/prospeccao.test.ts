@@ -420,6 +420,9 @@ describe("a fila do dia", () => {
     // afirmar, para sempre, que esta pessoa nos procurou. Ela não procurou.
     const leadsCriados: any[] = [];
     const db = {
+      // A trava por telefone (`pg_advisory_xact_lock`) é um `$executeRaw` —
+      // dublê não fala com Postgres, então basta resolver.
+      $executeRaw: vi.fn().mockResolvedValue(1),
       itemDeProspeccao: {
         findUnique: vi.fn().mockResolvedValue({
           ...ITEM,
@@ -448,6 +451,7 @@ describe("a fila do dia", () => {
 
   it("materializar duas vezes não cria dois leads", async () => {
     const db = {
+      $executeRaw: vi.fn().mockResolvedValue(1),
       itemDeProspeccao: {
         findUnique: vi.fn().mockResolvedValue({
           ...ITEM,
@@ -473,6 +477,7 @@ describe("a fila do dia", () => {
     // `materializarLead` não lê mais `lote.situacao` (nem sequer busca o lote).
     const leadsCriados: any[] = [];
     const db = {
+      $executeRaw: vi.fn().mockResolvedValue(1),
       itemDeProspeccao: {
         findUnique: vi.fn().mockResolvedValue({
           ...ITEM,
@@ -740,16 +745,19 @@ describe("a corrida dos dois SDRs", () => {
     // dois criariam carteira para o mesmo telefone. `whatsappDigits` é índice e
     // não único: o banco não segura isso sozinho.
     const db = {
+      $executeRaw: vi.fn().mockResolvedValue(1),
       itemDeProspeccao: {
         findUnique: vi
           .fn()
-          // 1ª leitura: o item ainda parece disponível para os dois.
+          // 1ª leitura (fora da trava, só o telefone): o item ainda existe.
+          .mockResolvedValueOnce({ whatsappDigits: ITEM.whatsappDigits })
+          // 2ª leitura, já dentro da trava: o item ainda parece disponível.
           .mockResolvedValueOnce({
             ...ITEM,
             situacao: "PENDENTE",
             lote: { situacao: "LIBERADO" },
           })
-          // 2ª leitura, já depois de perder a reserva: quem ganhou gravou o lead.
+          // 3ª leitura, já depois de perder a reserva: quem ganhou gravou o lead.
           .mockResolvedValueOnce({ leadId: "lead-do-vencedor" }),
         // count 0 = outro processo reservou primeiro.
         updateMany: vi.fn().mockResolvedValue({ count: 0 }),
@@ -768,6 +776,7 @@ describe("a corrida dos dois SDRs", () => {
     // Sem devolver, o contato sairia da fila para sempre sem nunca ter sido
     // abordado — some em silêncio, que é a pior forma de perder alguém da lista.
     const db = {
+      $executeRaw: vi.fn().mockResolvedValue(1),
       itemDeProspeccao: {
         findUnique: vi.fn().mockResolvedValue({
           ...ITEM,

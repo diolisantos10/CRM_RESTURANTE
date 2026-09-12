@@ -22,6 +22,14 @@ on:
       # `diagnosticarAbordagem` ou a retentativa não disparava esta jornada.
       - "src/services/salaDeVendas/abordar.ts"
       - "src/services/foocci-sdr/LeadContactSafety.ts"
+      # ⭐ 12/09/2026 — o gate de autorização e o funil por modelo moram em
+      # `foocci-sdr/`, fora de `prospeccao/**`; sem estas linhas um PR que só
+      # toca `modelosDaMeta.ts`/`sincronizarModelos.ts`/`funilDoModelo.ts` não
+      # disparava esta jornada.
+      - "src/services/foocci-sdr/modelosDaMeta.ts"
+      - "src/services/foocci-sdr/sincronizarModelos.ts"
+      - "src/services/foocci-sdr/funilDoModelo.ts"
+      - "src/app/api/admin/sala-de-vendas/prospeccao/route.ts"
       - "prisma/migrations/**"
       - "prisma/schema.prisma"
       - "scripts/jornada-prospeccao.test.ts"
@@ -29,6 +37,8 @@ on:
       - "scripts/jornada-enriquecimento.test.ts"
       - "scripts/jornada-base-fria-ampliada.test.ts"
       - "scripts/jornada-retentativa-prospeccao.test.ts"
+      - "scripts/jornada-classificacao-prospeccao.test.ts"
+      - "scripts/jornada-funil-por-modelo.test.ts"
       - "src/services/site/SiteLeadService.ts"
       - "src/services/foocci-sdr/FoocciSalesInbound.ts"
       - "vitest.jornada.config.ts"
@@ -111,6 +121,11 @@ jobs:
             DROP TABLE IF EXISTS "prospeccao_config" CASCADE;
             DROP TYPE  IF EXISTS "SituacaoDoItem";
             DROP TYPE  IF EXISTS "SituacaoDoLote";
+            -- ⭐ 12/09/2026 — o gate de autorização do modelo e o conflito de
+            -- importação. O `db push` já criou os dois a partir do schema; o
+            -- DROP os leva embora para a migration de verdade os recriar.
+            DROP TABLE IF EXISTS "conflitos_de_importacao" CASCADE;
+            ALTER TABLE "modelos_de_vendas" DROP COLUMN IF EXISTS "autorizado";
           '
           # 039000 é idempotente por construção (ADD VALUE IF NOT EXISTS): rodar
           # com os valores já presentes prova o nome do tipo e a sintaxe.
@@ -146,7 +161,11 @@ jobs:
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260910180000_base_continua_memoria_e_trava/migration.sql
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260910210000_backfill_importacoes_legadas/migration.sql
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260911120000_base_fria_campos_completos/migration.sql
-          echo "✅ As nove migrations da prospecção aplicaram sobre banco realista."
+          # ⭐ 12/09/2026 — o redesenho da prospecção automática e minimalista:
+          # `ModeloDeVendas.autorizado` (com o backfill que preserva o modelo já
+          # em produção) e a tabela `conflitos_de_importacao`.
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/migrations/20260912000000_gate_de_autorizacao_do_modelo/migration.sql
+          echo "✅ As dez migrations da prospecção aplicaram sobre banco realista."
 
       - name: Percorrer as Jornadas 1, 2 e 3
         run: npm run test:jornada

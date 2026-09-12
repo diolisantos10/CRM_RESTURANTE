@@ -65,6 +65,14 @@ export type ResultadoDaAbordagem =
         | "portaoRecusou"
         /** O modelo exige uma variável que este contato não tem. Linha ruim da lista, não defeito do canal. */
         | "semDadoParaOModelo"
+        /**
+         * ⭐ 12/09/2026 — o modelo está APPROVED na Meta, mas `ModeloDeVendas.
+         * autorizado === false`: alguém marcou este v1 como em revisão interna,
+         * sem autorização expressa do CEO. Não é linha ruim da lista — é o
+         * modelo inteiro que não pode sair, e todo contato bateria na mesma
+         * parede. Ver `reagirA` (`abordarDaFila.ts`): a reação é `encerra`.
+         */
+        | "modeloNaoAutorizado"
         /** Teto de abordagens da hora ou do dia. Não é falha — é o freio. */
         | "ritmo"
         | "naoConseguiuGravar"
@@ -520,6 +528,31 @@ export async function abordarLead(
   };
 
   const modeloPersistido = await modeloAprovadoDaSala(db, modelo.nome, modelo.idioma);
+
+  // ── ⭐ O GATE DE AUTORIZAÇÃO INTERNA, ANTES DE QUALQUER OUTRA COISA ────────
+  //
+  // Este é o ÚNICO caminho por onde uma abordagem sai (ver o cabeçalho do
+  // arquivo) — e por isso é aqui, e não só no pré-voo da rodada, que este
+  // gate tem que travar de verdade. A rodada automática confere o modelo
+  // ANTES de começar (`conferirModeloDeAbordagem`/`preVooDoModelo`), mas um
+  // clique manual (`abordar` na rota) chama `abordarLead` direto, sem passar
+  // pelo pré-voo — sem esta trava aqui, um modelo `autorizado: false` seria
+  // bloqueado na rodada e ainda assim enviável um por um.
+  //
+  // ⚠️ `modeloPersistido` já é `null` quando o modelo não está `APPROVED` —
+  // `autorizado` só é conferido quando ele EXISTE e está aprovado, porque um
+  // modelo não sincronizado cai no motivo de baixo (`semDadoParaOModelo`),
+  // que já é a recusa certa para esse caso.
+  if (modeloPersistido && modeloPersistido.autorizado === false) {
+    return {
+      abordou: false,
+      motivo: "modeloNaoAutorizado",
+      detalhe:
+        `o modelo "${modelo.nome}" (${modelo.idioma}) está aprovado na Meta mas não foi ` +
+        `autorizado internamente para envio — autorização expressa é decisão do CEO`,
+    };
+  }
+
   if (!modeloPersistido?.corpo) {
     return {
       abordou: false,

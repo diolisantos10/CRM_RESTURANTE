@@ -51,6 +51,12 @@ export interface ModeloSincronizado {
   situacao: string;
   variaveis: number;
   corpo: string | null;
+  /**
+   * ⭐ A AUTORIZAÇÃO INTERNA, 12/09/2026 — separada do `situacao` da Meta.
+   * `@default(true)` no schema; `false` só quando alguém marcou à mão. Ver o
+   * comentário grande em `ModeloDeVendas.autorizado`.
+   */
+  autorizado: boolean;
 }
 
 export interface SincronizacaoDeModelos {
@@ -343,7 +349,15 @@ export async function modeloAprovadoDaSala(
 
   const linha = await cliente.modeloDeVendas.findUnique({
     where: { phoneNumberId_nome_idioma: { phoneNumberId, nome, idioma } },
-    select: { nome: true, idioma: true, categoria: true, situacao: true, variaveis: true, corpo: true },
+    select: {
+      nome: true,
+      idioma: true,
+      categoria: true,
+      situacao: true,
+      variaveis: true,
+      corpo: true,
+      autorizado: true,
+    },
   });
 
   if (!linha || linha.situacao !== "APPROVED") return null;
@@ -360,6 +374,14 @@ export async function modelosSincronizadosDaSala(db?: unknown): Promise<ModeloSi
   return cliente.modeloDeVendas.findMany({
     where: { phoneNumberId },
     orderBy: [{ situacao: "asc" }, { nome: "asc" }],
-    select: { nome: true, idioma: true, categoria: true, situacao: true, variaveis: true, corpo: true },
+    select: {
+      nome: true,
+      idioma: true,
+      categoria: true,
+      situacao: true,
+      variaveis: true,
+      corpo: true,
+      autorizado: true,
+    },
   });
 }
