@@ -589,6 +589,59 @@ export async function materializarLead(
   db: Cliente,
   itemId: string,
 ): Promise<ResultadoDaMaterializacao> {
+  // Só o telefone — leitura barata, sem risco: é ele que decide a CHAVE do
+  // travamento abaixo, e dois itens de LOTES DIFERENTES com o MESMO telefone
+  // têm de travar um contra o outro, não só contra si mesmos.
+  const achado = await db.itemDeProspeccao.findUnique({
+    where: { id: itemId },
+    select: { whatsappDigits: true },
+  });
+  if (!achado) return { materializado: false, motivo: "Item não encontrado." };
+
+  // ── ⭐ A CORRIDA MEDIDA EM 12/09/2026, E A TRAVA QUE FALTAVA ────────────────
+  //
+  // O comentário original desta função já nomeava "a corrida dos dois SDRs" e
+  // confiava a solução ao reserva-antes-de-criar em CIMA DO ITEM (`updateMany`
+  // por `id`). Isso protege dois SDRs clicando o MESMO item duas vezes — e
+  // NÃO protege dois ITENS DIFERENTES do MESMO telefone (o caso real de duas
+  // importações concorrentes do mesmo contato, ou uma rodada que pega dois
+  // PENDENTE do mesmo número por um defeito de importação a montante):
+  // medido contra Postgres real, 15 materializações concorrentes de 15 itens
+  // do MESMO telefone criaram até 14 `SiteLead` distintos para o mesmo
+  // número — cada um "novo", sem histórico, cada um elegível para
+  // `abordarLead` como se fosse a primeira vez. Isso não é um número torto no
+  // relatório: é o número podendo ser abordado mais de uma vez pela casa,
+  // driblando opt-out, descanso e teto porque cada lead fantasma nasce sem o
+  // histórico dos outros.
+  //
+  // A trava certa é por TELEFONE, não por item — `pg_advisory_xact_lock`
+  // serializa toda materialização deste número, de qualquer item, e libera
+  // sozinha quando a transação termina (comita ou reverte). Zero risco de
+  // travar para sempre por conexão devolvida ao pool sem destravar: ela não
+  // é de SESSÃO (`pg_advisory_lock`, que o pool do Prisma tornaria perigosa —
+  // travar numa conexão e destravar em outra), é de TRANSAÇÃO.
+  const executar = (tx: Cliente) => materializarSobATravaDoTelefone(tx, itemId, achado.whatsappDigits);
+
+  // `Prisma.TransactionClient` não tem `$transaction` — é assim que se sabe
+  // se `db` já É uma transação do chamador (a trava entra nela, e quem a
+  // libera é o `COMMIT`/`ROLLBACK` de quem chamou) ou se precisa abrir uma
+  // aqui mesmo.
+  if (!("$transaction" in db)) return executar(db);
+  return db.$transaction((tx) => executar(tx));
+}
+
+async function materializarSobATravaDoTelefone(
+  db: Cliente,
+  itemId: string,
+  whatsappDigits: string,
+): Promise<ResultadoDaMaterializacao> {
+  // A chave é um hash do telefone, não o telefone em si: `pg_advisory_xact_lock`
+  // pede um inteiro (bigint), e `hashtext` é a mesma função que o Postgres usa
+  // internamente para isto. Colisão de hash entre DOIS telefones diferentes
+  // só serializaria os dois sem necessidade — nunca destrava algo que devia
+  // ficar travado, que é o único erro que importa aqui.
+  await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${whatsappDigits}))`;
+
   // ⚠️ Não filtra mais por `lote.situacao` — ordem de 11/09/2026: lote não
   // pode impedir envio. Ver o comentário grande em `montarFilaDeProspeccao`.
   const item = await db.itemDeProspeccao.findUnique({ where: { id: itemId } });

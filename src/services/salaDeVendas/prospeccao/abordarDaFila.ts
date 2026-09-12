@@ -170,6 +170,15 @@ export function reagirA(motivo: MotivoDaFila): Reacao {
     case "ritmo":
       return "encerra";
 
+    // ⭐ 12/09/2026 — o modelo inteiro está desautorizado (`autorizado: false`).
+    // Não é uma linha ruim: TODO contato bateria na mesma parede. Na prática
+    // este caso não deveria chegar aqui — o pré-voo (`conferirModeloDeAbordagem`)
+    // já barra a rodada ANTES do primeiro item —, mas se algo pular o pré-voo
+    // (um chamador novo, um teste), a reação certa é a mesma do freio: parar,
+    // sem gritar como falha do canal.
+    case "modeloNaoAutorizado":
+      return "encerra";
+
     /**
      * ⭐ A META RECUSANDO NÃO MATA MAIS A RODADA NO PRIMEIRO — ordem do
      * Diretor Geral, 08/09: *"se o parâmetro faltar, pule o contato e siga em

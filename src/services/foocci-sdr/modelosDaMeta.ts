@@ -311,6 +311,13 @@ export type ConferenciaDoModelo =
         | "semToken"
         | "naoAchado"
         | "naoAprovado"
+        /**
+         * ⭐ 12/09/2026 — a Meta aprovou o TEXTO; o CEO não autorizou o USO.
+         * `ModeloDeVendas.autorizado === false`, marcado à mão sobre um
+         * modelo específico (v1 em revisão). Ver o comentário grande no
+         * schema e o cabeçalho desta função.
+         */
+        | "naoAutorizado"
         | "variaveisNaoBatem"
         | "metaRecusou";
       detalhe: string;
@@ -368,6 +375,29 @@ export async function conferirModeloDeAbordagem(token: string): Promise<Conferen
       pronto: false,
       causa: "naoAprovado",
       detalhe: `"${achado.nome}" está ${achado.status} na Meta`,
+    };
+  }
+
+  // ── ⭐ O GATE DE AUTORIZAÇÃO INTERNA, 12/09/2026 ──────────────────────────
+  //
+  // Aprovado na Meta é a metade da pergunta. A outra metade — "o CEO já
+  // autorizou a casa a USAR este modelo?" — vive em `ModeloDeVendas.autorizado`,
+  // e é conferida ANTES da comparação de variáveis de propósito: um modelo
+  // desautorizado pode até ter o número de variáveis certo, e ainda assim não
+  // pode sair. Comparar variável primeiro esconderia a causa real por trás de
+  // "variaveisNaoBatem" sempre que a coincidência numérica desse zero.
+  //
+  // `null` (nenhuma linha persistida ainda) não bloqueia aqui — ausência de
+  // sincronização não é negação de autorização (guardrail 1). O padrão do
+  // schema é `autorizado: true`; só quem MARCOU `false` à mão bloqueia.
+  const autorizado = await autorizacaoDoModeloPersistido(cfg.nome, cfg.idioma);
+  if (autorizado === false) {
+    return {
+      pronto: false,
+      causa: "naoAutorizado",
+      detalhe:
+        `"${achado.nome}" (${achado.idioma}) está APPROVED na Meta, mas ainda não foi ` +
+        `autorizado internamente para uso (autorizado=false). Autorização expressa é decisão do CEO.`,
     };
   }
 
@@ -516,6 +546,26 @@ async function variaveisDoModeloPersistido(
     const { modeloAprovadoDaSala } = await import("./sincronizarModelos");
     const linha = await modeloAprovadoDaSala(db, nome, idioma);
     return linha ? linha.variaveis : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * O `autorizado` do modelo persistido, ou `null` na dúvida — sem nome
+ * configurado, sem linha (nunca sincronizado), banco fora do ar.
+ *
+ * ⚠️ `null` NUNCA é tratado como `false` por quem chama: ver o comentário
+ * grande em `conferirModeloDeAbordagem`. O import dinâmico é pelo mesmo motivo
+ * de `variaveisDoModeloPersistido` — `sincronizarModelos` importa este arquivo
+ * de volta, e um import estático fecharia o ciclo.
+ */
+async function autorizacaoDoModeloPersistido(nome: string, idioma: string): Promise<boolean | null> {
+  if (!nome) return null;
+  try {
+    const { modeloAprovadoDaSala } = await import("./sincronizarModelos");
+    const linha = await modeloAprovadoDaSala(undefined, nome, idioma);
+    return linha ? linha.autorizado : null;
   } catch {
     return null;
   }
