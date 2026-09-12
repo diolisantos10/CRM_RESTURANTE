@@ -1,4 +1,9 @@
-/** Comercial → Prospecção: receber/enriquecer, o interruptor, a Base fria e a fila automática. */
+/**
+ * Comercial → Prospecção: a tela minimalista do CEO.
+ *
+ * Três blocos — importar, operação, aviso operacional — e uma seção
+ * expansível com o funil por modelo. Ver o cabeçalho de `ProspeccaoClient.tsx`.
+ */
 
 import { Suspense } from "react";
 import { ProspeccaoClient } from "./ProspeccaoClient";

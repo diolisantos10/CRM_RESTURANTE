@@ -83,6 +83,33 @@ export function ehHoraDaRodada(agora: Date, hora: number = horaDaRodada()): bool
   return local.hora === hora;
 }
 
+/**
+ * ⭐ A PRÓXIMA EXECUÇÃO — para a tela mostrar "quando" sem reimplementar a
+ * regra do agendador. Redesenho da prospecção automática e minimalista,
+ * 12/09/2026 (bloco Operação: "Próxima execução: data e horário").
+ *
+ * Não é uma segunda régua de horário: é `horaDaRodada()` e `REGRA.diasUteis`
+ * (as MESMAS que `ehHoraDaRodada` usa) andando para a frente até achar o
+ * primeiro dia útil, na hora configurada, ainda no futuro. Não confere se a
+ * rodada de hoje já rodou — quem quer saber isso lê
+ * `ultimaRodadaAutomaticaEm`, que a tela já tem ao lado.
+ */
+export function proximaExecucaoDaRodada(agora: Date, hora: number = horaDaRodada()): Date {
+  for (let i = 0; i < 8; i++) {
+    const candidato = new Date(agora.getTime() + i * 24 * 60 * 60 * 1000);
+    const local = agendaLocal(candidato, REGRA.fusoHorario);
+    if (!(REGRA.diasUteis as readonly number[]).includes(local.dia)) continue;
+
+    const meiaNoite = inicioDoDiaEmSaoPaulo(candidato);
+    const alvo = new Date(meiaNoite.getTime() + hora * 60 * 60 * 1000);
+    if (alvo.getTime() > agora.getTime()) return alvo;
+  }
+  // Nunca deveria chegar aqui — oito dias sempre contêm um dia útil. Devolver
+  // "agora" é mais honesto que lançar: a tela mostra uma data no passado, o
+  // que é estranho e visível, em vez de quebrar a página inteira.
+  return agora;
+}
+
 export type Reserva =
   | { reservou: true }
   | { reservou: false; motivo: "jaRodouHoje" | "semConfiguracao"; detalhe: string };

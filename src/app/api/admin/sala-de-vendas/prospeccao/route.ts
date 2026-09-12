@@ -76,10 +76,14 @@ import {
 } from "@/services/salaDeVendas/prospeccao/selecao";
 import {
   canalDeVendasPronto,
+  conferirCanalDeVendas,
   isFoocciSalesChannelConfigured,
   isFoocciSdrSendEnabled,
 } from "@/services/foocci-sdr/FoocciSalesChannel";
 import { preVooDoModelo } from "@/services/foocci-sdr/modelosDaMeta";
+import { funilPorModelo } from "@/services/foocci-sdr/funilDoModelo";
+import { modelosSincronizadosDaSala } from "@/services/foocci-sdr/sincronizarModelos";
+import { proximaExecucaoDaRodada } from "@/services/salaDeVendas/prospeccao/agendador";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -202,6 +206,9 @@ export async function GET(req: NextRequest) {
   if (recorte === "importacao") return listarContatosDaImportacao(params);
   if (recorte === "base") return listarBaseFria(params);
   if (recorte === "conferencia") return conferirParaAuditoria(params);
+  if (recorte === "preVoo") return conferirPreVooParaTela();
+  if (recorte === "canal") return conferirCanalParaTela();
+  if (recorte === "funil") return funilParaTela();
 
   const [fila, config, totalNaBase, pendentesNaBase] = await Promise.all([
     // Teto de leitura: sem ele, um teto diário alto faria cada abertura da tela
@@ -234,6 +241,11 @@ export async function GET(req: NextRequest) {
         ultimaRodadaAutomaticaPor: null,
       },
       canalPronto: canalDeVendasPronto(),
+      // ⭐ 12/09/2026 — "Próxima execução" do bloco Operação. Calculada a
+      // partir da MESMA hora e dos MESMOS dias úteis que `AgendadorDaProspeccao`
+      // usa (`horaDaRodada`/`REGRA.diasUteis`, via `proximaExecucaoDaRodada`) —
+      // não é uma segunda régua de horário, é a mesma andando para a frente.
+      proximaRodadaEm: proximaExecucaoDaRodada(new Date()).toISOString(),
     },
   });
 }
@@ -549,6 +561,52 @@ async function conferirParaAuditoria(params: URLSearchParams) {
   });
 
   return NextResponse.json({ ok: true, data: conferencia });
+}
+
+/**
+ * ⭐ ?recorte=preVoo — A CONFERÊNCIA DO MODELO, SOZINHA, PARA A TELA.
+ *
+ * Redesenho da prospecção automática e minimalista, 12/09/2026: o bloco
+ * "Aviso operacional" precisa saber SE o modelo aprovado está pronto para
+ * sair — aprovado na Meta, autorizado internamente, com o número de variáveis
+ * batendo — sem gastar um contato para descobrir. `preVooDoModelo` já existe
+ * exatamente para isso (usada pela rodada e pelo cron de pré-voo); esta rota
+ * só abre a mesma leitura para quem está logado na tela, sem exigir
+ * `CRON_SECRET`. Duas leituras contra a Graph, nenhuma escrita, nenhum envio.
+ */
+async function conferirPreVooParaTela() {
+  const conferencia = await preVooDoModelo();
+  return NextResponse.json({ ok: true, data: conferencia });
+}
+
+/**
+ * ⭐ ?recorte=canal — "O CANAL FUNCIONA DE VERDADE?", PARA A TELA.
+ *
+ * `isFoocciSalesChannelConfigured()` (já no GET principal, como `canalPronto`)
+ * só confere PRESENÇA das variáveis. `conferirCanalDeVendas()` pergunta à
+ * própria Meta se o token alcança o número — é o que distingue "canal
+ * indisponível" (nada configurado) de "token inválido" (configurado, e a Meta
+ * recusou) para o Aviso operacional. Um GET no próprio número; não envia nada.
+ */
+async function conferirCanalParaTela() {
+  const canal = await conferirCanalDeVendas();
+  return NextResponse.json({ ok: true, data: canal });
+}
+
+/**
+ * ⭐ ?recorte=funil — O FUNIL POR MODELO, PARA A SEÇÃO "TEMPLATES".
+ *
+ * `funilPorModelo` (métricas por `templateNome`, lidas de `LeadMensagem`) e
+ * `modelosSincronizadosDaSala` (o `autorizado`/`situacao` de cada modelo
+ * persistido) já existem e já são testados — esta rota só os expõe juntos,
+ * numa chamada, para a tela comparar os modelos lado a lado.
+ */
+async function funilParaTela() {
+  const [funil, modelos] = await Promise.all([
+    funilPorModelo(prisma),
+    modelosSincronizadosDaSala(prisma),
+  ]);
+  return NextResponse.json({ ok: true, data: { funil, modelos } });
 }
 
 export async function POST(req: NextRequest) {

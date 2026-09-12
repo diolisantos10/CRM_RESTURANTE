@@ -16,6 +16,7 @@ import {
   AgendadorDaProspeccao,
   ehHoraDaRodada,
   horaDaRodada,
+  proximaExecucaoDaRodada,
   reservarRodadaAutomaticaDoDia,
 } from "./agendador";
 
@@ -45,6 +46,30 @@ describe("a hora da rodada", () => {
     expect(ehHoraDaRodada(QUINTA_9H30_SP, 9)).toBe(true);
     expect(ehHoraDaRodada(QUINTA_10H_SP, 9)).toBe(false);
     expect(ehHoraDaRodada(SABADO_9H_SP, 9)).toBe(false);
+  });
+});
+
+describe("a próxima execução", () => {
+  it("hoje mais tarde, se a hora de hoje ainda não chegou", () => {
+    // Quinta 07:00 SP (10:00 UTC), rodada às 9h → hoje 9h SP.
+    const quinta7h = new Date("2026-09-10T10:00:00Z");
+    expect(proximaExecucaoDaRodada(quinta7h, 9).toISOString()).toBe(QUINTA_9H_SP.toISOString());
+  });
+
+  it("amanhã, se a hora de hoje já passou (mesmo no minuto exato)", () => {
+    expect(proximaExecucaoDaRodada(QUINTA_9H_SP, 9).toISOString()).toBe(SEXTA_9H_SP.toISOString());
+    expect(proximaExecucaoDaRodada(QUINTA_9H30_SP, 9).toISOString()).toBe(SEXTA_9H_SP.toISOString());
+  });
+
+  it("pula fim de semana — sexta depois da hora vai para segunda", () => {
+    // Segunda seguinte a 11/09/2026 (sexta) é 14/09/2026, 12:00 UTC = 9h SP.
+    const segundaSeguinte = new Date("2026-09-14T12:00:00Z");
+    expect(proximaExecucaoDaRodada(SEXTA_9H_SP, 9).toISOString()).toBe(segundaSeguinte.toISOString());
+  });
+
+  it("sábado aponta para a segunda-feira", () => {
+    const segundaSeguinte = new Date("2026-09-14T12:00:00Z");
+    expect(proximaExecucaoDaRodada(SABADO_9H_SP, 9).toISOString()).toBe(segundaSeguinte.toISOString());
   });
 });
 
