@@ -29,6 +29,13 @@ on:
       - "scripts/jornada-enriquecimento.test.ts"
       - "scripts/jornada-base-fria-ampliada.test.ts"
       - "scripts/jornada-retentativa-prospeccao.test.ts"
+      # ⭐ 12/09/2026 — a Supervisora sobre `abordar.ts` (adequação do
+      # template) mora fora de `prospeccao/` também. `abordar.ts` já está
+      # listado acima, então esta jornada já dispara para o caso comum; a
+      # linha fica aqui para o dia em que um PR toque só a Supervisora.
+      - "src/services/salaDeVendas/supervisora/adequacaoDoTemplate.ts"
+      - "src/services/salaDeVendas/supervisora/segundoPlano.ts"
+      - "scripts/jornada-supervisora-abordagem.test.ts"
       - "src/services/site/SiteLeadService.ts"
       - "src/services/foocci-sdr/FoocciSalesInbound.ts"
       - "vitest.jornada.config.ts"

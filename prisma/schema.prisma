@@ -7102,8 +7102,12 @@ model SdrIaConfigVersao {
 // o conector do handoff (`connect/conector/foocci/ligacao.ts`). Isso cobre
 // "todos os agentes" com UMA implementação, sem dois caminhos de revisão que
 // podem divergir. `abordar.ts` (templates de prospecção aprovados) usa
-// `enviarModeloDeVendas`, não `entregarMensagem` — fora do escopo desta camada
-// porque não é fala composta: é template fixo, já aprovado, sem tom a revisar.
+// `enviarModeloDeVendas`, não `entregarMensagem` — continua fora do alcance
+// DESTA função, porque não é fala composta: é template fixo, já aprovado, sem
+// tom a revisar. Desde 12/09/2026 `abordar.ts` tem o SEU PRÓPRIO ponto de
+// encaixe (`supervisora/adequacaoDoTemplate.ts`), gravando nesta MESMA tabela
+// (`SupervisoraAvaliacao`) — ele avalia SE é hora de mandar o template
+// (frequência, repetição, opt-out), nunca o conteúdo dele.
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// A chave mestra + o modo — separados de propósito, como `SdrIaConfig.ligado`.
