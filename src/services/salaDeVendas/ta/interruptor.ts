@@ -166,3 +166,65 @@ export async function ligarOTA(
   await db.sdrIaConfig.update({ where: { id: config.id }, data: { ligado } });
   return { ok: true, ligado };
 }
+
+export type ResultadoDePublicarVersaoExistente =
+  | { ok: true; numero: number; eraAAtiva: boolean }
+  | { ok: false; causa: "semConfig" | "versaoNaoExiste" | "versaoDeOutraConfig" };
+
+/**
+ * Publica uma `SdrIaConfigVersao` que JÁ EXISTE — por número, ou por id.
+ *
+ * ── ESTE É O ROLLBACK, E TAMBÉM É O PUBLICAR DA SUPERVISORA ─────────────────
+ *
+ * `publicarAFicha`, acima, sempre cria uma versão nova a partir do código
+ * (`VERSAO_1`) — serve à ficha escrita à mão. Uma versão nascida de
+ * `supervisora/sugestoes.ts` (nível 3) já existe no banco, em `RASCUNHO`; e
+ * reverter para uma versão antiga é, por definição, apontar para algo que já
+ * existia. As duas situações são a MESMA operação: marcar `PUBLICADA` e mover
+ * `versaoAtivaId`. Escrever um "rollback" separado duplicaria o mecanismo que
+ * `versaoAtivaId` já é.
+ *
+ * Idempotente: publicar a versão que já está ativa não erra, só avisa
+ * (`eraAAtiva: true`) — dois cliques no mesmo botão não podem produzir dois
+ * efeitos diferentes.
+ */
+export async function publicarVersaoExistente(
+  db: Cliente,
+  params: { configSlug?: string; versaoId: string; porUserId?: string | null; agora?: Date },
+): Promise<ResultadoDePublicarVersaoExistente> {
+  const agora = params.agora ?? new Date();
+
+  const config = await db.sdrIaConfig.findUnique({
+    where: { slug: params.configSlug ?? "ta" },
+    select: { id: true, versaoAtivaId: true },
+  });
+  if (!config) return { ok: false, causa: "semConfig" };
+
+  const versao = await db.sdrIaConfigVersao.findUnique({
+    where: { id: params.versaoId },
+    select: { id: true, numero: true, configId: true },
+  });
+  if (!versao) return { ok: false, causa: "versaoNaoExiste" };
+  if (versao.configId !== config.id) return { ok: false, causa: "versaoDeOutraConfig" };
+
+  if (config.versaoAtivaId === versao.id) {
+    return { ok: true, numero: versao.numero, eraAAtiva: true };
+  }
+
+  // Sequencial, não `$transaction([...])`: `db` aqui é `PrismaClient |
+  // Prisma.TransactionClient`, e o segundo não tem `$transaction`. As duas
+  // escritas em sequência bastam — o pior caso de uma corrida rara aqui é a
+  // versão marcar `PUBLICADA` um instante antes de `versaoAtivaId` apontar
+  // para ela, nunca um estado que a tela leia como inconsistente.
+  await db.sdrIaConfigVersao.update({
+    where: { id: versao.id },
+    data: {
+      situacao: "PUBLICADA",
+      publicadaEm: agora,
+      publicadaPorId: params.porUserId ?? null,
+    },
+  });
+  await db.sdrIaConfig.update({ where: { id: config.id }, data: { versaoAtivaId: versao.id } });
+
+  return { ok: true, numero: versao.numero, eraAAtiva: false };
+}

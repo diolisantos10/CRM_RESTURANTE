@@ -32,6 +32,16 @@
  * não é redundância: entre compor e entregar pode ter passado tempo, e a pessoa
  * pode ter pedido silêncio nesse intervalo. Quem pediu para parar não recebe uma
  * mensagem que já estava na fila.
+ *
+ * ── ⭐ E A SUPERVISORA, DESDE 12/09/2026 ─────────────────────────────────────
+ *
+ * Esta é a ÚNICA função por onde passa toda fala LIVRE que a empresa manda a um
+ * lead — IA, humano digitando, e o conector do handoff. Por isso é aqui, e só
+ * aqui, que `supervisora/revisao.ts` entra: uma implementação cobre "todos os
+ * agentes" (a ordem do CEO), sem dois caminhos de revisão que podem divergir.
+ * Em modo `OFF` ela nem roda; em `SHADOW` ela grava e não muda nada; em
+ * `GUARD`/`INTERVENTION` ela pode reescrever o texto ou impedir esta função de
+ * chegar até `enviarTextoDeVendas`.
  */
 
 import type { PrismaClient, Prisma } from "@prisma/client";
@@ -45,6 +55,7 @@ import {
   type QuemMandou,
 } from "@/services/foocci-sdr/FoocciSalesChannel";
 import { pediuSilencio } from "@/services/foocci-sdr/LeadContactSafety";
+import { revisarAntesDeEntregar } from "./supervisora/revisao";
 
 type Cliente = PrismaClient | Prisma.TransactionClient;
 
@@ -66,7 +77,11 @@ export type ResultadoDaEntrega =
         | "semTexto"
         | "leadPediuSilencio"
         | "semTelefone"
-        | "aMetaRecusou";
+        | "aMetaRecusou"
+        /** A Supervisora reteve — ver `supervisora/revisao.ts`. Só acontece em
+         *  modo GUARD/INTERVENTION; em SHADOW/OFF esta mensagem nunca sai por
+         *  este motivo. */
+        | "retidaPelaSupervisora";
       detalhe: string;
     };
 
@@ -125,6 +140,10 @@ export async function entregarMensagem(
         status: true,
         direcao: true,
         texto: true,
+        leadId: true,
+        autor: true,
+        autorUserId: true,
+        papelDoAgente: true,
         lead: { select: { whatsapp: true, optOutAt: true } },
       },
     });
@@ -165,13 +184,48 @@ export async function entregarMensagem(
       return { entregue: false, motivo: "semTelefone", detalhe: "o lead não tem WhatsApp" };
     }
 
+    // ── ⭐ A SUPERVISORA — ÚNICO ponto de encaixe, ver `supervisora/revisao.ts` ──
+    //
+    // Depois de opt-out e telefone (não vale a pena revisar tom de uma mensagem
+    // que já não sairia por outro motivo), e ANTES de `enviarTextoDeVendas` —
+    // que é a linha que de fato bate na Meta. Cobre IA, humano e o conector do
+    // handoff porque os três chegam AQUI; nenhum precisa saber que ela existe.
+    const revisao = await revisarAntesDeEntregar(db, {
+      mensagemId,
+      leadId: m.leadId,
+      texto,
+      autorMensagem: m.autor,
+      autorUserId: m.autorUserId,
+      papelDoAgente: m.papelDoAgente,
+    });
+
+    if (!revisao.prosseguir) {
+      // ⛔ NUNCA `registrarFalhaDeEnvio` aqui: FALHOU é para quando a Meta ou a
+      // rede recusaram — estado técnico, corrigível por retentativa. Retido pela
+      // Supervisora é uma decisão de qualidade, e um retry automático mandaria a
+      // mesma mensagem ruim de novo. A mensagem fica PENDENTE, visível, e o
+      // motivo mora em `SupervisoraAvaliacao` (ligada por `mensagemId`) — nunca
+      // escondido dentro do campo `erro`, que é vocabulário da Meta.
+      return {
+        entregue: false,
+        motivo: "retidaPelaSupervisora",
+        detalhe: revisao.motivoDeRetencao ?? "retida pela Supervisora",
+      };
+    }
+
+    const textoParaEnviar = revisao.textoParaEnviar;
+
     const r = await enviarTextoDeVendas(
       // A decisão do portão: opt-out e telefone já foram conferidos acima, com o
       // dado FRESCO do banco. Montá-la aqui é declarar que a checagem aconteceu —
       // e a assinatura de `enviarTextoDeVendas` não deixa fingir que aconteceu.
       { sendable: true, reason: null, detail: "conferido na entrega: sem opt-out, com telefone" },
       telefone,
-      texto,
+      // ⚠️ `textoParaEnviar`, não `texto`: em modo GUARD/INTERVENTION com
+      // veredito AMARELO, a Supervisora já reescreveu — e o que sai para o
+      // cliente é a versão corrigida, nunca a original. Nos demais casos os
+      // dois são o mesmo valor.
+      textoParaEnviar,
     );
 
     if (!r.ok) {
