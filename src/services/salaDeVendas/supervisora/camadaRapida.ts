@@ -114,6 +114,12 @@ function instrucao(ctx: ContextoDaRevisao): string {
       ? `REGRAS COMERCIAIS DESTA CASA:\n${ctx.regrasComerciais.map((r) => `- ${r}`).join("\n")}`
       : "",
     "",
+    // Recorte pequeno da Academia Comercial (`supervisora/academia.ts`) — só
+    // aparece quando há versão publicada; vazio é o comportamento de hoje.
+    ctx.conhecimentoDaAcademia.length
+      ? `CONHECIMENTO DA ACADEMIA COMERCIAL (venda consultiva, para esta etapa):\n${ctx.conhecimentoDaAcademia.map((c) => `- ${c}`).join("\n")}`
+      : "",
+    "",
     `ETAPA DO FUNIL: ${ctx.etapaDoFunil}`,
     `PERFIL DO LEAD: ${ctx.perfilDoLead}`,
     ctx.resumoIncremental ? `\n${ctx.resumoIncremental}` : "",

@@ -5846,17 +5846,18 @@ model InternalUser {
   handoffsQueAceitou Handoff[]         @relation("HandoffReceptor")
 
   // ── Sala de Vendas ─────────────────────────────────────────────────────────
-  mensagensQueEscreveu LeadMensagem[]      @relation("MensagemAutor")
-  fichasQueAtualizou   LeadQualificacao[]  @relation("FichaAtualizadaPor")
-  tarefasDeLead        LeadTarefa[]        @relation("TarefaDoLead")
-  compromissos         LeadCompromisso[]   @relation("CompromissoDoLead")
-  propostasQueCriou    LeadProposta[]      @relation("PropostaCriadaPor")
-  handoffsDeLeadDe     LeadHandoff[]       @relation("HandoffLeadDe")
-  handoffsDeLeadPara   LeadHandoff[]       @relation("HandoffLeadPara")
-  disponibilidade      SdrDisponibilidade?
-  versoesQuePublicou   SdrIaConfigVersao[] @relation("VersaoPublicadaPor")
-  avaliacoesRecebidas  LeadAvaliacaoQA[]   @relation("QAAvaliado")
-  avaliacoesQueFez     LeadAvaliacaoQA[]   @relation("QAAvaliador")
+  mensagensQueEscreveu         LeadMensagem[]            @relation("MensagemAutor")
+  fichasQueAtualizou           LeadQualificacao[]        @relation("FichaAtualizadaPor")
+  tarefasDeLead                LeadTarefa[]              @relation("TarefaDoLead")
+  compromissos                 LeadCompromisso[]         @relation("CompromissoDoLead")
+  propostasQueCriou            LeadProposta[]            @relation("PropostaCriadaPor")
+  handoffsDeLeadDe             LeadHandoff[]             @relation("HandoffLeadDe")
+  handoffsDeLeadPara           LeadHandoff[]             @relation("HandoffLeadPara")
+  disponibilidade              SdrDisponibilidade?
+  versoesQuePublicou           SdrIaConfigVersao[]       @relation("VersaoPublicadaPor")
+  versoesDaAcademiaQuePublicou AcademiaComercialVersao[] @relation("AcademiaVersaoPublicadaPor")
+  avaliacoesRecebidas          LeadAvaliacaoQA[]         @relation("QAAvaliado")
+  avaliacoesQueFez             LeadAvaliacaoQA[]         @relation("QAAvaliador")
 
   @@index([role])
   @@index([positionId])
@@ -7316,6 +7317,138 @@ model SupervisoraSugestaoDePrompt {
   @@index([situacao, criadaEm])
   @@index([agenteAfetadoUserId])
   @@map("supervisora_sugestoes_prompt")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// A ACADEMIA COMERCIAL — o material de venda consultiva que a Supervisora
+// consulta, versionado como o TA.
+//
+// ── O QUE ELA É, E O QUE ELA NÃO É ──────────────────────────────────────────
+//
+// É o conteúdo pesquisado e escrito à mão em
+// `docs/academia-comercial/academia-comercial-v1.json` — regra obrigatória,
+// comportamento proibido, exemplo ruim→corrigido, sinal de risco, critério de
+// veredito e orientação por etapa — cada item com fonte pública e data de
+// consulta reais, ingerido no banco por `scripts/semear-academia-comercial.ts`.
+//
+// NÃO é um segundo `SdrIaConfigVersao`: o ciclo de vida (`SituacaoDaVersao`,
+// publicar/reverter) é o MESMO enum e a MESMA doutrina de "só uma PUBLICADA
+// por vez" — reaproveitado aqui, não reinventado. A diferença é o que a versão
+// carrega: o TA versiona identidade/tom/proibições PARA FALAR; a Academia
+// versiona o material de treino/consulta que a Supervisora usa PARA JULGAR.
+//
+// NÃO é lida por inteiro a cada mensagem: `supervisora/academia.ts`
+// (`recuperarConhecimentoRelevante`) filtra por etapa + sinais no banco e
+// devolve um recorte pequeno — nunca "buscar tudo e filtrar em JS".
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A etapa do funil comercial a que um item da Academia se aplica.
+/// `GERAL` = vale em qualquer etapa (valor explícito no JSON de origem, não
+/// ausência de etapa — só `CRITERIO_VEREDITO`, que julga a mensagem inteira
+/// independente da etapa, usa etapa nula de fato).
+enum EtapaComercial {
+  PROSPECCAO
+  QUALIFICACAO
+  DEMONSTRACAO
+  OBJECAO
+  FECHAMENTO
+  GERAL
+}
+
+/// As seis formas de conteúdo que o JSON da Academia carrega. Uma por seção
+/// do documento — ver `academia-comercial-v1.json`.
+enum CategoriaDaAcademia {
+  REGRA_OBRIGATORIA
+  COMPORTAMENTO_PROIBIDO
+  /// `ruim`/`corrigido` preenchidos; as outras categorias não usam esses campos.
+  EXEMPLO
+  SINAL_DE_RISCO
+  /// Um item por veredito (`VERDE`/`AMARELO`/`VERMELHO`/`CRITICO`) — `titulo`
+  /// carrega o nome do veredito, `etapa` fica nulo (vale para toda etapa).
+  CRITERIO_VEREDITO
+  /// Um item por etapa do funil — `etapa` sempre preenchida aqui.
+  ORIENTACAO_DE_ETAPA
+}
+
+/// O interruptor da Academia — singleton, mesmo padrão de `SupervisoraConfig`
+/// e `ProspeccaoConfig`. `versaoAtivaId` é o que garante, por construção, que
+/// no máximo UMA versão está `PUBLICADA` ao mesmo tempo: só existe um ponteiro.
+model AcademiaComercialConfig {
+  id String @id @default("singleton")
+
+  /// Versão publicada agora. Nula = nenhuma ainda — `recuperarConhecimentoRelevante`
+  /// devolve vazio, e o comportamento de hoje (sem Academia) continua valendo.
+  versaoAtivaId String?                  @unique
+  versaoAtiva   AcademiaComercialVersao? @relation("AcademiaVersaoAtiva", fields: [versaoAtivaId], references: [id])
+
+  atualizadoEm DateTime @updatedAt
+
+  @@map("academia_comercial_config")
+}
+
+/// Uma versão do conteúdo da Academia. Publicável e reversível — mesmo
+/// mecanismo de `SdrIaConfigVersao` (`situacao` + o ponteiro `versaoAtivaId`
+/// acima), reaproveitando o enum `SituacaoDaVersao` já existente.
+model AcademiaComercialVersao {
+  id       String           @id @default(cuid())
+  numero   Int
+  situacao SituacaoDaVersao @default(RASCUNHO)
+
+  /// Nota livre sobre esta versão (ex.: "v1 — pesquisa de 13/09/2026").
+  notaDaVersao String? @db.Text
+
+  publicadaEm    DateTime?
+  publicadaPorId String?
+  publicadaPor   InternalUser? @relation("AcademiaVersaoPublicadaPor", fields: [publicadaPorId], references: [id])
+
+  criadaEm DateTime @default(now())
+
+  itens   AcademiaComercialItem[]
+  ativaEm AcademiaComercialConfig? @relation("AcademiaVersaoAtiva")
+
+  @@unique([numero])
+  @@index([situacao])
+  @@map("academia_comercial_versoes")
+}
+
+/// Um item de conteúdo da Academia — uma regra, um proibido, um exemplo, um
+/// sinal de risco, um critério de veredito ou uma orientação de etapa.
+model AcademiaComercialItem {
+  id       String                  @id @default(cuid())
+  versaoId String
+  versao   AcademiaComercialVersao @relation(fields: [versaoId], references: [id], onDelete: Cascade)
+
+  categoria CategoriaDaAcademia
+  /// Nula só quando a categoria não é ligada a uma etapa específica
+  /// (`CRITERIO_VEREDITO`, que julga a mensagem toda, não uma etapa).
+  etapa     EtapaComercial?
+
+  /// O `id` do item no JSON de origem (ex. `"regra-diagnostico-antes-do-pitch"`)
+  /// — rastreia esta linha até a pesquisa que a gerou, e é a chave que o seed
+  /// usa para não duplicar numa segunda corrida.
+  chaveOriginal String
+  titulo        String
+  conteudo      String @db.Text
+
+  /// Só para `EXEMPLO`: o par ruim→corrigido. Nulos em qualquer outra categoria.
+  ruim      String? @db.Text
+  corrigido String? @db.Text
+
+  tags String[] @default([])
+
+  /// Nulos só em `CRITERIO_VEREDITO`/`ORIENTACAO_DE_ETAPA`: essas duas seções
+  /// do JSON são síntese editorial do documento inteiro (ver `metodologia`),
+  /// não citam uma fonte única por item — diferente de regra/proibido/exemplo/
+  /// sinal, que sempre citam (`fonte` + `fonteData` no JSON, resolvidos aqui
+  /// para a URL real via `fontes`).
+  fonteUrl  String?
+  fonteData String?
+
+  criadoEm DateTime @default(now())
+
+  @@unique([versaoId, chaveOriginal])
+  @@index([versaoId, categoria, etapa])
+  @@map("academia_comercial_itens")
 }
 
 /// Uma sequência de toques programada (cadência).

@@ -18,6 +18,7 @@
 
 import type { PrismaClient, Prisma } from "@prisma/client";
 import { lerMemoria, blocoDeMemoria, blocoDeConduta } from "../ta/memoria";
+import { recuperarConhecimentoRelevante, etapaComercialDoStage, sinaisDaMemoria } from "./academia";
 
 type Cliente = PrismaClient | Prisma.TransactionClient;
 
@@ -37,6 +38,17 @@ export interface ContextoDaRevisao {
   /** Sinais de código, sem custo de modelo — vêm de `ta/memoria.ts`. */
   irritacaoDoLead: number;
   pediuParar: boolean;
+  /**
+   * O recorte pequeno da Academia Comercial (`academia.ts`) para a etapa e os
+   * sinais desta conversa — nunca a base inteira. Vazio sem versão publicada
+   * (comportamento de hoje, sem regressão). Campo PRÓPRIO, não misturado a
+   * `regrasComerciais`: aquele é especificamente os `proibidos` da ficha do
+   * TA (o que ele não pode dizer); isto é orientação de venda consultiva mais
+   * ampla — regra, exemplo, sinal de risco, critério de veredito. Juntar os
+   * dois faria `camadaRapida.ts` rotular conteúdos de natureza diferente sob
+   * o mesmo título "REGRAS COMERCIAIS DESTA CASA".
+   */
+  conhecimentoDaAcademia: string[];
 }
 
 /** As últimas N mensagens da conversa, mais antiga primeiro — só para a camada
@@ -102,6 +114,20 @@ export async function montarContextoDaRevisao(
     ? `etapa: ${lead.stage ?? "não classificada"}; temperatura: ${lead.temperatura ?? "não classificada"}`
     : "não medido";
 
+  // Recorte pequeno, nunca a base inteira — ver `academia.ts`. `sinaisDaMemoria`
+  // reaproveita a MESMA leitura de irritação/pedido de parar que os campos
+  // `irritacaoDoLead`/`pediuParar`, abaixo, já expõem — não um segundo detector.
+  //
+  // ⚠️ `.catch` local, de propósito: sem versão publicada isto já devolve `[]`
+  // sem erro (comportamento de hoje). Um erro de verdade aqui (ex.: tabela
+  // ainda não migrada num ambiente atrasado) não deveria derrubar a revisão
+  // inteira por causa de um material AUXILIAR — o mesmo `[]` que "sem versão
+  // publicada" já devolve é a queda segura.
+  const conhecimentoDaAcademia = await recuperarConhecimentoRelevante(db, {
+    etapa: etapaComercialDoStage(lead?.stage),
+    sinaisDetectados: sinaisDaMemoria({ irritacaoDoLead: memoria.irritacao, pediuParar: memoria.pediuPararSondagem }),
+  }).catch(() => [] as string[]);
+
   return {
     ultimaMensagemDoCliente: ultimaEntrada?.texto ?? null,
     resumoIncremental: resumo,
@@ -121,5 +147,6 @@ export async function montarContextoDaRevisao(
     // um segundo.
     irritacaoDoLead: memoria.irritacao,
     pediuParar: memoria.pediuPararSondagem,
+    conhecimentoDaAcademia,
   };
 }

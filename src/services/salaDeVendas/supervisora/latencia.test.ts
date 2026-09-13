@@ -52,6 +52,7 @@ const CONTEXTO_NEUTRO = {
   ultimosAlertasDesteAtendimento: [],
   irritacaoDoLead: 0,
   pediuParar: false,
+  conhecimentoDaAcademia: [],
 };
 
 const VEREDITO_VERDE = {
