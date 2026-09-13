@@ -5135,19 +5135,20 @@ model SiteLead {
   /// que paga a próxima decisão de produto.
   motivoPerdaId String?
 
-  interactions          SiteLeadInteraction[]
-  mensagens             LeadMensagem[]
-  tarefas               LeadTarefa[]
-  compromissos          LeadCompromisso[]
-  propostas             LeadProposta[]
-  handoffs              LeadHandoff[]
-  fatoresDoScore        LeadScoreFator[]
-  avaliacoes            LeadAvaliacaoQA[]
-  avaliacoesSupervisora SupervisoraAvaliacao[]
-  cadencias             LeadCadencia[]
-  qualificacao          LeadQualificacao?
-  motivoPerda           MotivoDePerda?         @relation(fields: [motivoPerdaId], references: [id])
-  atendente             InternalUser?          @relation("LeadAtendente", fields: [atendenteUserId], references: [id])
+  interactions           SiteLeadInteraction[]
+  mensagens              LeadMensagem[]
+  tarefas                LeadTarefa[]
+  compromissos           LeadCompromisso[]
+  propostas              LeadProposta[]
+  handoffs               LeadHandoff[]
+  fatoresDoScore         LeadScoreFator[]
+  avaliacoes             LeadAvaliacaoQA[]
+  avaliacoesSupervisora  SupervisoraAvaliacao[]
+  revisoesRetrospectivas AcademiaRevisaoRetrospectiva[]
+  cadencias              LeadCadencia[]
+  qualificacao           LeadQualificacao?
+  motivoPerda            MotivoDePerda?                 @relation(fields: [motivoPerdaId], references: [id])
+  atendente              InternalUser?                  @relation("LeadAtendente", fields: [atendenteUserId], references: [id])
 
   @@index([createdAt])
   @@index([atendidoPor, stage])
@@ -5846,17 +5847,18 @@ model InternalUser {
   handoffsQueAceitou Handoff[]         @relation("HandoffReceptor")
 
   // ── Sala de Vendas ─────────────────────────────────────────────────────────
-  mensagensQueEscreveu LeadMensagem[]      @relation("MensagemAutor")
-  fichasQueAtualizou   LeadQualificacao[]  @relation("FichaAtualizadaPor")
-  tarefasDeLead        LeadTarefa[]        @relation("TarefaDoLead")
-  compromissos         LeadCompromisso[]   @relation("CompromissoDoLead")
-  propostasQueCriou    LeadProposta[]      @relation("PropostaCriadaPor")
-  handoffsDeLeadDe     LeadHandoff[]       @relation("HandoffLeadDe")
-  handoffsDeLeadPara   LeadHandoff[]       @relation("HandoffLeadPara")
-  disponibilidade      SdrDisponibilidade?
-  versoesQuePublicou   SdrIaConfigVersao[] @relation("VersaoPublicadaPor")
-  avaliacoesRecebidas  LeadAvaliacaoQA[]   @relation("QAAvaliado")
-  avaliacoesQueFez     LeadAvaliacaoQA[]   @relation("QAAvaliador")
+  mensagensQueEscreveu         LeadMensagem[]            @relation("MensagemAutor")
+  fichasQueAtualizou           LeadQualificacao[]        @relation("FichaAtualizadaPor")
+  tarefasDeLead                LeadTarefa[]              @relation("TarefaDoLead")
+  compromissos                 LeadCompromisso[]         @relation("CompromissoDoLead")
+  propostasQueCriou            LeadProposta[]            @relation("PropostaCriadaPor")
+  handoffsDeLeadDe             LeadHandoff[]             @relation("HandoffLeadDe")
+  handoffsDeLeadPara           LeadHandoff[]             @relation("HandoffLeadPara")
+  disponibilidade              SdrDisponibilidade?
+  versoesQuePublicou           SdrIaConfigVersao[]       @relation("VersaoPublicadaPor")
+  versoesDaAcademiaQuePublicou AcademiaComercialVersao[] @relation("AcademiaVersaoPublicadaPor")
+  avaliacoesRecebidas          LeadAvaliacaoQA[]         @relation("QAAvaliado")
+  avaliacoesQueFez             LeadAvaliacaoQA[]         @relation("QAAvaliador")
 
   @@index([role])
   @@index([positionId])
@@ -6485,6 +6487,11 @@ model LeadMensagem {
   /// prospecção, que usa `enviarModeloDeVendas` direto — fora do escopo desta
   /// camada, documentado em `supervisora/README` do serviço).
   avaliacaoSupervisora SupervisoraAvaliacao?
+
+  /// ⭐ Preenchida só quando `scripts/shadow-retrospectivo.ts` reavaliou esta
+  /// mensagem depois do fato, para calibração — nunca afeta a entrega, que já
+  /// aconteceu. Ver `AcademiaRevisaoRetrospectiva`.
+  revisaoRetrospectiva AcademiaRevisaoRetrospectiva?
 
   @@index([leadId, ocorreuEm])
   @@index([leadId, direcao, ocorreuEm])
@@ -7275,6 +7282,57 @@ model SupervisoraAvaliacao {
   @@map("supervisora_avaliacoes")
 }
 
+/// ⭐ SHADOW RETROSPECTIVO — a calibração que roda contra atendimento QUE JÁ
+/// ACONTECEU, não contra cliente novo esperando. Uma linha aqui é o resultado
+/// de `scripts/shadow-retrospectivo.ts` reavaliando uma `LeadMensagem` de
+/// SAÍDA já enviada há muito tempo, só para aprender — nunca para agir.
+///
+/// ── POR QUE NÃO É `SupervisoraAvaliacao` ────────────────────────────────────
+///
+/// `SupervisoraAvaliacao` é o veredito que valeu NO MOMENTO do envio (ou que
+/// teria valido, em SHADOW síncrono) — `modoNaEpoca`, `acaoTomada` e
+/// `handoffDisparado` só fazem sentido para uma avaliação que aconteceu ANTES
+/// ou DURANTE a entrega. Uma revisão retrospectiva acontece dias/semanas
+/// DEPOIS, sobre uma mensagem que já saiu, sem `acaoTomada` nenhuma possível
+/// (a mensagem já foi entregue) — misturar as duas confundiria auditoria "o
+/// que a Supervisora decidiu na hora" com "o que ela pensaria hoje, olhando
+/// pra trás". Tabela própria, pequena, só de leitura para consulta.
+model AcademiaRevisaoRetrospectiva {
+  id         String       @id @default(cuid())
+  /// Uma revisão retrospectiva por mensagem — rodar o script de novo sobre o
+  /// mesmo lote não duplica linha, ver `scripts/shadow-retrospectivo.ts`.
+  mensagemId String       @unique
+  mensagem   LeadMensagem @relation(fields: [mensagemId], references: [id], onDelete: Cascade)
+  leadId     String
+  lead       SiteLead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  /// Quando a mensagem ORIGINAL ocorreu — não quando esta revisão rodou. É por
+  /// este campo que um recorte de tempo pede "revise as mensagens de tal
+  /// período", não pela data em que o script foi rodado.
+  ocorreuEmOriginal DateTime
+
+  camada        CamadaDaSupervisora
+  veredito      VeredictoDaSupervisora
+  motivos       MotivoDaSupervisora[]  @default([])
+  motivoDetalhe String?                @db.Text
+
+  falhaTecnica   Boolean @default(false)
+  engineProvider String?
+  engineModel    String?
+
+  /// Identifica qual execução do script gravou esta linha — útil pra saber
+  /// "isto veio da rodada de auditoria de tal dia", sem precisar de uma
+  /// tabela de lotes à parte.
+  loteId String?
+
+  revisadaEm DateTime @default(now())
+
+  @@index([leadId, ocorreuEmOriginal])
+  @@index([veredito, revisadaEm])
+  @@index([loteId])
+  @@map("academia_revisoes_retrospectivas")
+}
+
 enum AutorDaSugestaoDePrompt {
   SISTEMA
   SUPERVISORA
@@ -7324,6 +7382,138 @@ model SupervisoraSugestaoDePrompt {
   @@index([situacao, criadaEm])
   @@index([agenteAfetadoUserId])
   @@map("supervisora_sugestoes_prompt")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// A ACADEMIA COMERCIAL — o material de venda consultiva que a Supervisora
+// consulta, versionado como o TA.
+//
+// ── O QUE ELA É, E O QUE ELA NÃO É ──────────────────────────────────────────
+//
+// É o conteúdo pesquisado e escrito à mão em
+// `docs/academia-comercial/academia-comercial-v1.json` — regra obrigatória,
+// comportamento proibido, exemplo ruim→corrigido, sinal de risco, critério de
+// veredito e orientação por etapa — cada item com fonte pública e data de
+// consulta reais, ingerido no banco por `scripts/semear-academia-comercial.ts`.
+//
+// NÃO é um segundo `SdrIaConfigVersao`: o ciclo de vida (`SituacaoDaVersao`,
+// publicar/reverter) é o MESMO enum e a MESMA doutrina de "só uma PUBLICADA
+// por vez" — reaproveitado aqui, não reinventado. A diferença é o que a versão
+// carrega: o TA versiona identidade/tom/proibições PARA FALAR; a Academia
+// versiona o material de treino/consulta que a Supervisora usa PARA JULGAR.
+//
+// NÃO é lida por inteiro a cada mensagem: `supervisora/academia.ts`
+// (`recuperarConhecimentoRelevante`) filtra por etapa + sinais no banco e
+// devolve um recorte pequeno — nunca "buscar tudo e filtrar em JS".
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A etapa do funil comercial a que um item da Academia se aplica.
+/// `GERAL` = vale em qualquer etapa (valor explícito no JSON de origem, não
+/// ausência de etapa — só `CRITERIO_VEREDITO`, que julga a mensagem inteira
+/// independente da etapa, usa etapa nula de fato).
+enum EtapaComercial {
+  PROSPECCAO
+  QUALIFICACAO
+  DEMONSTRACAO
+  OBJECAO
+  FECHAMENTO
+  GERAL
+}
+
+/// As seis formas de conteúdo que o JSON da Academia carrega. Uma por seção
+/// do documento — ver `academia-comercial-v1.json`.
+enum CategoriaDaAcademia {
+  REGRA_OBRIGATORIA
+  COMPORTAMENTO_PROIBIDO
+  /// `ruim`/`corrigido` preenchidos; as outras categorias não usam esses campos.
+  EXEMPLO
+  SINAL_DE_RISCO
+  /// Um item por veredito (`VERDE`/`AMARELO`/`VERMELHO`/`CRITICO`) — `titulo`
+  /// carrega o nome do veredito, `etapa` fica nulo (vale para toda etapa).
+  CRITERIO_VEREDITO
+  /// Um item por etapa do funil — `etapa` sempre preenchida aqui.
+  ORIENTACAO_DE_ETAPA
+}
+
+/// O interruptor da Academia — singleton, mesmo padrão de `SupervisoraConfig`
+/// e `ProspeccaoConfig`. `versaoAtivaId` é o que garante, por construção, que
+/// no máximo UMA versão está `PUBLICADA` ao mesmo tempo: só existe um ponteiro.
+model AcademiaComercialConfig {
+  id String @id @default("singleton")
+
+  /// Versão publicada agora. Nula = nenhuma ainda — `recuperarConhecimentoRelevante`
+  /// devolve vazio, e o comportamento de hoje (sem Academia) continua valendo.
+  versaoAtivaId String?                  @unique
+  versaoAtiva   AcademiaComercialVersao? @relation("AcademiaVersaoAtiva", fields: [versaoAtivaId], references: [id])
+
+  atualizadoEm DateTime @updatedAt
+
+  @@map("academia_comercial_config")
+}
+
+/// Uma versão do conteúdo da Academia. Publicável e reversível — mesmo
+/// mecanismo de `SdrIaConfigVersao` (`situacao` + o ponteiro `versaoAtivaId`
+/// acima), reaproveitando o enum `SituacaoDaVersao` já existente.
+model AcademiaComercialVersao {
+  id       String           @id @default(cuid())
+  numero   Int
+  situacao SituacaoDaVersao @default(RASCUNHO)
+
+  /// Nota livre sobre esta versão (ex.: "v1 — pesquisa de 13/09/2026").
+  notaDaVersao String? @db.Text
+
+  publicadaEm    DateTime?
+  publicadaPorId String?
+  publicadaPor   InternalUser? @relation("AcademiaVersaoPublicadaPor", fields: [publicadaPorId], references: [id])
+
+  criadaEm DateTime @default(now())
+
+  itens   AcademiaComercialItem[]
+  ativaEm AcademiaComercialConfig? @relation("AcademiaVersaoAtiva")
+
+  @@unique([numero])
+  @@index([situacao])
+  @@map("academia_comercial_versoes")
+}
+
+/// Um item de conteúdo da Academia — uma regra, um proibido, um exemplo, um
+/// sinal de risco, um critério de veredito ou uma orientação de etapa.
+model AcademiaComercialItem {
+  id       String                  @id @default(cuid())
+  versaoId String
+  versao   AcademiaComercialVersao @relation(fields: [versaoId], references: [id], onDelete: Cascade)
+
+  categoria CategoriaDaAcademia
+  /// Nula só quando a categoria não é ligada a uma etapa específica
+  /// (`CRITERIO_VEREDITO`, que julga a mensagem toda, não uma etapa).
+  etapa     EtapaComercial?
+
+  /// O `id` do item no JSON de origem (ex. `"regra-diagnostico-antes-do-pitch"`)
+  /// — rastreia esta linha até a pesquisa que a gerou, e é a chave que o seed
+  /// usa para não duplicar numa segunda corrida.
+  chaveOriginal String
+  titulo        String
+  conteudo      String @db.Text
+
+  /// Só para `EXEMPLO`: o par ruim→corrigido. Nulos em qualquer outra categoria.
+  ruim      String? @db.Text
+  corrigido String? @db.Text
+
+  tags String[] @default([])
+
+  /// Nulos só em `CRITERIO_VEREDITO`/`ORIENTACAO_DE_ETAPA`: essas duas seções
+  /// do JSON são síntese editorial do documento inteiro (ver `metodologia`),
+  /// não citam uma fonte única por item — diferente de regra/proibido/exemplo/
+  /// sinal, que sempre citam (`fonte` + `fonteData` no JSON, resolvidos aqui
+  /// para a URL real via `fontes`).
+  fonteUrl  String?
+  fonteData String?
+
+  criadoEm DateTime @default(now())
+
+  @@unique([versaoId, chaveOriginal])
+  @@index([versaoId, categoria, etapa])
+  @@map("academia_comercial_itens")
 }
 
 /// Uma sequência de toques programada (cadência).
