@@ -7206,6 +7206,10 @@ model SupervisoraModoHistorico {
   alteradoPor  String
   motivo       String?           @db.Text
   alteradoEm   DateTime          @default(now())
+  /// `false` = tentativa recusada pela escada de modo (salto de 2+ degraus,
+  /// ver `alterarModo` em `config.ts`) — registrada, não escondida. Migração
+  /// aditiva `20260913000000_escada_de_modo_obrigatoria`.
+  aceita       Boolean           @default(true)
 
   @@index([configId, alteradoEm])
   @@map("supervisora_modo_historico")

@@ -102,9 +102,33 @@ export function modoEfetivo(estado: { ligada: boolean; modo: ModoDaSupervisora }
   return estado.ligada ? estado.modo : "OFF";
 }
 
+/**
+ * A ESCADA — ordem que `alterarModo` obriga a subir um degrau de cada vez.
+ *
+ * ⛔ ACHADO DA RODADA ANTERIOR: `alterarModo` aceitava qualquer transição —
+ * OFF direto para GUARD ou INTERVENTION, sem nunca passar por SHADOW. A
+ * régua de "progressão segura" (SHADOW primeiro, sempre) existia só na
+ * doutrina, não no código. Esta tabela é a trava real.
+ */
+const INDICE_DO_MODO: Record<ModoDaSupervisora, number> = {
+  OFF: 0,
+  SHADOW: 1,
+  GUARD: 2,
+  INTERVENTION: 3,
+};
+
+/** Só para a frase de recusa — "a próxima parada é X". */
+const PROXIMO_DEGRAU: Record<ModoDaSupervisora, ModoDaSupervisora | null> = {
+  OFF: "SHADOW",
+  SHADOW: "GUARD",
+  GUARD: "INTERVENTION",
+  INTERVENTION: null,
+};
+
 export type ResultadoDeAlterarModo =
   | { ok: true; modoAnterior: ModoDaSupervisora; modoNovo: ModoDaSupervisora }
-  | { ok: false; causa: "semAlteradoPor" };
+  | { ok: false; causa: "semAlteradoPor" }
+  | { ok: false; causa: "saltoPerigoso"; detalhe: string };
 
 /**
  * Troca o modo (ou a chave mestra), com o histórico gravado.
@@ -150,6 +174,57 @@ export async function alterarModo(
   const novoModo = params.novoModo ?? atual?.modo ?? PADRAO_AO_CRIAR.modo;
   const modoNovo = novaLigada ? novoModo : "OFF";
 
+  // ── A ESCADA ──────────────────────────────────────────────────────────────
+  // Regressão (inclusive desligar, que sempre cai para OFF) é sempre livre e
+  // imediata — nunca é o caminho perigoso. Avanço só um degrau de cada vez;
+  // isso vale IGUAL para reativar depois de uma queda para OFF (`ligada`
+  // estava `false`): o efetivo de origem é OFF, então pular direto para
+  // GUARD/INTERVENTION é o mesmo salto que OFF→GUARD a frio — a régua não
+  // distingue "nunca ligou" de "caiu e vai religar", de propósito. Sem linha
+  // no banco o efetivo de origem também é OFF (`SEM_CONFIGURACAO`, acima),
+  // então um primeiro POST pedindo GUARD/INTERVENTION direto é o MESMO salto.
+  const indiceAnterior = INDICE_DO_MODO[modoAnterior];
+  const indiceNovo = INDICE_DO_MODO[modoNovo];
+  const saltoPerigoso = indiceNovo - indiceAnterior > 1;
+
+  if (saltoPerigoso) {
+    const proximo = PROXIMO_DEGRAU[modoAnterior];
+    const detalhe =
+      `Salto de ${modoAnterior} para ${modoNovo} não é permitido — suba um degrau de cada vez` +
+      (proximo ? ` (a próxima parada é ${proximo}).` : ".");
+
+    // Garante que a linha singleton existe antes de gravar a recusa — a FK de
+    // `supervisoraModoHistorico` exige `configId` já existente, e uma
+    // tentativa recusada pode ser a PRIMEIRA chamada desta instância (linha
+    // ainda não nasceu). Cria com `SEM_CONFIGURACAO` (OFF) — o mesmo "ninguém
+    // decidiu nada" que `lerConfig` já devolve sem linha — nunca com
+    // `atualizadoPor`: a tentativa foi recusada, ninguém mudou o interruptor.
+    const config =
+      atual ??
+      (await db.supervisoraConfig.upsert({
+        where: { id: "singleton" },
+        create: { id: "singleton", ligada: SEM_CONFIGURACAO.ligada, modo: SEM_CONFIGURACAO.modo },
+        update: {},
+      }));
+
+    // Registra TODA tentativa — aceita ou recusada. Sem isto, um salto barrado
+    // desaparece sem deixar rastro, e a auditoria nunca saberia que alguém
+    // tentou pular a escada.
+    await db.supervisoraModoHistorico.create({
+      data: {
+        configId: config.id,
+        modoAnterior,
+        modoNovo,
+        alteradoPor,
+        motivo: params.motivo?.trim() || detalhe,
+        alteradoEm: agora,
+        aceita: false,
+      },
+    });
+
+    return { ok: false, causa: "saltoPerigoso", detalhe };
+  }
+
   const config = await db.supervisoraConfig.upsert({
     where: { id: "singleton" },
     create: {
@@ -167,7 +242,8 @@ export async function alterarModo(
 
   // Só grava histórico quando algo de fato mudou — trocar "SHADOW" por
   // "SHADOW" de novo não é uma decisão, é um clique perdido, e não deveria
-  // aparecer na trilha como se fosse uma.
+  // aparecer na trilha como se fosse uma. (Salto perigoso, acima, sempre muda
+  // de índice — por isso sempre grava, mesmo sem alterar a configuração.)
   if (modoAnterior !== modoNovo) {
     await db.supervisoraModoHistorico.create({
       data: {
@@ -177,6 +253,7 @@ export async function alterarModo(
         alteradoPor,
         motivo: params.motivo?.trim() || null,
         alteradoEm: agora,
+        aceita: true,
       },
     });
   }
@@ -190,6 +267,8 @@ export interface TrocaDeModo {
   alteradoPor: string;
   motivo: string | null;
   alteradoEm: Date;
+  /** `false` = tentativa recusada pela escada (salto de 2+ degraus) — ver `alterarModo`. */
+  aceita: boolean;
 }
 
 export async function historicoDeModo(
@@ -207,5 +286,6 @@ export async function historicoDeModo(
     alteradoPor: l.alteradoPor,
     motivo: l.motivo,
     alteradoEm: l.alteradoEm,
+    aceita: l.aceita,
   }));
 }

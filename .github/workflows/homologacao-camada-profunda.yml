@@ -1,0 +1,84 @@
+# HOMOLOGAÇÃO REAL DA CAMADA PROFUNDA — chamada de verdade ao provedor de IA,
+# rodando SÓ dentro do CI, onde `ANTHROPIC_API_KEY` já existe como GitHub
+# Secret (o mesmo usado hoje por `manual-sync-nightly.yml`).
+#
+# ── O QUE ESTE WORKFLOW PROVA, E O QUE ELE NÃO FAZ ──────────────────────────
+#
+# `scripts/homologar-camada-profunda.ts` chama a função REAL
+# `avaliarCamadaProfunda` (src/services/salaDeVendas/supervisora/camadaProfunda.ts)
+# com um lead e uma conversa 100% sintéticos, forçando o roteador do Brain a
+# resolver para o provedor Anthropic de verdade — nunca MOCK, nunca dado real
+# de cliente, nunca uma chamada que entrega mensagem (o script nunca importa
+# `enviarModeloDeVendas`/`entregarMensagem`).
+#
+# Se a chamada real não completar por qualquer motivo (chave ausente, chave
+# inválida, provedor fora do ar), o script sai com código de erro e a frase
+# exata do bloqueio no log — este job então REPROVA. Ele nunca finge sucesso.
+#
+# ── POR QUE É UM WORKFLOW SEPARADO, NÃO UM STEP NO CI PRINCIPAL ─────────────
+#
+# `ci.yml` roda em toda proposta e é o check obrigatório de type-check + testes
+# unitários — rápido, sem chamada de rede, sem custo de API. Este job FAZ uma
+# chamada de rede paga a um provedor externo; separá-lo evita que uma
+# instabilidade do provedor (fora do controle deste repositório) barre o check
+# obrigatório do PR. Sem `postgres` service: o script não precisa de banco —
+# `AIEngineRouter` cai com segurança na lógica estática quando o banco não
+# está configurado (ver comentário em `AIEngineRouter.loadRoutingRows`).
+#
+# `paths:` restringe a chamadas de PR que de fato tocam a camada profunda ou
+# este próprio script/workflow — não um gasto de API a cada PR do repositório
+# inteiro.
+
+name: Homologação da camada profunda (chamada real)
+
+on:
+  pull_request:
+    paths:
+      - "scripts/homologar-camada-profunda.ts"
+      - "src/services/salaDeVendas/supervisora/camadaProfunda.ts"
+      - "src/services/salaDeVendas/supervisora/contexto.ts"
+      - "src/services/brain/engines/AIEngineRouter.ts"
+      - "src/services/brain/engines/AnthropicEngineAdapter.ts"
+      - "src/services/brain/engines/OpenAIEngineAdapter.ts"
+      - "src/services/ai/pricing/modelPricing.ts"
+      - ".github/workflows/homologacao-camada-profunda.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: homologacao-camada-profunda-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  homologar:
+    name: Chamada real à camada profunda (lead sintético)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Checar segredo ANTHROPIC_API_KEY
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::Segredo ANTHROPIC_API_KEY não configurado neste repositório — a homologação real não pode rodar sem ele."
+            exit 1
+          fi
+          echo "✓ ANTHROPIC_API_KEY presente."
+
+      - name: Homologação real — avaliarCamadaProfunda com lead sintético
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: npx tsx scripts/homologar-camada-profunda.ts
