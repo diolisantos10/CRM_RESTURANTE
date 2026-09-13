@@ -1,0 +1,87 @@
+# AVALIAÇÃO REAL DA ACADEMIA COMERCIAL — >=100 cenários, chamada de verdade ao
+# provedor de IA, rodando SÓ dentro do CI, onde `ANTHROPIC_API_KEY` já existe
+# como GitHub Secret (o mesmo usado por `homologacao-camada-profunda.yml` e por
+# `manual-sync-nightly.yml`).
+#
+# ── O QUE ESTE WORKFLOW PROVA, E O QUE ELE NÃO FAZ ──────────────────────────
+#
+# `scripts/avaliar-academia-comercial.ts` lê `docs/academia-comercial/
+# cenarios-avaliacao.json` (>=100 cenários) e, para cada um, chama as funções
+# REAIS de julgamento (`avaliarCamadaRapida`/`avaliarCamadaProfunda`,
+# espelhando `deveAcionar`/`revisarDeFato` de produção) com o provedor real —
+# nunca MOCK, nunca dado real de cliente, nunca uma chamada que entrega
+# mensagem. Se o roteador cair em MOCK, o script BLOQUEIA com erro explícito —
+# este job então REPROVA, ele nunca finge sucesso contra uma resposta
+# canônica.
+#
+# ── POR QUE É UM WORKFLOW SEPARADO, NÃO UM STEP NO CI PRINCIPAL ─────────────
+#
+# Mesmo raciocínio de `homologacao-camada-profunda.yml`: `ci.yml` é o check
+# obrigatório rápido, sem chamada de rede paga; este job faz até ~220 chamadas
+# reais a um provedor externo (até 2 por cenário: rápida sempre, profunda só
+# com gatilho) e por isso vive à parte, sem travar o check obrigatório do PR
+# por uma instabilidade do provedor. Sem `postgres` service: o script não
+# precisa de banco (lê `cenarios-avaliacao.json` e `academia-comercial-v1.json`
+# direto do disco) — mesma escolha do job irmão.
+#
+# `paths:` restringe a chamadas de PR que de fato tocam a Academia, a camada
+# profunda/rápida, ou este próprio script/workflow.
+
+name: Avaliação da Academia Comercial (chamada real, >=100 cenários)
+
+on:
+  pull_request:
+    paths:
+      - "scripts/avaliar-academia-comercial.ts"
+      - "docs/academia-comercial/cenarios-avaliacao.json"
+      - "docs/academia-comercial/academia-comercial-v1.json"
+      - "src/services/salaDeVendas/supervisora/camadaProfunda.ts"
+      - "src/services/salaDeVendas/supervisora/camadaRapida.ts"
+      - "src/services/salaDeVendas/supervisora/contexto.ts"
+      - "src/services/salaDeVendas/supervisora/academia.ts"
+      - "src/services/brain/engines/AIEngineRouter.ts"
+      - "src/services/brain/engines/AnthropicEngineAdapter.ts"
+      - "src/services/brain/engines/OpenAIEngineAdapter.ts"
+      - ".github/workflows/avaliacao-academia-comercial.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: avaliacao-academia-comercial-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  avaliar:
+    name: Avaliação real (>=100 cenários, sem MOCK)
+    runs-on: ubuntu-latest
+    # ~220 chamadas reais no pior caso (rápida sempre + profunda quando
+    # aciona), a alguns segundos cada — teto generoso, cancelável se travar.
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Checar segredo ANTHROPIC_API_KEY
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::Segredo ANTHROPIC_API_KEY não configurado neste repositório — a avaliação real não pode rodar sem ele."
+            exit 1
+          fi
+          echo "✓ ANTHROPIC_API_KEY presente."
+
+      - name: Avaliação real — >=100 cenários contra avaliarCamadaRapida/avaliarCamadaProfunda
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: npx tsx scripts/avaliar-academia-comercial.ts

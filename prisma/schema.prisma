@@ -5135,19 +5135,20 @@ model SiteLead {
   /// que paga a próxima decisão de produto.
   motivoPerdaId String?
 
-  interactions          SiteLeadInteraction[]
-  mensagens             LeadMensagem[]
-  tarefas               LeadTarefa[]
-  compromissos          LeadCompromisso[]
-  propostas             LeadProposta[]
-  handoffs              LeadHandoff[]
-  fatoresDoScore        LeadScoreFator[]
-  avaliacoes            LeadAvaliacaoQA[]
-  avaliacoesSupervisora SupervisoraAvaliacao[]
-  cadencias             LeadCadencia[]
-  qualificacao          LeadQualificacao?
-  motivoPerda           MotivoDePerda?         @relation(fields: [motivoPerdaId], references: [id])
-  atendente             InternalUser?          @relation("LeadAtendente", fields: [atendenteUserId], references: [id])
+  interactions           SiteLeadInteraction[]
+  mensagens              LeadMensagem[]
+  tarefas                LeadTarefa[]
+  compromissos           LeadCompromisso[]
+  propostas              LeadProposta[]
+  handoffs               LeadHandoff[]
+  fatoresDoScore         LeadScoreFator[]
+  avaliacoes             LeadAvaliacaoQA[]
+  avaliacoesSupervisora  SupervisoraAvaliacao[]
+  revisoesRetrospectivas AcademiaRevisaoRetrospectiva[]
+  cadencias              LeadCadencia[]
+  qualificacao           LeadQualificacao?
+  motivoPerda            MotivoDePerda?                 @relation(fields: [motivoPerdaId], references: [id])
+  atendente              InternalUser?                  @relation("LeadAtendente", fields: [atendenteUserId], references: [id])
 
   @@index([createdAt])
   @@index([atendidoPor, stage])
@@ -6487,6 +6488,11 @@ model LeadMensagem {
   /// camada, documentado em `supervisora/README` do serviço).
   avaliacaoSupervisora SupervisoraAvaliacao?
 
+  /// ⭐ Preenchida só quando `scripts/shadow-retrospectivo.ts` reavaliou esta
+  /// mensagem depois do fato, para calibração — nunca afeta a entrega, que já
+  /// aconteceu. Ver `AcademiaRevisaoRetrospectiva`.
+  revisaoRetrospectiva AcademiaRevisaoRetrospectiva?
+
   @@index([leadId, ocorreuEm])
   @@index([leadId, direcao, ocorreuEm])
   @@index([status])
@@ -7274,6 +7280,57 @@ model SupervisoraAvaliacao {
   @@index([veredito, criadaEm])
   @@index([bloqueada])
   @@map("supervisora_avaliacoes")
+}
+
+/// ⭐ SHADOW RETROSPECTIVO — a calibração que roda contra atendimento QUE JÁ
+/// ACONTECEU, não contra cliente novo esperando. Uma linha aqui é o resultado
+/// de `scripts/shadow-retrospectivo.ts` reavaliando uma `LeadMensagem` de
+/// SAÍDA já enviada há muito tempo, só para aprender — nunca para agir.
+///
+/// ── POR QUE NÃO É `SupervisoraAvaliacao` ────────────────────────────────────
+///
+/// `SupervisoraAvaliacao` é o veredito que valeu NO MOMENTO do envio (ou que
+/// teria valido, em SHADOW síncrono) — `modoNaEpoca`, `acaoTomada` e
+/// `handoffDisparado` só fazem sentido para uma avaliação que aconteceu ANTES
+/// ou DURANTE a entrega. Uma revisão retrospectiva acontece dias/semanas
+/// DEPOIS, sobre uma mensagem que já saiu, sem `acaoTomada` nenhuma possível
+/// (a mensagem já foi entregue) — misturar as duas confundiria auditoria "o
+/// que a Supervisora decidiu na hora" com "o que ela pensaria hoje, olhando
+/// pra trás". Tabela própria, pequena, só de leitura para consulta.
+model AcademiaRevisaoRetrospectiva {
+  id         String       @id @default(cuid())
+  /// Uma revisão retrospectiva por mensagem — rodar o script de novo sobre o
+  /// mesmo lote não duplica linha, ver `scripts/shadow-retrospectivo.ts`.
+  mensagemId String       @unique
+  mensagem   LeadMensagem @relation(fields: [mensagemId], references: [id], onDelete: Cascade)
+  leadId     String
+  lead       SiteLead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  /// Quando a mensagem ORIGINAL ocorreu — não quando esta revisão rodou. É por
+  /// este campo que um recorte de tempo pede "revise as mensagens de tal
+  /// período", não pela data em que o script foi rodado.
+  ocorreuEmOriginal DateTime
+
+  camada        CamadaDaSupervisora
+  veredito      VeredictoDaSupervisora
+  motivos       MotivoDaSupervisora[]  @default([])
+  motivoDetalhe String?                @db.Text
+
+  falhaTecnica   Boolean @default(false)
+  engineProvider String?
+  engineModel    String?
+
+  /// Identifica qual execução do script gravou esta linha — útil pra saber
+  /// "isto veio da rodada de auditoria de tal dia", sem precisar de uma
+  /// tabela de lotes à parte.
+  loteId String?
+
+  revisadaEm DateTime @default(now())
+
+  @@index([leadId, ocorreuEmOriginal])
+  @@index([veredito, revisadaEm])
+  @@index([loteId])
+  @@map("academia_revisoes_retrospectivas")
 }
 
 enum AutorDaSugestaoDePrompt {
