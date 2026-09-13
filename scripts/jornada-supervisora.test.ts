@@ -190,6 +190,12 @@ describe("Jornada — modo OFF (comportamento de hoje, sem custo)", () => {
 
 describe("Jornada — modo GUARD", () => {
   beforeEach(async () => {
+    // ⛔ 13/09/2026 — `alterarModo` agora exige a escada (OFF→SHADOW→GUARD→
+    // INTERVENTION, um degrau de cada vez; ver config.ts). Vindo de OFF (o
+    // describe anterior termina lá), pedir GUARD direto seria um salto de 2 e
+    // seria recusado. Passa por SHADOW primeiro; repetir o mesmo modo é
+    // regressão/no-op e sempre aceito, então isto é seguro em toda rodada.
+    await alterarModo(prisma, { novoModo: "SHADOW", novaLigada: true, alteradoPor: "teste" });
     await alterarModo(prisma, { novoModo: "GUARD", novaLigada: true, alteradoPor: "teste" });
   });
 
@@ -617,6 +623,10 @@ describe("Jornada — ativar a Supervisora pela rota é ato explícito e registr
 
 describe("Jornada — modo INTERVENTION", () => {
   beforeEach(async () => {
+    // Mesma régua: sobe um degrau de cada vez (o teste 18, logo acima, deixa
+    // o estado em SHADOW) — SHADOW→INTERVENTION direto seria um salto de 2.
+    await alterarModo(prisma, { novoModo: "SHADOW", novaLigada: true, alteradoPor: "teste" });
+    await alterarModo(prisma, { novoModo: "GUARD", novaLigada: true, alteradoPor: "teste" });
     await alterarModo(prisma, { novoModo: "INTERVENTION", novaLigada: true, alteradoPor: "teste" });
   });
 

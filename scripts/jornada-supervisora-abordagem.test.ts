@@ -162,6 +162,14 @@ afterEach(() => {
 
 describe("Jornada — Supervisora sobre abordar.ts, modo GUARD", () => {
   beforeEach(async () => {
+    // ⛔ 13/09/2026 — `alterarModo` agora exige a escada (OFF→SHADOW→GUARD→
+    // INTERVENTION, um degrau de cada vez; ver config.ts). Se esta é a
+    // primeira chamada da suíte (linha singleton ainda não existe), o efetivo
+    // de origem é OFF — pedir GUARD direto seria um salto de 2 e seria
+    // recusado. Passa por SHADOW primeiro; uma chamada repetida no mesmo modo
+    // é regressão/no-op e sempre aceita, então isto é seguro em toda rodada
+    // deste `beforeEach`, não só na primeira.
+    await alterarModo(prisma, { novoModo: "SHADOW", novaLigada: true, alteradoPor: "jornada-ci" });
     await alterarModo(prisma, { novoModo: "GUARD", novaLigada: true, alteradoPor: "jornada-ci" });
   });
 
