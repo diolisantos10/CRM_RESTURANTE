@@ -5135,18 +5135,19 @@ model SiteLead {
   /// que paga a próxima decisão de produto.
   motivoPerdaId String?
 
-  interactions   SiteLeadInteraction[]
-  mensagens      LeadMensagem[]
-  tarefas        LeadTarefa[]
-  compromissos   LeadCompromisso[]
-  propostas      LeadProposta[]
-  handoffs       LeadHandoff[]
-  fatoresDoScore LeadScoreFator[]
-  avaliacoes     LeadAvaliacaoQA[]
-  cadencias      LeadCadencia[]
-  qualificacao   LeadQualificacao?
-  motivoPerda    MotivoDePerda?        @relation(fields: [motivoPerdaId], references: [id])
-  atendente      InternalUser?         @relation("LeadAtendente", fields: [atendenteUserId], references: [id])
+  interactions          SiteLeadInteraction[]
+  mensagens             LeadMensagem[]
+  tarefas               LeadTarefa[]
+  compromissos          LeadCompromisso[]
+  propostas             LeadProposta[]
+  handoffs              LeadHandoff[]
+  fatoresDoScore        LeadScoreFator[]
+  avaliacoes            LeadAvaliacaoQA[]
+  avaliacoesSupervisora SupervisoraAvaliacao[]
+  cadencias             LeadCadencia[]
+  qualificacao          LeadQualificacao?
+  motivoPerda           MotivoDePerda?         @relation(fields: [motivoPerdaId], references: [id])
+  atendente             InternalUser?          @relation("LeadAtendente", fields: [atendenteUserId], references: [id])
 
   @@index([createdAt])
   @@index([atendidoPor, stage])
@@ -6478,6 +6479,13 @@ model LeadMensagem {
   /// Avaliações de QA que citam esta mensagem como evidência.
   citadaEmQA LeadAvaliacaoCriterio[]
 
+  /// ⭐ O veredito da Supervisora sobre ESTA mensagem, quando ela passou pela
+  /// revisão antes de `entregarMensagem`. Nula quando a Supervisora está `OFF`
+  /// ou a mensagem nunca chegou a `entregarMensagem` (ex.: template de
+  /// prospecção, que usa `enviarModeloDeVendas` direto — fora do escopo desta
+  /// camada, documentado em `supervisora/README` do serviço).
+  avaliacaoSupervisora SupervisoraAvaliacao?
+
   @@index([leadId, ocorreuEm])
   @@index([leadId, direcao, ocorreuEm])
   @@index([status])
@@ -6573,13 +6581,13 @@ model LeadQualificacao {
   // de perguntar o que já sabe.
 
   /// De qual marketplace ele depende hoje (iFood, Rappi, 99Food).
-  marketplaceAtual String?
+  marketplaceAtual           String?
   /// O que ele disse que NÃO quer, ou por que hesita. Uma por linha.
-  objecoes String[] @default([])
+  objecoes                   String[] @default([])
   /// Recursos que ele mesmo puxou (CRM, automação, cardápio, fidelidade).
   funcionalidadesDeInteresse String[] @default([])
   /// O que ele pediu com todas as letras ("quero ver os planos", "me manda o link").
-  pedidoExplicito String? @db.Text
+  pedidoExplicito            String?  @db.Text
 
   /// ⛔ ELE PEDIU PARA PARAR DE RESPONDER PERGUNTA.
   ///
@@ -7023,6 +7031,37 @@ model SdrIaConfigVersao {
   publicadaPorId String?
   publicadaPor   InternalUser? @relation("VersaoPublicadaPor", fields: [publicadaPorId], references: [id])
 
+  // ── ⭐ METADADOS DA SUPERVISORA — nível 3 (alteração permanente) ────────────
+  //
+  // Preenchidos SÓ quando esta versão nasce de uma `SupervisoraSugestaoDePrompt`
+  // aprovada por humano (nível 2 → nível 3 do comando). Uma versão criada pela
+  // tela de sempre, sem passar pela Supervisora, deixa todos estes campos nulos
+  // — e isso é o esperado, não uma omissão: nem toda versão nova é resposta a um
+  // defeito medido em conversa.
+  //
+  // ⛔ Não substituem nada do que já existia: `situacao`, `versaoAtivaId` e o
+  // próprio `numero` continuam sendo o mecanismo de publicar e reverter. Estes
+  // campos são só o RASTRO de por que esta versão específica nasceu.
+  /// A sugestão (nível 2) que esta versão aplica, se houver.
+  origemSugestaoId         String?
+  /// Quem escreveu o texto que caiu — papel (`recepcao`, `qualificacao`,
+  /// `closer`) ou `"todos"` quando o problema não é de um agente específico.
+  agenteAfetado            String?
+  problemaObservado        String?  @db.Text
+  /// Ids de `lead_mensagens` que sustentam a mudança — nunca menos de uma, e a
+  /// validação de `nivel 3` (ver `supervisora/prompt.ts`) exige mais de uma
+  /// salvo quando `problemaObservado` marca erro grave/risco explicitamente.
+  evidencias               String[] @default([])
+  trechoAnterior           String?  @db.Text
+  trechoNovoProposto       String?  @db.Text
+  justificativaDaAlteracao String?  @db.Text
+  /// Quem criou ESTE rascunho — pode não ser quem publica depois
+  /// (`publicadaPorId`), e a diferença importa para a auditoria.
+  criadaPorId              String?
+  /// Nome do arquivo/caso de teste que prova esta mudança, para quem revisa não
+  /// precisar confiar de boca.
+  testeCorrespondente      String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -7030,7 +7069,261 @@ model SdrIaConfigVersao {
 
   @@unique([configId, numero])
   @@index([situacao])
+  @@index([origemSugestaoId])
   @@map("sdr_ia_config_versoes")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// A SUPERVISORA — a camada de revisão que acompanha TODOS os agentes
+// (humanos e IA) que falam com lead/cliente pelo WhatsApp comercial.
+//
+// ── O QUE ELA NÃO É ──────────────────────────────────────────────────────────
+//
+// Não é um segundo verificador: `ta/verificador.ts` já barra preço fora da
+// tabela, promessa de prazo, garantia de resultado, integração inventada,
+// fechamento em nome do cliente, negar ser agente, placeholder vazado, link
+// fora da lista e pedido de telefone repetido — determinístico, sem custo de
+// modelo, e roda ANTES desta camada, dentro de `falar()`/`pensar()`. A
+// Supervisora cobre o que o regex não alcança: tom, naturalidade, timing do
+// pitch, personalização, pressão comercial, interrogatório, insistência depois
+// de recusa, mensagens em sequência — o que exige entender a CONVERSA, não só a
+// frase.
+//
+// Não é um segundo handoff: quando decide escalar, aciona `handoff.ts` /
+// `responsavel.ts` — os mesmos que já existem. Não é uma segunda memória:
+// lê `ta/memoria.ts` (`blocoDeMemoria`, `lerIrritacao`, `lerPedidoDeParar`), não
+// duplica.
+//
+// ── ONDE ELA ENTRA ───────────────────────────────────────────────────────────
+//
+// UM ponto só, dentro de `entrega.ts` (`entregarMensagem`), porque é o único
+// caminho por onde passa toda fala LIVRE que a empresa manda a um lead — IA
+// (`ta/atender.ts`), humano digitando (`/api/admin/sala-de-vendas/conversa`) e
+// o conector do handoff (`connect/conector/foocci/ligacao.ts`). Isso cobre
+// "todos os agentes" com UMA implementação, sem dois caminhos de revisão que
+// podem divergir. `abordar.ts` (templates de prospecção aprovados) usa
+// `enviarModeloDeVendas`, não `entregarMensagem` — continua fora do alcance
+// DESTA função, porque não é fala composta: é template fixo, já aprovado, sem
+// tom a revisar. Desde 12/09/2026 `abordar.ts` tem o SEU PRÓPRIO ponto de
+// encaixe (`supervisora/adequacaoDoTemplate.ts`), gravando nesta MESMA tabela
+// (`SupervisoraAvaliacao`) — ele avalia SE é hora de mandar o template
+// (frequência, repetição, opt-out), nunca o conteúdo dele.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A chave mestra + o modo — separados de propósito, como `SdrIaConfig.ligado`.
+///
+/// `ligada = false` é o desligamento de emergência: nenhuma chamada acontece,
+/// custo e latência zero, igual a `modo = OFF`. `modo` é o que decide o que a
+/// Supervisora FAZ enquanto está ligada.
+enum ModoDaSupervisora {
+  /// Nenhuma chamada à Supervisora. Comportamento de hoje.
+  OFF
+  /// Roda e GRAVA o veredito. A mensagem sai exatamente como sairia sem a
+  /// Supervisora — nunca reescreve, nunca bloqueia. Modo de estreia obrigatório
+  /// em produção.
+  SHADOW
+  /// VERDE libera; AMARELO reescreve antes de entregar; VERMELHO retém;
+  /// CRITICO retém E escala para gente.
+  GUARD
+  /// Tudo de GUARD, mais a capacidade de pausar/assumir uma conversa em
+  /// andamento fora do fluxo de uma mensagem específica.
+  INTERVENTION
+}
+
+enum CamadaDaSupervisora {
+  /// Modelo barato, roda em toda mensagem quando a Supervisora está ligada.
+  RAPIDA
+  /// Modelo mais capaz, só quando um gatilho concreto justifica o custo.
+  PROFUNDA
+}
+
+enum VeredictoDaSupervisora {
+  VERDE
+  /// Aprovada com correção — o texto reescrito vem junto.
+  AMARELO
+  VERMELHO
+  /// Igual a VERMELHO e, além disso, aciona escalar para gente.
+  CRITICO
+}
+
+enum AcaoDaSupervisora {
+  NENHUMA
+  REESCREVEU
+  BLOQUEOU
+  BLOQUEOU_E_ESCALOU
+}
+
+/// Categorias nomeadas de reprovação da Supervisora — a FASE 3 do pedido
+/// original do CEO, tal como descrita ao abrir esta frente: mensagem invasiva,
+/// insistência, pitch errado, robótico, promessa incorreta, tom, naturalidade,
+/// timing do pitch, personalização, pressão comercial, interrogatório,
+/// mensagens em sequência. Cada nome aqui é um desses itens — quem constrói o
+/// painel (parte 2) usa estes nomes, não inventa outros.
+enum MotivoDaSupervisora {
+  MENSAGEM_INVASIVA
+  INSISTENCIA_APOS_RECUSA
+  PITCH_ERRADO
+  TOM_ROBOTICO
+  PROMESSA_INCORRETA
+  PERSONALIZACAO_FRACA
+  PRESSAO_COMERCIAL
+  INTERROGATORIO
+  SEQUENCIA_DE_MENSAGENS
+  TIMING_RUIM
+  /// A Supervisora quebrou (modelo fora do ar, erro técnico) — nunca uma
+  /// aprovação silenciosa. Ver `supervisora/camadaRapida.ts`.
+  FALHA_TECNICA
+  OUTRO
+}
+
+/// O interruptor único da Supervisora — singleton, como `ProspeccaoConfig`.
+model SupervisoraConfig {
+  id String @id @default("singleton")
+
+  /// Chave mestra. `false` = comportamento de hoje, sem custo nem latência.
+  ligada Boolean           @default(true)
+  /// Nunca muda sozinho: só por ação explícita de gestão
+  /// (`/api/admin/sala-de-vendas/supervisora`, mesmo padrão de autorização de
+  /// `vePelaOperacaoToda`). O código nunca promove SHADOW → GUARD/INTERVENTION.
+  modo   ModoDaSupervisora @default(SHADOW)
+
+  atualizadoPor String?
+  atualizadoEm  DateTime @updatedAt
+
+  historico SupervisoraModoHistorico[]
+
+  @@map("supervisora_config")
+}
+
+/// Toda troca de modo, com quem e por quê — a auditoria que a régua exige.
+model SupervisoraModoHistorico {
+  id       String            @id @default(cuid())
+  configId String            @default("singleton")
+  config   SupervisoraConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  modoAnterior ModoDaSupervisora
+  modoNovo     ModoDaSupervisora
+  alteradoPor  String
+  motivo       String?           @db.Text
+  alteradoEm   DateTime          @default(now())
+  /// `false` = tentativa recusada pela escada de modo (salto de 2+ degraus,
+  /// ver `alterarModo` em `config.ts`) — registrada, não escondida. Migração
+  /// aditiva `20260913000000_escada_de_modo_obrigatoria`.
+  aceita       Boolean           @default(true)
+
+  @@index([configId, alteradoEm])
+  @@map("supervisora_modo_historico")
+}
+
+/// O veredito da Supervisora sobre UMA mensagem de saída.
+///
+/// ⭐ Ligada por `mensagemId`, e não por uma coluna nova em `lead_mensagens`:
+/// isolar a opinião da Supervisora da mensagem em si é o que permite a tela
+/// "isto está retido" ler sem acoplar `LeadMensagem` a um conceito que só
+/// existe quando a Supervisora está ligada.
+model SupervisoraAvaliacao {
+  id         String       @id @default(cuid())
+  mensagemId String       @unique
+  mensagem   LeadMensagem @relation(fields: [mensagemId], references: [id], onDelete: Cascade)
+  leadId     String
+  lead       SiteLead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  /// Cópia do que já está em `LeadMensagem`, de propósito: agregar "por agente"
+  /// sem join novo, e sem risco de a agregação mudar de resultado se a mensagem
+  /// for reatribuída depois.
+  autorMensagem AutorDaMensagem?
+  autorUserId   String?
+  papelDoAgente String?
+
+  camada        CamadaDaSupervisora
+  /// O modo QUE VALIA quando esta avaliação rodou. Em SHADOW o veredito é
+  /// gravado e nada muda na entrega — sem este campo, uma auditoria futura não
+  /// saberia diferenciar "aprovaria mas era SHADOW" de "aprovou porque só isso".
+  modoNaEpoca   ModoDaSupervisora
+  veredito      VeredictoDaSupervisora
+  motivos       MotivoDaSupervisora[]  @default([])
+  motivoDetalhe String?                @db.Text
+
+  /// Guardado só quando difere do que está em `LeadMensagem.texto` hoje (AMARELO
+  /// em GUARD/INTERVENTION) ou quando a mensagem foi retida (para a tela mostrar
+  /// o que teria saído).
+  textoOriginal  String? @db.Text
+  textoReescrito String? @db.Text
+
+  /// Verdade operacional para a tela "isto está retido" — não é o mesmo que
+  /// `veredito` porque em SHADOW um VERMELHO não bloqueia nada.
+  bloqueada        Boolean           @default(false)
+  acaoTomada       AcaoDaSupervisora @default(NENHUMA)
+  /// A avaliação acionou `passarParaGente`/`pedirHumano`.
+  handoffDisparado Boolean           @default(false)
+  /// Esta linha nasceu de uma FALHA da Supervisora (modelo fora do ar, erro),
+  /// não de um julgamento real. Em GUARD/INTERVENTION isso retém a mensagem;
+  /// nunca decide sozinho em SHADOW/OFF.
+  falhaTecnica     Boolean           @default(false)
+
+  /// Motor que avaliou — auditoria, nunca segredo (o roteador já garante isso).
+  engineProvider String?
+  engineModel    String?
+
+  criadaEm DateTime @default(now())
+
+  @@index([leadId, criadaEm])
+  @@index([autorUserId, criadaEm])
+  @@index([papelDoAgente, criadaEm])
+  @@index([veredito, criadaEm])
+  @@index([bloqueada])
+  @@map("supervisora_avaliacoes")
+}
+
+enum AutorDaSugestaoDePrompt {
+  SISTEMA
+  SUPERVISORA
+}
+
+enum SituacaoDaSugestaoDePrompt {
+  PENDENTE
+  APROVADA
+  REJEITADA
+  APLICADA
+}
+
+/// Nível 2 do comando: sugestão permanente, para REVISÃO humana. Nunca se
+/// aplica sozinha — virar nível 3 (`SdrIaConfigVersao` nova) é ato de gente.
+model SupervisoraSugestaoDePrompt {
+  id String @id @default(cuid())
+
+  /// Papel (`recepcao`, `qualificacao`, `closer`) ou humano nomeado, quando o
+  /// problema é de UMA pessoa e não do agente IA.
+  agenteAfetadoTipo   AutorDaMensagem?
+  agenteAfetadoUserId String?
+  papelDoAgente       String?
+
+  problemaObservado    String   @db.Text
+  /// Nunca vazio: uma sugestão sem evidência é opinião, não achado.
+  evidenciaMensagemIds String[] @default([])
+  evidenciaLeadIds     String[] @default([])
+
+  trechoAnterior     String? @db.Text
+  trechoNovoProposto String? @db.Text
+  justificativa      String  @db.Text
+
+  autor    AutorDaSugestaoDePrompt    @default(SUPERVISORA)
+  situacao SituacaoDaSugestaoDePrompt @default(PENDENTE)
+
+  revisadaPorId String?
+  revisadaEm    DateTime?
+  notaDaRevisao String?   @db.Text
+
+  /// Preenchido quando aprovada e aplicada — a `SdrIaConfigVersao` que nasceu
+  /// desta sugestão (nível 3).
+  versaoResultanteId String?
+
+  criadaEm  DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([situacao, criadaEm])
+  @@index([agenteAfetadoUserId])
+  @@map("supervisora_sugestoes_prompt")
 }
 
 /// Uma sequência de toques programada (cadência).
@@ -7355,7 +7648,7 @@ model ProspeccaoConfig {
   /// Quem disparou a última rodada automática (agendador, cron).
   ultimaRodadaAutomaticaPor String?
 
-  atualizadoEm DateTime @updatedAt
+  atualizadoEm  DateTime @updatedAt
   atualizadoPor String?
 
   @@map("prospeccao_config")
@@ -7397,9 +7690,9 @@ model LoteDeProspeccao {
   /// que teto continua valendo como registro.
   limiteDiario Int @default(20)
 
-  criadoPor   String?
-  criadoEm    DateTime  @default(now())
-  liberadoEm  DateTime?
+  criadoPor         String?
+  criadoEm          DateTime  @default(now())
+  liberadoEm        DateTime?
   /// ⚠️ RÓTULO DE TELA, no formato `Nome (userId)`. NÃO é um id.
   /// Ele é renderizado como "Liberado por …" no painel, e foi entregue por
   /// engano a `LeadMensagem.autorUserId` — que tem chave estrangeira para
@@ -7411,14 +7704,14 @@ model LoteDeProspeccao {
   /// ficou no comentário: a migração seguinte casou o id contra `users` porque
   /// foi isto que ela leu, e não casou nada. Afirmação de manual sem medição
   /// não fica parada — ela é obedecida.
-  liberadoPor String?
+  liberadoPor       String?
   /// Quem autorizou, como ID de verdade. É este que vai para `autorUserId` da
   /// mensagem — a promessa de que "toda mensagem que sai em nome da empresa tem
   /// um responsável" só se cumpre com um id que o banco reconheça.
   liberadoPorUserId String?
-  pausadoEm   DateTime?
-  pausadoPor  String?
-  encerradoEm DateTime?
+  pausadoEm         DateTime?
+  pausadoPor        String?
+  encerradoEm       DateTime?
 
   itens ItemDeProspeccao[]
 
@@ -7452,9 +7745,9 @@ model ItemDeProspeccao {
   // mudou de nome, tipo ou significado. Reaproveitam-se `nome` (responsável),
   // `empresa` (restaurante) e `tipo` (tipo de restaurante) já existentes.
   /// E-mail do contato, quando a planilha traz.
-  email String?
+  email              String?
   /// Cargo ou função de quem responde — "responsável" nem sempre é o dono.
-  cargo String?
+  cargo              String?
   /// Um segundo telefone (fixo, ou outro celular), separado do WhatsApp
   /// principal — que continua sendo `whatsapp`/`whatsappDigits`.
   telefoneSecundario String?
@@ -7524,8 +7817,8 @@ model ImportacaoDeLeads {
   id String @id @default(cuid())
 
   /// O nome do arquivo como ele estava na máquina de quem subiu.
-  arquivoNome String
-  arquivoTipo String?
+  arquivoNome  String
+  arquivoTipo  String?
   /// Impressão digital do conteúdo. É ela que reconhece a MESMA planilha subindo
   /// de novo com outro nome — o caso que mais gera contato duplicado.
   arquivoHash  String?
@@ -7544,12 +7837,12 @@ model ImportacaoDeLeads {
   motivosDeRecusa Json?
 
   /// Por que a empresa possui estes contatos. É a base legal declarada.
-  proveniencia String
+  proveniencia    String
   /// Quem ou o que obteve a lista (busca no Google, feira, indicação, parceiro).
   canalDeObtencao String?
 
   /// Rótulo de tela de quem subiu. Texto, e legado — ver o aviso do modelo.
-  criadoPor String?
+  criadoPor       String?
   /// O id de verdade. É por ele que se responsabiliza alguém.
   criadoPorUserId String?
   criadoPorNome   String?
@@ -7601,20 +7894,20 @@ model ModeloDeVendas {
   phoneNumberId String
   wabaId        String
 
-  nome    String
-  idioma  String
+  nome      String
+  idioma    String
   /// MARKETING, UTILITY, AUTHENTICATION — como a Meta classifica.
   categoria String?
   /// APPROVED, PENDING, REJECTED, DISABLED, PAUSED.
-  situacao String
+  situacao  String
 
   /// ⭐ Quantos `{{n}}` o corpo tem, contado do que a Meta devolveu.
   variaveis Int @default(0)
 
-  metaTemplateId  String?
-  motivoDaRecusa  String?
+  metaTemplateId String?
+  motivoDaRecusa String?
   /// O corpo aprovado, para a tela mostrar o que o lead vai receber.
-  corpo String?
+  corpo          String?
 
   sincronizadoEm DateTime @default(now())
 

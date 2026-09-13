@@ -12,7 +12,7 @@
  * propósito: dois caminhos para falar com estranho é como se perde a conta do
  * que a empresa disse a quem.
  *
- * ── AS QUATRO TRAVAS, NESTA ORDEM E POR ESTE MOTIVO ────────────────────────
+ * ── AS CINCO TRAVAS, NESTA ORDEM E POR ESTE MOTIVO ─────────────────────────
  *
  *   1. **O portão do lead** — fala do DESTINATÁRIO: pediu silêncio? tem
  *      telefone? o consentimento ainda vale? já tentamos demais?
@@ -21,7 +21,12 @@
  *      ser abordado esconderia o motivo verdadeiro.
  *   3. **Gravar antes de enviar** — o pior caso vira uma linha PENDENTE
  *      visível, e não um cliente que recebeu sem o sistema saber.
- *   4. **A entrega** — e o resultado dela é registrado na própria linha, com o
+ *   4. **A Supervisora** (desde 12/09/2026) — uma SEGUNDA opinião, agora com a
+ *      linha PENDENTE já existindo, sobre se ESTE É O MOMENTO de mandar o
+ *      template a ESTE lead (frequência, repetição, opt-out). Ela nunca
+ *      reescreve o template — só libera ou barra. Ver
+ *      `supervisora/adequacaoDoTemplate.ts`; em OFF/SHADOW nunca impede.
+ *   5. **A entrega** — e o resultado dela é registrado na própria linha, com o
  *      motivo por escrito quando a Meta recusa.
  *
  * ── ⚠️ O QUE ESTE ARQUIVO NÃO FAZ ──────────────────────────────────────────
@@ -52,6 +57,7 @@ import {
   enviarModeloDeVendas,
   type ModeloDeAbordagem,
 } from "@/services/foocci-sdr/FoocciSalesChannel";
+import { avaliarAdequacaoDoTemplate, type HistoricoDeAbordagens } from "./supervisora/adequacaoDoTemplate";
 
 type Cliente = PrismaClient | Prisma.TransactionClient;
 
@@ -68,7 +74,13 @@ export type ResultadoDaAbordagem =
         /** Teto de abordagens da hora ou do dia. Não é falha — é o freio. */
         | "ritmo"
         | "naoConseguiuGravar"
-        | "aMetaRecusou";
+        | "aMetaRecusou"
+        /** A Supervisora avaliou o momento/frequência desta abordagem e
+         *  impediu o envio (GUARD/INTERVENTION). Ver
+         *  `supervisora/adequacaoDoTemplate.ts` — o texto do template NUNCA é
+         *  alterado por ela; só liberado ou barrado. Em SHADOW/OFF este
+         *  motivo nunca acontece. */
+        | "supervisoraRecusou";
       detalhe: string;
     };
 
@@ -532,6 +544,14 @@ export async function abordarLead(
     return { abordou: false, motivo: "semDadoParaOModelo", detalhe: textoIntegral.falta };
   }
 
+  // ⚠️ CONTADO ANTES DE `registrarSaida`, e é essencial que seja: a linha
+  // PENDENTE desta MESMA abordagem ainda não existe neste ponto. Contar
+  // DEPOIS de gravar faria a abordagem se contar como "a última abordagem",
+  // sempre "0.0h atrás" — todo lead, mesmo o nunca abordado, seria julgado
+  // como se tivesse acabado de ser abordado. Medido no primeiro run da
+  // jornada (`jornada-supervisora-abordagem.test.ts`), não hipotético.
+  const historico = await historicoDeAbordagens(db, lead.id, lead.optOutAt);
+
   // ── Trava 3: gravar antes de enviar ────────────────────────────────────
   const gravada = await registrarSaida(db, {
     leadId: lead.id,
@@ -548,6 +568,34 @@ export async function abordarLead(
     // investiga recebe "naoGravou" — que é o nome do problema, não o problema.
     const porque = gravada.causa === "naoGravou" ? `naoGravou: ${gravada.detalhe}` : gravada.causa;
     return { abordou: false, motivo: "naoConseguiuGravar", detalhe: porque };
+  }
+
+  // ── ⭐ A SUPERVISORA — encaixe do CEO, 12/09/2026 ────────────────────────
+  //
+  // ENTRE gravar (trava 3) e enviar (trava 4): a linha PENDENTE já existe
+  // (`gravada.mensagemId`), então há a quem ligar o veredito por
+  // `SupervisoraAvaliacao.mensagemId`; e ainda não bateu na Meta, então um
+  // "impedir" aqui de fato impede — nunca reescreve o template (ver o
+  // cabeçalho de `supervisora/adequacaoDoTemplate.ts`).
+  const revisaoDoTemplate = await avaliarAdequacaoDoTemplate(db, {
+    mensagemId: gravada.mensagemId,
+    leadId: lead.id,
+    autor: params.autor,
+    autorUserId: params.autorUserId,
+    historico,
+    agora,
+  });
+
+  if (!revisaoDoTemplate.prosseguir) {
+    // ⛔ NUNCA `registrarFalhaDeEnvio` aqui, pela mesma razão que `entrega.ts`
+    // já documenta para a retenção da Supervisora: FALHOU é vocabulário da
+    // Meta/rede, não de uma decisão de qualidade. A linha fica PENDENTE,
+    // visível, e o motivo mora em `SupervisoraAvaliacao`.
+    return {
+      abordou: false,
+      motivo: "supervisoraRecusou",
+      detalhe: revisaoDoTemplate.motivoDeRetencao ?? "retido pela Supervisora",
+    };
   }
 
   // ── Trava 4: a entrega, com o resultado escrito na própria linha ───────
@@ -626,6 +674,42 @@ function camposDoModelo(lead: LeadParaOsParametros): Array<{ rotulo: string; val
     { rotulo: "nome do restaurante", valor: (lead.restaurante ?? "").trim() || null },
     { rotulo: "procedência da lista", valor: (lead.proveniencia ?? "").trim() || null },
   ];
+}
+
+/**
+ * O que a Supervisora (`supervisora/adequacaoDoTemplate.ts`) precisa saber
+ * sobre as abordagens ANTERIORES a este lead — contado aqui, de propósito,
+ * para a avaliação em si continuar pura e testável sem banco embutido (o
+ * mesmo padrão de `camadaProfunda.ts` recebendo `reprovacoesRecentesDoAgente`
+ * já contado).
+ *
+ * ⚠️ Conta só `tipo: "TEMPLATE"` — mensagem livre (se algum dia este lead
+ * também conversar por outro caminho) não é uma "abordagem fria" e não deveria
+ * contar para o teto de insistência da prospecção.
+ */
+async function historicoDeAbordagens(
+  db: Cliente,
+  leadId: string,
+  optOutAt: Date | null,
+): Promise<HistoricoDeAbordagens> {
+  // ⚠️ `optOutAt` vem do MESMO `lead` que `abordarLead` já carregou (trava 1)
+  // — não é lido de novo aqui. Duas leituras do mesmo campo, uma linha de
+  // código depois da outra, é exatamente a segunda cópia que este arquivo
+  // evita em outros lugares (ver `SELECT_LEAD_PARA_ABORDAR`).
+  const [tentativasAnteriores, ultima] = await Promise.all([
+    db.leadMensagem.count({ where: { leadId, direcao: "SAIDA", tipo: "TEMPLATE" } }),
+    db.leadMensagem.findFirst({
+      where: { leadId, direcao: "SAIDA", tipo: "TEMPLATE" },
+      orderBy: { ocorreuEm: "desc" },
+      select: { ocorreuEm: true },
+    }),
+  ]);
+
+  return {
+    tentativasAnteriores,
+    ultimaAbordagemEm: ultima?.ocorreuEm ?? null,
+    optOutAt,
+  };
 }
 
 /** A procedência pertence ao lote que autorizou a abordagem, não ao lead. */

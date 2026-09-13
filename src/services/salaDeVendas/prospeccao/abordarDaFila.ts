@@ -163,6 +163,11 @@ export function reagirA(motivo: MotivoDaFila): Reacao {
     // Parar aqui deixaria uma planilha com um nome em branco no topo travando
     // os outros 249 — exatamente o que o Diretor Geral mandou evitar.
     case "semDadoParaOModelo":
+    // A Supervisora (12/09/2026, `supervisora/adequacaoDoTemplate.ts`) barrou
+    // ESTE lead por causa DELE (opt-out, insistência, cadência) — o mesmo
+    // formato de `portaoRecusou`: fala do destinatário, não do canal. Um lead
+    // insistido demais não diz nada sobre o próximo da lista.
+    case "supervisoraRecusou":
       return "pula";
 
     // O freio do dia/hora. Não é defeito, e não adianta tentar o próximo: ele

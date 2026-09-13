@@ -45,6 +45,9 @@ function banco(over: {
   lead?: (Partial<typeof LEAD> & { fonte?: string | null; restaurante?: string | null; cidade?: string | null }) | null;
   tentativas?: number;
   jaSairam?: number;
+  /** `historicoDeAbordagens`: quando foi a última abordagem por TEMPLATE a
+   *  este lead. `undefined` (padrão) = nenhuma ainda. */
+  ultimaAbordagemEm?: Date;
   /** O item de prospecção do lead. `null` = não existe nenhum. */
   item?: { lote: { situacao: string; proveniencia: string | null } } | null;
   config?: {
@@ -104,7 +107,16 @@ function banco(over: {
         count: async (args: { where: { tipo?: string } }) =>
           // A ponte conta duas coisas diferentes com o mesmo `count`: as
           // tentativas anteriores (sem `tipo`) e o ritmo (com `tipo: TEMPLATE`).
+          // ⚠️ Desde 12/09/2026, `historicoDeAbordagens` (a Supervisora sobre
+          // `abordar.ts`) TAMBÉM conta com `tipo: TEMPLATE`, mas nos três
+          // testes que usam `jaSairam` o freio já barra antes de a Supervisora
+          // rodar — nunca chegam aqui com `jaSairam` alto.
           args.where.tipo === "TEMPLATE" ? (over.jaSairam ?? 0) : (over.tentativas ?? 0),
+        /** `historicoDeAbordagens` — a última abordagem por TEMPLATE a este
+         *  lead. `null` por padrão: nenhum teste deste arquivo testa a
+         *  Supervisora de adequação diretamente (ela tem arquivo próprio,
+         *  `adequacaoDoTemplate.test.ts`); aqui só precisa não quebrar. */
+        findFirst: async () => (over.ultimaAbordagemEm === undefined ? null : { ocorreuEm: over.ultimaAbordagemEm }),
         create: async (args: { data: Record<string, unknown> }) => {
           gravadas.push(args.data);
           return { id: "m1" };
