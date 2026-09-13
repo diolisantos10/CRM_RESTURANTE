@@ -89,7 +89,10 @@ export async function POST(req: NextRequest) {
   });
 
   if (!r.ok) {
-    return NextResponse.json({ ok: false, error: r.causa }, { status: 400 });
+    // `saltoPerigoso` já vem com a frase pronta para o usuário; as outras
+    // causas continuam devolvendo o próprio nome da causa, como sempre.
+    const mensagem = r.causa === "saltoPerigoso" ? r.detalhe : r.causa;
+    return NextResponse.json({ ok: false, error: mensagem }, { status: 400 });
   }
 
   return NextResponse.json({ ok: true, data: r });

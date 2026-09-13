@@ -37,8 +37,8 @@ const ROTA_SUGESTOES = `${ROTA_MODO}/sugestoes`;
 const ROTA_VERSOES = `${ROTA_MODO}/versoes`;
 const ROTA_RESPONSAVEL = "/api/admin/sala-de-vendas/responsavel";
 
-type Modo = "OFF" | "SHADOW" | "GUARD" | "INTERVENTION";
-type Veredito = "VERDE" | "AMARELO" | "VERMELHO" | "CRITICO";
+export type Modo = "OFF" | "SHADOW" | "GUARD" | "INTERVENTION";
+export type Veredito = "VERDE" | "AMARELO" | "VERMELHO" | "CRITICO";
 
 const ROTULO_DO_MODO: Record<Modo, string> = {
   OFF: "Desligada",
@@ -64,7 +64,7 @@ interface EstadoDoModo {
   historico: Array<{ modoAnterior: Modo; modoNovo: Modo; alteradoPor: string; motivo: string | null; alteradoEm: string }>;
 }
 
-interface VisaoGeral {
+export interface VisaoGeral {
   periodo: { de: string; ate: string };
   conversasAcompanhadas: number;
   mensagensAvaliadas: number;
@@ -77,7 +77,7 @@ interface VisaoGeral {
   principaisRiscos: Array<{ motivo: string; rotulo: string; total: number }>;
 }
 
-interface ConversaEmRisco {
+export interface ConversaEmRisco {
   avaliacaoId: string;
   leadId: string;
   leadNome: string;
@@ -96,12 +96,12 @@ interface ConversaEmRisco {
   atendenteAtualUserId: string | null;
 }
 
-interface Criterio {
+export interface Criterio {
   motivo: string;
   rotulo: string;
 }
 
-interface DesempenhoDoAgente {
+export interface DesempenhoDoAgente {
   autorUserId: string | null;
   papelDoAgente: string | null;
   nome: string;
@@ -112,7 +112,7 @@ interface DesempenhoDoAgente {
   handoffsDisparados: number;
 }
 
-interface Sugestao {
+export interface Sugestao {
   id: string;
   agenteAfetadoTipo: string | null;
   agenteAfetadoUserId: string | null;
@@ -129,7 +129,7 @@ interface Sugestao {
   notaDaRevisao: string | null;
 }
 
-interface VersaoDoTA {
+export interface VersaoDoTA {
   id: string;
   numero: number;
   situacao: "RASCUNHO" | "EM_TESTE" | "PUBLICADA" | "APOSENTADA";
@@ -151,6 +151,68 @@ interface VersaoDoTA {
 
 function fmtData(iso: string): string {
   return new Date(iso).toLocaleString("pt-BR");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// O ESTADO DE CADA SEÇÃO — carregando | vazio | sucesso | erro
+//
+// ⛔ ACHADO DA RODADA ANTERIOR: quando `!res.ok`, o código só dava `return` —
+// a seção ficava presa em "Carregando…" para sempre, sem forma de saber que
+// algo deu errado nem de tentar de novo. As quatro seções (Visão Geral,
+// Conversas em Risco, Desempenho, Prompts e Aprendizado) agora têm um estado
+// explícito, e o erro de UMA nunca esconde nem trava as outras três — cada
+// retry refaz só a chamada daquela seção.
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type EstadoSecao<T> =
+  | { fase: "carregando" }
+  | { fase: "vazio" }
+  | { fase: "sucesso"; dados: T }
+  | { fase: "erro"; detalhe: string };
+
+/** Busca uma seção e resolve seu estado — usada tanto na carga inicial quanto no "Tentar de novo". */
+async function carregarSecao<T>(
+  rota: string,
+  setEstado: (e: EstadoSecao<T>) => void,
+  ehVazio: (dados: T) => boolean,
+) {
+  setEstado({ fase: "carregando" });
+  try {
+    const res = await fetch(rota, { cache: "no-store" });
+    if (!res.ok) {
+      setEstado({ fase: "erro", detalhe: `${rota} respondeu ${res.status}` });
+      return;
+    }
+    const corpo = (await res.json().catch(() => null)) as { data?: T } | null;
+    if (!corpo || corpo.data === undefined) {
+      setEstado({ fase: "erro", detalhe: "resposta em formato inesperado" });
+      return;
+    }
+    setEstado(ehVazio(corpo.data) ? { fase: "vazio" } : { fase: "sucesso", dados: corpo.data });
+  } catch (e) {
+    setEstado({ fase: "erro", detalhe: e instanceof Error ? e.message : "Falha de rede." });
+  }
+}
+
+function ErroDaSecao({
+  detalhe,
+  onRetry,
+}: {
+  detalhe: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-line px-3 py-2">
+      <p className="text-[12.5px] text-ink">Não foi possível carregar esta seção.</p>
+      <p className="mt-0.5 text-[12px] text-muted">{detalhe}</p>
+      <button
+        onClick={onRetry}
+        className="mt-2 rounded-lg border border-line px-3 py-1.5 text-[12.5px] font-semibold text-ink transition-colors hover:bg-canvas"
+      >
+        Tentar de novo
+      </button>
+    </div>
+  );
 }
 
 /** Cartão numérico simples — repetido seis vezes na Visão Geral. */
@@ -272,65 +334,75 @@ function ControleDeModo({
 // 1. VISÃO GERAL
 // ═══════════════════════════════════════════════════════════════════════════
 
-function SecaoVisaoGeral({ dados }: { dados: VisaoGeral | null }) {
+function VisaoGeralConteudo({ dados }: { dados: VisaoGeral }) {
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
+        <Cartao rotulo="Conversas acompanhadas" valor={dados.conversasAcompanhadas} />
+        <Cartao rotulo="Mensagens avaliadas" valor={dados.mensagensAvaliadas} />
+        <Cartao rotulo="Mensagens corrigidas" valor={dados.mensagensCorrigidas} nota="reescritas antes de sair" />
+        <Cartao rotulo="Mensagens bloqueadas" valor={dados.mensagensBloqueadas} nota="retidas, não saíram" />
+        <Cartao rotulo="Escaladas para gente" valor={dados.escaladasParaGente} nota="handoff disparado" />
+        <Cartao
+          rotulo="Opt-outs"
+          valor={dados.optOuts}
+          nota="entre os leads acompanhados"
+        />
+      </div>
+
+      {dados.falhasTecnicas > 0 && (
+        <p className="mt-3 rounded-lg border border-line px-3 py-2 text-[12px] text-muted">
+          {dados.falhasTecnicas} avaliação(ões) tiveram falha técnica da própria Supervisora nesta janela.
+        </p>
+      )}
+
+      <div className="mt-4 border-t border-line pt-3">
+        <p className="text-[12px] font-semibold text-ink">Por veredito</p>
+        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[12.5px] text-ink2">
+          <span>VERDE: <strong className="text-ink">{dados.porVeredito.VERDE}</strong></span>
+          <span>AMARELO: <strong className="text-ink">{dados.porVeredito.AMARELO}</strong></span>
+          <span>VERMELHO: <strong className="text-ink">{dados.porVeredito.VERMELHO}</strong></span>
+          <span>CRÍTICO: <strong className="text-ink">{dados.porVeredito.CRITICO}</strong></span>
+        </div>
+      </div>
+
+      <div className="mt-4 border-t border-line pt-3">
+        <p className="text-[12px] font-semibold text-ink">Principais riscos</p>
+        {dados.principaisRiscos.length === 0 ? (
+          <p className="mt-1 text-[12.5px] text-muted">Nenhum risco registrado nesta janela.</p>
+        ) : (
+          <ul className="mt-1 space-y-0.5">
+            {dados.principaisRiscos.map((r) => (
+              <li key={r.motivo} className="flex justify-between text-[12.5px] text-ink2">
+                <span>{r.rotulo}</span>
+                <span className="font-semibold text-ink tabular-nums">{r.total}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </>
+  );
+}
+
+export function SecaoVisaoGeral({ estado, onRetry }: { estado: EstadoSecao<VisaoGeral>; onRetry: () => void }) {
   return (
     <Secao
       titulo="Visão Geral"
       subtitulo={
-        dados
-          ? `${fmtData(dados.periodo.de)} até ${fmtData(dados.periodo.ate)} — direto de SupervisoraAvaliacao`
+        estado.fase === "sucesso"
+          ? `${fmtData(estado.dados.periodo.de)} até ${fmtData(estado.dados.periodo.ate)} — direto de SupervisoraAvaliacao`
           : undefined
       }
     >
-      {!dados ? (
+      {estado.fase === "carregando" ? (
         <p className="text-[12.5px] text-muted">Carregando…</p>
+      ) : estado.fase === "erro" ? (
+        <ErroDaSecao detalhe={estado.detalhe} onRetry={onRetry} />
+      ) : estado.fase === "vazio" ? (
+        <p className="text-[12.5px] text-muted">Nenhuma avaliação registrada nesta janela ainda.</p>
       ) : (
-        <>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
-            <Cartao rotulo="Conversas acompanhadas" valor={dados.conversasAcompanhadas} />
-            <Cartao rotulo="Mensagens avaliadas" valor={dados.mensagensAvaliadas} />
-            <Cartao rotulo="Mensagens corrigidas" valor={dados.mensagensCorrigidas} nota="reescritas antes de sair" />
-            <Cartao rotulo="Mensagens bloqueadas" valor={dados.mensagensBloqueadas} nota="retidas, não saíram" />
-            <Cartao rotulo="Escaladas para gente" valor={dados.escaladasParaGente} nota="handoff disparado" />
-            <Cartao
-              rotulo="Opt-outs"
-              valor={dados.optOuts}
-              nota="entre os leads acompanhados"
-            />
-          </div>
-
-          {dados.falhasTecnicas > 0 && (
-            <p className="mt-3 rounded-lg border border-line px-3 py-2 text-[12px] text-muted">
-              {dados.falhasTecnicas} avaliação(ões) tiveram falha técnica da própria Supervisora nesta janela.
-            </p>
-          )}
-
-          <div className="mt-4 border-t border-line pt-3">
-            <p className="text-[12px] font-semibold text-ink">Por veredito</p>
-            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[12.5px] text-ink2">
-              <span>VERDE: <strong className="text-ink">{dados.porVeredito.VERDE}</strong></span>
-              <span>AMARELO: <strong className="text-ink">{dados.porVeredito.AMARELO}</strong></span>
-              <span>VERMELHO: <strong className="text-ink">{dados.porVeredito.VERMELHO}</strong></span>
-              <span>CRÍTICO: <strong className="text-ink">{dados.porVeredito.CRITICO}</strong></span>
-            </div>
-          </div>
-
-          <div className="mt-4 border-t border-line pt-3">
-            <p className="text-[12px] font-semibold text-ink">Principais riscos</p>
-            {dados.principaisRiscos.length === 0 ? (
-              <p className="mt-1 text-[12.5px] text-muted">Nenhum risco registrado nesta janela.</p>
-            ) : (
-              <ul className="mt-1 space-y-0.5">
-                {dados.principaisRiscos.map((r) => (
-                  <li key={r.motivo} className="flex justify-between text-[12.5px] text-ink2">
-                    <span>{r.rotulo}</span>
-                    <span className="font-semibold text-ink tabular-nums">{r.total}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </>
+        <VisaoGeralConteudo dados={estado.dados} />
       )}
     </Secao>
   );
@@ -350,27 +422,31 @@ function acoesDisponiveis(c: ConversaEmRisco): Array<{ chave: "assumir" | "pedir
   return acoes;
 }
 
-function SecaoConversasEmRisco({
-  linhas,
+export function SecaoConversasEmRisco({
+  estado,
   ocupado,
   onAgir,
+  onRetry,
 }: {
-  linhas: ConversaEmRisco[] | null;
+  estado: EstadoSecao<ConversaEmRisco[]>;
   ocupado: boolean;
   onAgir: (c: ConversaEmRisco, chave: "assumir" | "pedirHumano" | "devolver") => void;
+  onRetry: () => void;
 }) {
   return (
     <Secao
       titulo="Conversas em Risco"
       subtitulo="Mensagens retidas ou reprovadas (VERMELHO/CRÍTICO), mais recentes primeiro."
     >
-      {!linhas ? (
+      {estado.fase === "carregando" ? (
         <p className="text-[12.5px] text-muted">Carregando…</p>
-      ) : linhas.length === 0 ? (
+      ) : estado.fase === "erro" ? (
+        <ErroDaSecao detalhe={estado.detalhe} onRetry={onRetry} />
+      ) : estado.fase === "vazio" ? (
         <p className="text-[12.5px] text-muted">Nenhuma conversa em risco agora.</p>
       ) : (
         <ul className="space-y-2">
-          {linhas.map((c) => (
+          {estado.dados.map((c) => (
             <li key={c.avaliacaoId} className="rounded-lg border border-line p-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -414,22 +490,16 @@ function SecaoConversasEmRisco({
 // 3. DESEMPENHO DOS AGENTES
 // ═══════════════════════════════════════════════════════════════════════════
 
-function SecaoDesempenho({
-  dados,
-}: {
-  dados: { criterios: Criterio[]; criteriosNaoMedidos: string[]; agentes: DesempenhoDoAgente[] } | null;
-}) {
+export interface Desempenho {
+  criterios: Criterio[];
+  criteriosNaoMedidos: string[];
+  agentes: DesempenhoDoAgente[];
+}
+
+function DesempenhoConteudo({ dados }: { dados: Desempenho }) {
   return (
-    <Secao
-      titulo="Desempenho dos Agentes"
-      subtitulo="Por agente (IA ou humano) que a Supervisora avaliou na janela."
-    >
-      {!dados ? (
-        <p className="text-[12.5px] text-muted">Carregando…</p>
-      ) : dados.agentes.length === 0 ? (
-        <p className="text-[12.5px] text-muted">Nenhuma avaliação nesta janela ainda.</p>
-      ) : (
-        <div className="overflow-x-auto">
+    <>
+      <div className="overflow-x-auto">
           <table className="w-full min-w-[560px] text-[12.5px]">
             <thead>
               <tr className="border-b border-line text-left text-[11px] uppercase text-muted">
@@ -468,10 +538,9 @@ function SecaoDesempenho({
               })}
             </tbody>
           </table>
-        </div>
-      )}
+      </div>
 
-      {dados && dados.criteriosNaoMedidos.length > 0 && (
+      {dados.criteriosNaoMedidos.length > 0 && (
         <div className="mt-4 border-t border-line pt-3">
           <p className="text-[12px] font-semibold text-ink">Critérios que a casa NÃO mede automaticamente</p>
           <ul className="mt-1 space-y-0.5">
@@ -482,6 +551,31 @@ function SecaoDesempenho({
             ))}
           </ul>
         </div>
+      )}
+    </>
+  );
+}
+
+export function SecaoDesempenho({
+  estado,
+  onRetry,
+}: {
+  estado: EstadoSecao<Desempenho>;
+  onRetry: () => void;
+}) {
+  return (
+    <Secao
+      titulo="Desempenho dos Agentes"
+      subtitulo="Por agente (IA ou humano) que a Supervisora avaliou na janela."
+    >
+      {estado.fase === "carregando" ? (
+        <p className="text-[12.5px] text-muted">Carregando…</p>
+      ) : estado.fase === "erro" ? (
+        <ErroDaSecao detalhe={estado.detalhe} onRetry={onRetry} />
+      ) : estado.fase === "vazio" ? (
+        <p className="text-[12.5px] text-muted">Nenhuma avaliação nesta janela ainda.</p>
+      ) : (
+        <DesempenhoConteudo dados={estado.dados} />
       )}
     </Secao>
   );
@@ -682,36 +776,61 @@ function LinhaDaVersao({
   );
 }
 
-function SecaoPromptsEAprendizado({
-  sugestoes,
-  versoes,
-  versaoAtivaId,
+export interface Sugestoes {
+  pendentes: Sugestao[];
+  historico: Sugestao[];
+}
+
+export interface Versoes {
+  versaoAtivaId: string | null;
+  versoes: VersaoDoTA[];
+}
+
+/**
+ * ⭐ Esta seção soma DUAS chamadas independentes (sugestões e versões) — cada
+ * uma com seu próprio carregando/vazio/erro/sucesso, e cada retry refaz só a
+ * chamada que falhou, nunca as duas.
+ */
+export function SecaoPromptsEAprendizado({
+  estadoSugestoes,
+  estadoVersoes,
   ocupado,
   onDecidirSugestao,
   onPublicarVersao,
+  onRetrySugestoes,
+  onRetryVersoes,
 }: {
-  sugestoes: { pendentes: Sugestao[]; historico: Sugestao[] } | null;
-  versoes: VersaoDoTA[] | null;
-  versaoAtivaId: string | null;
+  estadoSugestoes: EstadoSecao<Sugestoes>;
+  estadoVersoes: EstadoSecao<Versoes>;
   ocupado: boolean;
   onDecidirSugestao: (id: string, acao: "aprovar" | "rejeitar", extra: Record<string, unknown>) => void;
   onPublicarVersao: (versaoId: string) => void;
+  onRetrySugestoes: () => void;
+  onRetryVersoes: () => void;
 }) {
-  const ativa = versoes?.find((v) => v.id === versaoAtivaId) ?? null;
+  const ativa =
+    estadoVersoes.fase === "sucesso"
+      ? estadoVersoes.dados.versoes.find((v) => v.id === estadoVersoes.dados.versaoAtivaId) ?? null
+      : null;
 
   return (
     <Secao titulo="Prompts e Aprendizado" subtitulo="Sugestões pendentes de revisão, e as versões do TA.">
       <div>
         <p className="text-[12px] font-semibold text-ink">
-          Sugestões pendentes {sugestoes ? `(${sugestoes.pendentes.length})` : ""}
+          Sugestões pendentes{" "}
+          {estadoSugestoes.fase === "sucesso" ? `(${estadoSugestoes.dados.pendentes.length})` : ""}
         </p>
-        {!sugestoes ? (
+        {estadoSugestoes.fase === "carregando" ? (
           <p className="mt-1 text-[12.5px] text-muted">Carregando…</p>
-        ) : sugestoes.pendentes.length === 0 ? (
+        ) : estadoSugestoes.fase === "erro" ? (
+          <div className="mt-1">
+            <ErroDaSecao detalhe={estadoSugestoes.detalhe} onRetry={onRetrySugestoes} />
+          </div>
+        ) : estadoSugestoes.fase === "vazio" ? (
           <p className="mt-1 text-[12.5px] text-muted">Nenhuma sugestão pendente.</p>
         ) : (
           <ul className="mt-2 space-y-2">
-            {sugestoes.pendentes.map((s) => (
+            {estadoSugestoes.dados.pendentes.map((s) => (
               <LinhaDaSugestao key={s.id} s={s} ocupado={ocupado} onDecidir={onDecidirSugestao} />
             ))}
           </ul>
@@ -720,18 +839,22 @@ function SecaoPromptsEAprendizado({
 
       <div className="mt-5 border-t border-line pt-3">
         <p className="text-[12px] font-semibold text-ink">Versões do TA</p>
-        {!versoes ? (
+        {estadoVersoes.fase === "carregando" ? (
           <p className="mt-1 text-[12.5px] text-muted">Carregando…</p>
-        ) : versoes.length === 0 ? (
+        ) : estadoVersoes.fase === "erro" ? (
+          <div className="mt-1">
+            <ErroDaSecao detalhe={estadoVersoes.detalhe} onRetry={onRetryVersoes} />
+          </div>
+        ) : estadoVersoes.fase === "vazio" ? (
           <p className="mt-1 text-[12.5px] text-muted">Nenhuma versão ainda.</p>
         ) : (
           <ul className="mt-2 space-y-2">
-            {versoes.map((v) => (
+            {estadoVersoes.dados.versoes.map((v) => (
               <LinhaDaVersao
                 key={v.id}
                 versao={v}
                 ativa={ativa}
-                ehAtiva={v.id === versaoAtivaId}
+                ehAtiva={v.id === estadoVersoes.dados.versaoAtivaId}
                 ocupado={ocupado}
                 onPublicar={onPublicarVersao}
               />
@@ -759,17 +882,40 @@ export function SupervisoraClient() {
   const [tentativa, setTentativa] = useState(0);
 
   const [modo, setModo] = useState<EstadoDoModo | null>(null);
-  const [visaoGeral, setVisaoGeral] = useState<VisaoGeral | null>(null);
-  const [risco, setRisco] = useState<ConversaEmRisco[] | null>(null);
-  const [desempenho, setDesempenho] = useState<{
-    criterios: Criterio[];
-    criteriosNaoMedidos: string[];
-    agentes: DesempenhoDoAgente[];
-  } | null>(null);
-  const [sugestoes, setSugestoes] = useState<{ pendentes: Sugestao[]; historico: Sugestao[] } | null>(null);
-  const [versoes, setVersoes] = useState<{ versaoAtivaId: string | null; versoes: VersaoDoTA[] } | null>(null);
+  const [estadoVisaoGeral, setEstadoVisaoGeral] = useState<EstadoSecao<VisaoGeral>>({ fase: "carregando" });
+  const [estadoRisco, setEstadoRisco] = useState<EstadoSecao<ConversaEmRisco[]>>({ fase: "carregando" });
+  const [estadoDesempenho, setEstadoDesempenho] = useState<EstadoSecao<Desempenho>>({ fase: "carregando" });
+  const [estadoSugestoes, setEstadoSugestoes] = useState<EstadoSecao<Sugestoes>>({ fase: "carregando" });
+  const [estadoVersoes, setEstadoVersoes] = useState<EstadoSecao<Versoes>>({ fase: "carregando" });
 
   const recarregar = useCallback(() => setTentativa((t) => t + 1), []);
+
+  // ── Um carregador por seção, para o retry de uma nunca refazer as outras ──
+  const carregarVisaoGeral = useCallback(
+    () =>
+      carregarSecao<VisaoGeral>(
+        ROTA_VISAO_GERAL,
+        setEstadoVisaoGeral,
+        (d) => d.conversasAcompanhadas === 0 && d.mensagensAvaliadas === 0,
+      ),
+    [],
+  );
+  const carregarRisco = useCallback(
+    () => carregarSecao<ConversaEmRisco[]>(ROTA_RISCO, setEstadoRisco, (d) => d.length === 0),
+    [],
+  );
+  const carregarDesempenho = useCallback(
+    () => carregarSecao<Desempenho>(ROTA_DESEMPENHO, setEstadoDesempenho, (d) => d.agentes.length === 0),
+    [],
+  );
+  const carregarSugestoes = useCallback(
+    () => carregarSecao<Sugestoes>(ROTA_SUGESTOES, setEstadoSugestoes, (d) => d.pendentes.length === 0),
+    [],
+  );
+  const carregarVersoes = useCallback(
+    () => carregarSecao<Versoes>(ROTA_VERSOES, setEstadoVersoes, (d) => d.versoes.length === 0),
+    [],
+  );
 
   // O modo decide se a tela existe. As outras quatro seções carregam juntas,
   // depois — e uma falhando não derruba as outras (mesmo padrão da Prospecção).
@@ -813,34 +959,17 @@ export function SupervisoraClient() {
     };
   }, [tentativa]);
 
+  // As quatro seções carregam juntas depois do modo — e uma falhando não
+  // derruba as outras nem prende sua própria seção em "Carregando…" para
+  // sempre: `carregarSecao` sempre resolve para `sucesso`, `vazio` ou `erro`.
   useEffect(() => {
     if (fase !== "pronto") return;
-    let vivo = true;
-
-    async function carregar<T>(rota: string, setter: (v: T) => void) {
-      try {
-        const res = await fetch(rota, { cache: "no-store" });
-        if (!res.ok) return;
-        const corpo = (await res.json()) as { data?: T };
-        if (vivo && corpo?.data !== undefined) setter(corpo.data);
-      } catch {
-        // Uma seção falhar não pode derrubar as outras três.
-      }
-    }
-
-    carregar<VisaoGeral>(ROTA_VISAO_GERAL, setVisaoGeral);
-    carregar<ConversaEmRisco[]>(ROTA_RISCO, setRisco);
-    carregar<{ criterios: Criterio[]; criteriosNaoMedidos: string[]; agentes: DesempenhoDoAgente[] }>(
-      ROTA_DESEMPENHO,
-      setDesempenho,
-    );
-    carregar<{ pendentes: Sugestao[]; historico: Sugestao[] }>(ROTA_SUGESTOES, setSugestoes);
-    carregar<{ versaoAtivaId: string | null; versoes: VersaoDoTA[] }>(ROTA_VERSOES, setVersoes);
-
-    return () => {
-      vivo = false;
-    };
-  }, [fase, tentativa]);
+    carregarVisaoGeral();
+    carregarRisco();
+    carregarDesempenho();
+    carregarSugestoes();
+    carregarVersoes();
+  }, [fase, tentativa, carregarVisaoGeral, carregarRisco, carregarDesempenho, carregarSugestoes, carregarVersoes]);
 
   const postar = useCallback(
     async (rota: string, corpo: Record<string, unknown>) => {
@@ -937,16 +1066,22 @@ export function SupervisoraClient() {
       )}
 
       <ControleDeModo estado={modo} ocupado={ocupado} onMudar={mudarModo} />
-      <SecaoVisaoGeral dados={visaoGeral} />
-      <SecaoConversasEmRisco linhas={risco} ocupado={ocupado} onAgir={agirNaConversa} />
-      <SecaoDesempenho dados={desempenho} />
+      <SecaoVisaoGeral estado={estadoVisaoGeral} onRetry={carregarVisaoGeral} />
+      <SecaoConversasEmRisco
+        estado={estadoRisco}
+        ocupado={ocupado}
+        onAgir={agirNaConversa}
+        onRetry={carregarRisco}
+      />
+      <SecaoDesempenho estado={estadoDesempenho} onRetry={carregarDesempenho} />
       <SecaoPromptsEAprendizado
-        sugestoes={sugestoes}
-        versoes={versoes?.versoes ?? null}
-        versaoAtivaId={versoes?.versaoAtivaId ?? null}
+        estadoSugestoes={estadoSugestoes}
+        estadoVersoes={estadoVersoes}
         ocupado={ocupado}
         onDecidirSugestao={decidirSugestao}
         onPublicarVersao={publicarVersao}
+        onRetrySugestoes={carregarSugestoes}
+        onRetryVersoes={carregarVersoes}
       />
     </div>
   );

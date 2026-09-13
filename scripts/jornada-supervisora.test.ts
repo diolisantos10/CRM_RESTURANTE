@@ -60,6 +60,28 @@ function proximoJuizo(obj: Record<string, unknown>) {
   });
 }
 
+/**
+ * ⭐ 12/09/2026 — SHADOW não é mais síncrona: `entregarMensagem` já devolveu
+ * quando a avaliação ainda está em voo. Testes que verificam o que a
+ * Supervisora GRAVOU em SHADOW precisam esperar por ela — sem isto, o teste
+ * correria a chance de ler o banco antes da escrita assíncrona acontecer.
+ *
+ * Faz *polling* curto em vez de um `sleep` fixo: mais rápido no caso comum
+ * (a maioria das corridas encontra a linha bem antes do teto) e não falha à
+ * toa quando a máquina de CI está devagar.
+ */
+async function esperarAvaliacao(mensagemId: string, timeoutMs = 5_000) {
+  const inicio = Date.now();
+  for (;;) {
+    const avaliacao = await prisma.supervisoraAvaliacao.findUnique({ where: { mensagemId } });
+    if (avaliacao) return avaliacao;
+    if (Date.now() - inicio > timeoutMs) {
+      throw new Error(`avaliação da mensagem ${mensagemId} não apareceu em ${timeoutMs}ms`);
+    }
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
 let seq = 0;
 async function novoLead(over: Partial<Prisma.SiteLeadCreateInput> = {}) {
   seq += 1;
@@ -168,6 +190,12 @@ describe("Jornada — modo OFF (comportamento de hoje, sem custo)", () => {
 
 describe("Jornada — modo GUARD", () => {
   beforeEach(async () => {
+    // ⛔ 13/09/2026 — `alterarModo` agora exige a escada (OFF→SHADOW→GUARD→
+    // INTERVENTION, um degrau de cada vez; ver config.ts). Vindo de OFF (o
+    // describe anterior termina lá), pedir GUARD direto seria um salto de 2 e
+    // seria recusado. Passa por SHADOW primeiro; repetir o mesmo modo é
+    // regressão/no-op e sempre aceito, então isto é seguro em toda rodada.
+    await alterarModo(prisma, { novoModo: "SHADOW", novaLigada: true, alteradoPor: "teste" });
     await alterarModo(prisma, { novoModo: "GUARD", novaLigada: true, alteradoPor: "teste" });
   });
 
@@ -427,14 +455,17 @@ describe("Jornada — modo SHADOW", () => {
 
     const r = await entregarMensagem(prisma, gravada.mensagemId, "maquina");
 
-    // Sai EXATAMENTE como sairia sem a Supervisora.
+    // Sai EXATAMENTE como sairia sem a Supervisora — e sai antes de a
+    // avaliação (assíncrona desde 12/09/2026) sequer ter tido tempo de
+    // terminar, por isso o texto abaixo já está disponível na hora.
     expect(r.entregue).toBe(true);
     expect(enviar).toHaveBeenCalledWith(expect.anything(), expect.anything(), textoOriginal);
 
     const msg = await prisma.leadMensagem.findUnique({ where: { id: gravada.mensagemId } });
     expect(msg?.texto).toBe(textoOriginal);
 
-    const avaliacao = await prisma.supervisoraAvaliacao.findUnique({ where: { mensagemId: gravada.mensagemId } });
+    // ⭐ A avaliação chega DEPOIS — `entregarMensagem` não espera por ela.
+    const avaliacao = await esperarAvaliacao(gravada.mensagemId);
     expect(avaliacao).toMatchObject({
       veredito: "VERMELHO",
       bloqueada: false,
@@ -465,11 +496,137 @@ describe("Jornada — modo SHADOW", () => {
 
     expect(r.entregue).toBe(true);
     expect(enviar).toHaveBeenCalled();
+
+    // A falha (JSON que não parseia) foi registrada, e não silenciada — a
+    // Supervisora continua tentando, só que agora em segundo plano.
+    const avaliacao = await esperarAvaliacao(gravada.mensagemId);
+    expect(avaliacao.falhaTecnica).toBe(true);
+    expect(avaliacao.modoNaEpoca).toBe("SHADOW");
+  });
+
+  it("⭐ 16. SHADOW NÃO ATRASA a entrega — a mensagem sai antes de a avaliação (lenta de propósito) terminar", async () => {
+    // O "juízo" da Supervisora demora 2s para responder — uma camada rápida
+    // lenta de verdade, não um dublê instantâneo. Se `entregarMensagem` ainda
+    // esperasse por ela (o defeito medido em 12/09/2026), este teste levaria
+    // pelo menos 2s. Ele não deveria — SHADOW dispara e segue.
+    criar.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(
+            () =>
+              resolve({
+                choices: [
+                  {
+                    message: { content: JSON.stringify({ veredito: "VERDE", motivos: [], detalhe: "ok" }) },
+                    finish_reason: "stop",
+                  },
+                ],
+              }),
+            2_000,
+          );
+        }),
+    );
+
+    const textoOriginal = "Show, te mando os detalhes por aqui mesmo.";
+    const lead = await novoLead();
+    const gravada = await registrarSaida(prisma, {
+      leadId: lead.id,
+      texto: textoOriginal,
+      autor: "IA",
+      papelDoAgente: "qualificacao",
+      agora: AGORA,
+    });
+    if (!gravada.ok) throw new Error("não gravou");
+
+    const inicio = Date.now();
+    const r = await entregarMensagem(prisma, gravada.mensagemId, "maquina");
+    const decorridoAteEntregar = Date.now() - inicio;
+
+    expect(r.entregue).toBe(true);
+    expect(enviar).toHaveBeenCalledWith(expect.anything(), expect.anything(), textoOriginal);
+
+    // ⭐ O NÚMERO QUE PROVA O ITEM: a entrega termina em uma fração dos 2s que
+    // a avaliação está levando — bem abaixo do teto de folga usado aqui
+    // (metade do atraso simulado). Medido, não afirmado: ver o console.log.
+    console.log(`[prova SHADOW não bloqueia] entregarMensagem terminou em ${decorridoAteEntregar}ms (avaliação simulada: 2000ms)`);
+    expect(decorridoAteEntregar).toBeLessThan(1_000);
+
+    // A avaliação, no entanto, chega — só que depois, em segundo plano.
+    const avaliacao = await esperarAvaliacao(gravada.mensagemId, 5_000);
+    expect(avaliacao.veredito).toBe("VERDE");
+  });
+});
+
+describe("Jornada — sem SupervisoraConfig no banco, o modo efetivo é OFF", () => {
+  it("⭐ 17. ausência de configuração NUNCA vira SHADOW sozinha — nenhuma avaliação roda", async () => {
+    // Nenhum `alterarModo` foi chamado nesta suíte ainda: a linha singleton
+    // não existe. Isto é o estado do dia em que a tabela é criada e ninguém
+    // decidiu nada — e "ninguém decidiu" tem que valer OFF, não SHADOW.
+    await prisma.supervisoraAvaliacao.deleteMany({});
+    await prisma.supervisoraConfig.deleteMany({});
+
+    const lead = await novoLead();
+    const gravada = await registrarSaida(prisma, {
+      leadId: lead.id,
+      texto: "Oi! Sem problema, te explico certinho.",
+      autor: "IA",
+      papelDoAgente: "qualificacao",
+      agora: AGORA,
+    });
+    if (!gravada.ok) throw new Error("não gravou");
+
+    const r = await entregarMensagem(prisma, gravada.mensagemId, "maquina");
+
+    expect(r.entregue).toBe(true);
+    expect(criar).not.toHaveBeenCalled();
+
+    // Dá tempo de sobra para uma avaliação em segundo plano aparecer, SE ela
+    // tivesse sido disparada por engano — e confere que não apareceu.
+    await new Promise((r2) => setTimeout(r2, 300));
+    const avaliacao = await prisma.supervisoraAvaliacao.findUnique({ where: { mensagemId: gravada.mensagemId } });
+    expect(avaliacao).toBeNull();
+  });
+});
+
+describe("Jornada — ativar a Supervisora pela rota é ato explícito e registrado", () => {
+  it("⭐ 18. `alterarModo` (o mecanismo por trás da rota POST) grava em SupervisoraModoHistorico com quem e quando", async () => {
+    await prisma.supervisoraModoHistorico.deleteMany({});
+    await prisma.supervisoraConfig.deleteMany({});
+
+    const agora = new Date("2026-09-12T18:00:00Z");
+    const r = await alterarModo(prisma, {
+      novoModo: "SHADOW",
+      novaLigada: true,
+      alteradoPor: "gerente-teste",
+      motivo: "estreia da Supervisora, decisão do CEO",
+      agora,
+    });
+
+    expect(r).toMatchObject({ ok: true, modoAnterior: "OFF", modoNovo: "SHADOW" });
+
+    const estado = await prisma.supervisoraConfig.findUnique({ where: { id: "singleton" } });
+    expect(estado).toMatchObject({ ligada: true, modo: "SHADOW", atualizadoPor: "gerente-teste" });
+
+    const historico = await prisma.supervisoraModoHistorico.findFirst({
+      where: { alteradoPor: "gerente-teste" },
+      orderBy: { alteradoEm: "desc" },
+    });
+    expect(historico).toMatchObject({
+      modoAnterior: "OFF",
+      modoNovo: "SHADOW",
+      alteradoPor: "gerente-teste",
+      motivo: "estreia da Supervisora, decisão do CEO",
+    });
+    expect(historico?.alteradoEm.toISOString()).toBe(agora.toISOString());
   });
 });
 
 describe("Jornada — modo INTERVENTION", () => {
   beforeEach(async () => {
+    // Mesma régua: sobe um degrau de cada vez (o teste 18, logo acima, deixa
+    // o estado em SHADOW) — SHADOW→INTERVENTION direto seria um salto de 2.
+    await alterarModo(prisma, { novoModo: "SHADOW", novaLigada: true, alteradoPor: "teste" });
+    await alterarModo(prisma, { novoModo: "GUARD", novaLigada: true, alteradoPor: "teste" });
     await alterarModo(prisma, { novoModo: "INTERVENTION", novaLigada: true, alteradoPor: "teste" });
   });
 

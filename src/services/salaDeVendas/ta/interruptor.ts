@@ -211,20 +211,55 @@ export async function publicarVersaoExistente(
     return { ok: true, numero: versao.numero, eraAAtiva: true };
   }
 
-  // Sequencial, não `$transaction([...])`: `db` aqui é `PrismaClient |
-  // Prisma.TransactionClient`, e o segundo não tem `$transaction`. As duas
-  // escritas em sequência bastam — o pior caso de uma corrida rara aqui é a
-  // versão marcar `PUBLICADA` um instante antes de `versaoAtivaId` apontar
-  // para ela, nunca um estado que a tela leia como inconsistente.
-  await db.sdrIaConfigVersao.update({
-    where: { id: versao.id },
-    data: {
-      situacao: "PUBLICADA",
-      publicadaEm: agora,
-      publicadaPorId: params.porUserId ?? null,
-    },
-  });
-  await db.sdrIaConfig.update({ where: { id: config.id }, data: { versaoAtivaId: versao.id } });
+  // ⛔ MEDIDO EM 12/09/2026: "sequencial, não `$transaction`" era o defeito,
+  // não a explicação dele.
+  //
+  // Este comentário dizia que duas escritas em sequência bastavam porque "o
+  // pior caso de uma corrida rara aqui é a versão marcar PUBLICADA um
+  // instante antes de `versaoAtivaId` apontar para ela" — como se o único
+  // risco fosse uma LEITURA pegando o meio do caminho. Não é: se o processo
+  // cair, a conexão cair, ou a SEGUNDA escrita falhar por qualquer motivo
+  // (constraint, timeout, o banco fora do ar por um instante) DEPOIS que a
+  // primeira já fez `COMMIT` sozinha, o banco fica com uma versão marcada
+  // `PUBLICADA` e `sdr_ia_config.versaoAtivaId` ainda apontando para a
+  // antiga — um estado parcial de verdade, não hipotético, e exatamente o que
+  // uma auditoria pediria para nunca acontecer num interruptor de produção.
+  //
+  // As duas escritas têm que nascer e morrer juntas: ou as duas acontecem, ou
+  // nenhuma. `db.$transaction` cobre o caso comum (chamado direto da rota,
+  // com `prisma`, sem transação em volta). Quando `db` já é um
+  // `Prisma.TransactionClient` (chamado de dentro de outra transação — e um
+  // `tx` não tem `$transaction`, porque não se abre transação dentro de
+  // transação), as duas escritas já herdam a atomicidade da transação que o
+  // CHAMADOR abriu, e rodam nela direto, sem tentar abrir uma nova.
+  const escreverAsDuas = (cliente: Cliente) =>
+    cliente.sdrIaConfigVersao
+      .update({
+        where: { id: versao.id },
+        data: {
+          situacao: "PUBLICADA",
+          publicadaEm: agora,
+          publicadaPorId: params.porUserId ?? null,
+        },
+      })
+      .then(() => cliente.sdrIaConfig.update({ where: { id: config.id }, data: { versaoAtivaId: versao.id } }));
+
+  if (ehClientePleno(db)) {
+    await db.$transaction((tx) => escreverAsDuas(tx));
+  } else {
+    await escreverAsDuas(db);
+  }
 
   return { ok: true, numero: versao.numero, eraAAtiva: false };
+}
+
+/**
+ * `true` só para um `PrismaClient` de verdade — um `Prisma.TransactionClient`
+ * (o `tx` que `db.$transaction(async (tx) => ...)` passa para dentro) não tem
+ * `$transaction` no seu próprio tipo. Decide se `publicarVersaoExistente`
+ * precisa abrir a sua própria transação ou se já está dentro de uma que o
+ * chamador abriu (e que já cobre as duas escritas).
+ */
+function ehClientePleno(db: Cliente): db is PrismaClient {
+  return typeof (db as Partial<PrismaClient>).$transaction === "function";
 }

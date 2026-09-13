@@ -1,5 +1,6 @@
 /**
- * A REVISÃO — o ÚNICO ponto de encaixe da Supervisora no fluxo de envio.
+ * A REVISÃO — o ponto de encaixe da Supervisora para toda FALA COMPOSTA que
+ * sai para um lead.
  *
  * ── POR QUE AQUI, E NÃO EM `atender.ts` OU NA ROTA DA CONVERSA ──────────────
  *
@@ -12,8 +13,14 @@
  * dois caminhos de revisão que podem divergir (a doutrina explícita da missão).
  *
  * `abordar.ts` (templates de prospecção aprovados) usa `enviarModeloDeVendas`
- * diretamente, nunca `entregarMensagem` — fora do escopo desta camada porque
- * não é fala composta, é template fixo já aprovado. Documentado, não coberto.
+ * diretamente, nunca `entregarMensagem` — e continua sem passar por ESTA
+ * função, de propósito: um template já homologado pela Meta não é fala
+ * composta, e esta camada só sabe revisar TOM/REESCRITA de texto livre. Desde
+ * 12/09/2026 `abordar.ts` tem o SEU PRÓPRIO encaixe da Supervisora —
+ * `supervisora/adequacaoDoTemplate.ts` — que avalia se É HORA de mandar o
+ * template (nunca o conteúdo dele). Dois encaixes, um por natureza de
+ * conteúdo (livre vs. fixo), nunca dois caminhos concorrentes revisando a
+ * mesma coisa.
  *
  * ── A REGRA DE FALHA, AO PÉ DA LETRA ─────────────────────────────────────────
  *
@@ -27,6 +34,21 @@
  *     oposto do desenho.
  *   - GUARD/INTERVENTION: falha é reprovação técnica. `prosseguir = false`. A
  *     mensagem nunca sai às cegas.
+ *
+ * ── ⛔ MEDIDO EM 12/09/2026: SHADOW ESTAVA SÍNCRONO, E ISSO CONTRARIA A MISSÃO ─
+ *
+ * A missão original da Supervisora foi explícita: "não pode atrasar" o
+ * WhatsApp. Até aqui, `revisarAntesDeEntregar` fazia `await` da camada rápida
+ * (e às vezes da profunda) em TODOS os modos, inclusive SHADOW — o resultado
+ * só decidia SE a mensagem seria alterada, mas o `await` já tinha acontecido
+ * ANTES de `entrega.ts` seguir para `enviarTextoDeVendas`. Ou seja: mesmo no
+ * modo de estreia, pensado para não arriscar nada, toda mensagem esperava uma
+ * resposta de modelo antes de sair.
+ *
+ * Agora SHADOW dispara a avaliação e **não espera por ela** — ver
+ * `avaliarEmSegundoPlano` mais abaixo. GUARD e INTERVENTION continuam
+ * exatamente como sempre foram: síncronos e bloqueantes, porque a missão exige
+ * revisão OBRIGATÓRIA antes do envio nesses dois modos. Só SHADOW muda.
  */
 
 import type { PrismaClient, Prisma, AutorDaMensagem, VeredictoDaSupervisora, AcaoDaSupervisora, ModoDaSupervisora } from "@prisma/client";
@@ -38,8 +60,19 @@ import { contarReprovacoesRecentes } from "./desempenho";
 import { passarParaGente } from "../handoff";
 import { registrarSugestao } from "./sugestoes";
 import { limparEntidades } from "../ta/agrupamento";
+import { dispararEmSegundoPlano } from "./segundoPlano";
 
 type Cliente = PrismaClient | Prisma.TransactionClient;
+
+/**
+ * Teto para a avaliação assíncrona da SHADOW inteira (rápida + profunda,
+ * quando a profunda entra). Escolhido para ficar bem acima do que um modelo
+ * "rápido/barato" leva em uso normal (segundos, não dezenas de segundos) e
+ * ainda assim terminar num tempo que faz sentido para auditoria — uma
+ * avaliação que só aparece minutos depois já não ajuda quem está olhando o
+ * painel agora. Se estourar, é `falhaTecnica: true`, nunca silêncio.
+ */
+const TIMEOUT_AVALIACAO_ASSINCRONA_MS = 15_000;
 
 /** Janela para contar "reprovado recentemente" pelo mesmo agente. */
 const JANELA_DE_REPETICAO_MS = 24 * 60 * 60 * 1000;
@@ -73,6 +106,10 @@ const SEM_EFEITO = (texto: string): ResultadoDaRevisao => ({
 /**
  * A função que `entrega.ts` chama. Decide se a mensagem de `mensagemId` pode
  * seguir para `enviarTextoDeVendas`, e com qual texto.
+ *
+ * ⭐ SHADOW é a exceção que não espera: dispara `avaliarEmSegundoPlano` sem
+ * `await` e devolve na hora, com o texto ORIGINAL. GUARD e INTERVENTION
+ * continuam bloqueantes — a missão exige revisão antes do envio nesses dois.
  */
 export async function revisarAntesDeEntregar(
   db: Cliente,
@@ -88,16 +125,114 @@ export async function revisarAntesDeEntregar(
     // ligada — a Supervisora que não liga sozinha (guardrail 3) também não
     // deveria desligar sozinha por um erro de leitura. Mas sem saber o modo,
     // o mais seguro possível sem travar tudo é agir como SHADOW: observa,
-    // nunca bloqueia.
-    return revisarComModoForcado(db, params, "SHADOW", agora);
+    // nunca bloqueia, e — desde 12/09/2026 — nunca espera.
+    avaliarEmSegundoPlano(db, params, agora);
+    return SEM_EFEITO(params.texto);
   }
 
   const modo = modoEfetivo(config);
   if (modo === "OFF") return SEM_EFEITO(params.texto);
 
+  if (modo === "SHADOW") {
+    avaliarEmSegundoPlano(db, params, agora);
+    return SEM_EFEITO(params.texto);
+  }
+
+  // Só sobra GUARD/INTERVENTION — os dois modos em que a missão exige que a
+  // revisão aconteça ANTES do envio, e por isso continuam bloqueantes.
   return revisarComModoForcado(db, params, modo, agora);
 }
 
+/**
+ * Dispara a avaliação SHADOW sem bloquear quem chamou — não tem `await` no
+ * ponto de chamada, de propósito. Ela grava sozinha em `SupervisoraAvaliacao`
+ * quando terminar (ou quando estourar o teto de tempo), depois que a mensagem
+ * já foi — ou já estava sendo — entregue.
+ *
+ * A mecânica de "rodar sem bloquear, com teto de tempo, sem `tx` morto" mora
+ * em `segundoPlano.ts` desde 12/09/2026 — extraída para `adequacaoDoTemplate.ts`
+ * (a Supervisora sobre `abordar.ts`) poder usar a MESMA, sem copiar o arquivo.
+ * A decisão "isto é SHADOW" continua só aqui, antes de chamar.
+ */
+function avaliarEmSegundoPlano(db: Cliente, params: ParametrosDaRevisao, agora: Date): void {
+  dispararEmSegundoPlano(
+    db,
+    // `revisarDeFato` já grava o resultado normal em `SupervisoraAvaliacao`
+    // (via `aplicarDecisao`) — nada a fazer aqui além de deixá-la correr.
+    (clienteDuravel) => revisarDeFato(clienteDuravel, params, "SHADOW", agora).then(() => {}),
+    {
+      timeoutMs: TIMEOUT_AVALIACAO_ASSINCRONA_MS,
+      onTimeoutOuErro: async (clienteDuravel, e, estourou) => {
+        console.error("[supervisora] avaliação assíncrona (SHADOW) não terminou a tempo ou quebrou", {
+          mensagemId: params.mensagemId,
+          leadId: params.leadId,
+          estourouTimeout: estourou,
+          erro: e instanceof Error ? e.message : String(e),
+        });
+        await registrarFalhaTecnicaAssincrona(clienteDuravel, params, agora, e).catch((e2) => {
+          // Última linha de defesa: nem a falha conseguiu ser registrada. Fica
+          // só o log — mas o log existe, o que é a régua deste arquivo inteiro:
+          // nunca silêncio, mesmo no pior caso.
+          console.error("[supervisora] não consegui nem registrar a falha técnica da avaliação assíncrona", {
+            mensagemId: params.mensagemId,
+            erro: e2 instanceof Error ? e2.message : String(e2),
+          });
+        });
+      },
+    },
+  );
+}
+
+/**
+ * Registra tecnicamente uma falha da avaliação assíncrona quando `revisarDeFato`
+ * nem chegou a devolver um resultado (estourou o timeout, ou lançou antes de
+ * `aplicarDecisao` gravar algo). Espelha o formato que `aplicarDecisao`
+ * gravaria para uma falha técnica em SHADOW: nunca bloqueia (SHADOW não
+ * bloqueia nada), sempre visível.
+ *
+ * ⚠️ Corrida possível e aceita: se `revisarDeFato` só estourou o RELÓGIO deste
+ * arquivo mas continua rodando de verdade, ela pode terminar depois e tentar
+ * gravar a MESMA `mensagemId` (índice único). Essa segunda escrita falha e cai
+ * no `.catch` que `aplicarDecisao` já tem — vira um log, não uma queda. É
+ * preferível a isto do que a alternativa de nunca ter um registro nenhum
+ * enquanto a chamada estiver pendurada.
+ */
+async function registrarFalhaTecnicaAssincrona(
+  db: Cliente,
+  params: ParametrosDaRevisao,
+  agora: Date,
+  erro: unknown,
+): Promise<void> {
+  await db.supervisoraAvaliacao.create({
+    data: {
+      mensagemId: params.mensagemId,
+      leadId: params.leadId,
+      autorMensagem: params.autorMensagem,
+      autorUserId: params.autorUserId,
+      papelDoAgente: params.papelDoAgente,
+      camada: "RAPIDA",
+      modoNaEpoca: "SHADOW",
+      veredito: "VERMELHO",
+      motivos: ["FALHA_TECNICA"],
+      motivoDetalhe:
+        "avaliação assíncrona da Supervisora (SHADOW): " +
+        (erro instanceof Error ? erro.message : String(erro)),
+      bloqueada: false,
+      acaoTomada: "NENHUMA",
+      handoffDisparado: false,
+      falhaTecnica: true,
+      engineProvider: null,
+      engineModel: null,
+      criadaEm: agora,
+    },
+  });
+}
+
+/**
+ * ⚠️ Só chamada com GUARD/INTERVENTION — desde 12/09/2026 SHADOW não passa
+ * mais por aqui (ver `avaliarEmSegundoPlano`), então o `modo` que chega aqui
+ * é sempre um dos dois que bloqueiam de propósito.
+ */
 async function revisarComModoForcado(
   db: Cliente,
   params: ParametrosDaRevisao,
@@ -108,14 +243,13 @@ async function revisarComModoForcado(
     return await revisarDeFato(db, params, modo, agora);
   } catch (e) {
     // ⛔ Uma exceção que escapou de tudo o que já é `try/catch` lá dentro —
-    // rede caindo no meio de uma escrita, por exemplo. Mesma régua de sempre:
-    // SHADOW/OFF não intervém; GUARD/INTERVENTION retém.
+    // rede caindo no meio de uma escrita, por exemplo. GUARD/INTERVENTION
+    // retêm: a mensagem nunca sai às cegas.
     console.error("[supervisora] a revisão quebrou de um jeito não previsto", {
       mensagemId: params.mensagemId,
       leadId: params.leadId,
       erro: e instanceof Error ? e.message : String(e),
     });
-    if (modo === "SHADOW") return SEM_EFEITO(params.texto);
     return {
       prosseguir: false,
       textoParaEnviar: params.texto,
